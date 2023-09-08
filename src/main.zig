@@ -8,6 +8,25 @@ const allocator = arena.allocator();
 const window_width = 400;
 const window_height = 400;
 
+pub const Ids = struct {
+    base: u32,
+    pub fn window(self: Ids) u32 {
+        return self.base;
+    }
+    pub fn bg_gc(self: Ids) u32 {
+        return self.base + 1;
+    }
+    pub fn fg_gc(self: Ids) u32 {
+        return self.base + 2;
+    }
+    pub fn pixmap(self: Ids) u32 {
+        return self.base + 3;
+    }
+    pub fn colormap(self: Ids) u32 {
+        return self.base + 4;
+    }
+};
+
 pub fn main() !u8 {
     try x.wsaStartup();
     const conn = try common.connect(allocator);
@@ -35,14 +54,29 @@ pub fn main() !u8 {
 
     // TODO: maybe need to call conn.setup.verify or something?
 
-    const window_id = conn.setup.fixed().resource_id_base;
+    const ids = Ids{ .base = conn.setup.fixed().resource_id_base };
+    const window_id = ids.window();
+    std.log.info("window_id {0} 0x{0x}", .{window_id});
+    std.log.info("screen.root_visual visual_id {0} 0x{0x}", .{screen.root_visual});
+    // {
+    //     var message_buffer: [x.create_colormap.len]u8 = undefined;
+    //     x.create_colormap.serialize(&message_buffer, .{
+    //         .id = ids.colormap(),
+    //         .visual_id = screen.root_visual,
+    //         .window_id = window_id,
+    //         .alloc = .none,
+    //     });
+    //     try conn.send(&message_buffer);
+    // }
     {
         var message_buffer: [x.create_window.max_len]u8 = undefined;
         const len = x.create_window.serialize(&message_buffer, .{
             .window_id = window_id,
             .parent_window_id = screen.root,
-            // we don't care, just inherit from the parent
-            .depth = 0,
+            // Color depth:
+            // - 24 for RGB
+            // - 32 for RGBA
+            .depth = 24,
             // Place it in the top-right corner of the screen
             .x = screen.pixel_width - window_width,
             .y = 0,
@@ -52,10 +86,11 @@ pub fn main() !u8 {
             .class = .input_output,
             .visual_id = screen.root_visual,
         }, .{
-            //            .bg_pixmap = .copy_from_parent,
+            .bg_pixmap = .none,
             .bg_pixel = 0x0000aa80,
             //            //.border_pixmap =
-            // .border_pixel = 0x000000ff,
+            .border_pixel = 0x000000ff,
+            // .colormap = @enumFromInt(ids.colormap()),
             //            .bit_gravity = .north_west,
             //            .win_gravity = .east,
             //            .backing_store = .when_mapped,
@@ -63,8 +98,9 @@ pub fn main() !u8 {
             //            .backing_pixel = 0xbbeeeeff,
             //
             // Whether this window overrides structure control facilities. Basically, a
-            // suggestion whether the window manager to decorate this window (false) or we
-            // want to override the behavior. We set this to true to disable the window controls.
+            // suggestion whether the window manager to decorate this window (false) or
+            // we want to override the behavior. We set this to true to disable the
+            // window controls (basically a borderless window).
             .override_redirect = true,
             //            .save_under = true,
             .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
@@ -81,7 +117,7 @@ pub fn main() !u8 {
         try conn.send(message_buffer[0..len]);
     }
 
-    const background_graphics_context_id = window_id + 1;
+    const background_graphics_context_id = ids.bg_gc();
     {
         var message_buffer: [x.create_gc.max_len]u8 = undefined;
         const len = x.create_gc.serialize(&message_buffer, .{
@@ -93,7 +129,7 @@ pub fn main() !u8 {
         });
         try conn.send(message_buffer[0..len]);
     }
-    const foreground_graphics_context_id = window_id + 2;
+    const foreground_graphics_context_id = ids.fg_gc();
     {
         var message_buffer: [x.create_gc.max_len]u8 = undefined;
         const len = x.create_gc.serialize(&message_buffer, .{
@@ -231,6 +267,12 @@ pub fn main() !u8 {
             }
         }
     }
+
+    // {
+    //     var msg: [x.free_colormap.len]u8 = undefined;
+    //     x.free_colormap.serialize(&msg, ids.colormap());
+    //     try conn.send(&msg);
+    // }
 }
 
 const FontDims = struct {
