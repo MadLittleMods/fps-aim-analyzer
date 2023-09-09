@@ -178,6 +178,9 @@ pub fn main() !u8 {
         }
     };
 
+    // Show the window. In the X11 protocol is called mapping a window, and hiding a
+    // window is called unmapping. When windows are initially created, they are unmapped
+    // (or hidden).
     {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, window_id);
