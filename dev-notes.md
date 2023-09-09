@@ -31,35 +31,35 @@ x11trace ./zig-out/bin/aim-analyzer
 
 Determine the color depth of your window or the root window ([via StackOverflow](https://stackoverflow.com/a/12345678/1097920)):
 
-```sh
-$ xdpyinfo
-screen #0:
-  dimensions:    1366x768 pixels (361x203 millimeters)
-  resolution:    96x96 dots per inch
-  depths (7):    24, 1, 4, 8, 15, 16, 32
-  root window id:    0x2b9
-  depth of root window:    24 planes
-  number of colormaps:    minimum 1, maximum 1
-  default colormap:    0x20
-  default number of colormap cells:    256
-  preallocated pixels:    black 0, white 16777215
-  options:    backing-store NO, save-unders NO
-  largest cursor:    64x64
-  current input event mask:    0xda4033
-    KeyPressMask             KeyReleaseMask           EnterWindowMask          
-    LeaveWindowMask          KeymapStateMask          StructureNotifyMask      
-    SubstructureNotifyMask   SubstructureRedirectMask PropertyChangeMask       
-    ColormapChangeMask       
-  number of visuals:    240
-  default visual id:  0x21
-  visual:
-    visual id:    0x21
-    class:    TrueColor
-    depth:    24 planes
-    available colormap entries:    256 per subfield
-    red, green, blue masks:    0xff0000, 0xff00, 0xff
-    significant bits in color specification:    8 bits
-[...]
+```diff
+  $ xdpyinfo
+  screen #0:
+    dimensions:    1366x768 pixels (361x203 millimeters)
+    resolution:    96x96 dots per inch
+    depths (7):    24, 1, 4, 8, 15, 16, 32
+    root window id:    0x2b9
++   depth of root window:    24 planes
+    number of colormaps:    minimum 1, maximum 1
+    default colormap:    0x20
+    default number of colormap cells:    256
+    preallocated pixels:    black 0, white 16777215
+    options:    backing-store NO, save-unders NO
+    largest cursor:    64x64
+    current input event mask:    0xda4033
+      KeyPressMask             KeyReleaseMask           EnterWindowMask          
+      LeaveWindowMask          KeymapStateMask          StructureNotifyMask      
+      SubstructureNotifyMask   SubstructureRedirectMask PropertyChangeMask       
+      ColormapChangeMask       
+    number of visuals:    240
++   default visual id:  0x21
+    visual:
++     visual id:    0x21
+      class:    TrueColor
++     depth:    24 planes
+      available colormap entries:    256 per subfield
+      red, green, blue masks:    0xff0000, 0xff00, 0xff
+      significant bits in color specification:    8 bits
+  [...]
 ```
 
 
