@@ -61,9 +61,7 @@ pub fn main() !u8 {
     const ids = Ids{ .base = conn.setup.fixed().resource_id_base };
     const window_id = ids.window();
     std.log.info("window_id {0} 0x{0x}", .{window_id});
-    //std.log.info("screen.root_visual visual_id {0} 0x{0x}", .{screen.root_visual});
     {
-    std.log.info("creating colormap {0} 0x{0x}", .{ids.colormap()});
         var message_buffer: [x.create_colormap.len]u8 = undefined;
         x.create_colormap.serialize(&message_buffer, .{
             .id = ids.colormap(),
@@ -81,7 +79,7 @@ pub fn main() !u8 {
             .parent_window_id = screen.root,
             // Color depth:
             // - 24 for RGB
-            // - 32 for RGBA
+            // - 32 for ARGB
             .depth = depth,
             // Place it in the top-right corner of the screen
             .x = screen.pixel_width - window_width,
@@ -90,12 +88,12 @@ pub fn main() !u8 {
             .height = window_height,
             .border_width = 0, // TODO: what is this?
             .class = .input_output,
-            .visual_id = matching_visual_type.id, //screen.root_visual,
+            .visual_id = matching_visual_type.id,
         }, .{
             .bg_pixmap = .none,
             // 0xAARRGGBB
             .bg_pixel = 0xaa006660,
-            //            //.border_pixmap =
+            // .border_pixmap =
             .border_pixel = 0x00000000,
             .colormap = @enumFromInt(ids.colormap()),
             //            .bit_gravity = .north_west,
