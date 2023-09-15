@@ -108,7 +108,7 @@ pub fn main() !u8 {
             // suggestion whether the window manager to decorate this window (false) or
             // we want to override the behavior. We set this to true to disable the
             // window controls (basically a borderless window).
-            // .override_redirect = true,
+            .override_redirect = true,
             //            .save_under = true,
             .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
             //                | x.event.pointer_motion_hint WHAT THIS DO?
