@@ -65,7 +65,10 @@ Determine the color depth of your window or the root window ([via StackOverflow]
 
 ## Testing with multiple screens
 
-Add a virtual monitor ([*courtesy of this GitHub issue*](https://github.com/pavlobu/deskreen/issues/42#issue-792962894)):
+> [!WARNING]  
+> These steps don't actually seem to work to add another "screen" in terms of what the X Window Server sees. But still seem like useful commands to keep around until I do figure out how this all works.
+
+Add a virtual monitor ([*courtesy of this GitHub issue*](https://github.com/pavlobu/deskreen/issues/42#issue-792962894)).
 
 List available ports:
 ```sh
