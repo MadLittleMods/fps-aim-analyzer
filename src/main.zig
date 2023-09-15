@@ -94,7 +94,7 @@ pub fn main() !u8 {
         }, .{
             .bg_pixmap = .none,
             // 0xAARRGGBB
-            .bg_pixel = 0x00000000,
+            .bg_pixel = 0xaa006660,
             //            //.border_pixmap =
             .border_pixel = 0x00000000,
             .colormap = @enumFromInt(ids.colormap()),
@@ -108,7 +108,7 @@ pub fn main() !u8 {
             // suggestion whether the window manager to decorate this window (false) or
             // we want to override the behavior. We set this to true to disable the
             // window controls (basically a borderless window).
-            .override_redirect = true,
+            // .override_redirect = true,
             //            .save_under = true,
             .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
             //                | x.event.pointer_motion_hint WHAT THIS DO?
@@ -132,8 +132,8 @@ pub fn main() !u8 {
             .gc_id = background_graphics_context_id,
             .drawable_id = window_id,
         }, .{
-            .background = 0x0000ff00,
-            .foreground = 0x000000ff,
+            .background = 0xff00ff00,
+            .foreground = 0xff0000ff,
         });
         try conn.send(message_buffer[0..len]);
     }
@@ -145,8 +145,8 @@ pub fn main() !u8 {
             .gc_id = foreground_graphics_context_id,
             .drawable_id = window_id,
         }, .{
-            .background = screen.black_pixel,
-            .foreground = 0x00ffff00,
+            .background = 0xff000000,
+            .foreground = 0xffffff00,
         });
         try conn.send(message_buffer[0..len]);
     }
