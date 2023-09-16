@@ -9,21 +9,39 @@ const window_width = 400;
 const window_height = 400;
 
 pub const Ids = struct {
+    const Self = @This();
+
+    root: u32,
     base: u32,
-    pub fn window(self: Ids) u32 {
-        return self.base;
+    _current_id: u32,
+
+    window: u32 = 0,
+    colormap: u32 = 0,
+    bg_gc: u32 = 0,
+    fg_gc: u32 = 0,
+    pixmap: u32 = 0,
+
+    pub fn init(root: u32, base: u32) Self {
+        var ids = Ids{
+            .root = root,
+            .base = base,
+            ._current_id = base,
+        };
+
+        ids.window = ids.generateMonotonicId();
+        ids.colormap = ids.generateMonotonicId();
+        ids.bg_gc = ids.generateMonotonicId();
+        ids.fg_gc = ids.generateMonotonicId();
+        ids.pixmap = ids.generateMonotonicId();
+
+        return ids;
     }
-    pub fn bg_gc(self: Ids) u32 {
-        return self.base + 1;
-    }
-    pub fn fg_gc(self: Ids) u32 {
-        return self.base + 2;
-    }
-    pub fn pixmap(self: Ids) u32 {
-        return self.base + 3;
-    }
-    pub fn colormap(self: Ids) u32 {
-        return self.base + 4;
+
+    /// Always increasing ID everytime the function is called
+    fn generateMonotonicId(self: *Ids) u32 {
+        const current_id = self._current_id;
+        self._current_id += 1;
+        return current_id;
     }
 };
 
@@ -51,21 +69,32 @@ pub fn main() !u8 {
         }
         break :blk screen;
     };
-    
+
     const depth = 32;
     const matching_visual_type = try screen.findMatchingVisualType(depth, .true_color, allocator);
     std.log.debug("matching_visual_type {any}", .{matching_visual_type});
 
+    const screenshot_capture_dims = ScreenshotCaptureDims{
+        .width = 200,
+        .height = 150,
+    };
+    var state = State{
+        .screenshot_capture_dims = screenshot_capture_dims,
+    };
+
     // TODO: maybe need to call conn.setup.verify or something?
 
-    const ids = Ids{ .base = conn.setup.fixed().resource_id_base };
-    const window_id = ids.window();
+    const ids = Ids.init(
+        screen.root,
+        conn.setup.fixed().resource_id_base,
+    );
+    const window_id = ids.window;
     std.log.info("window_id {0} 0x{0x}", .{window_id});
     {
         var message_buffer: [x.create_colormap.len]u8 = undefined;
         x.create_colormap.serialize(&message_buffer, .{
-            .id = ids.colormap(),
-            .window_id = screen.root,//window_id,
+            .id = ids.colormap,
+            .window_id = screen.root, //window_id,
             .visual_id = matching_visual_type.id,
             .alloc = .none,
         });
@@ -95,7 +124,7 @@ pub fn main() !u8 {
             .bg_pixel = 0xaa006660,
             // .border_pixmap =
             .border_pixel = 0x00000000,
-            .colormap = @enumFromInt(ids.colormap()),
+            .colormap = @enumFromInt(ids.colormap),
             //            .bit_gravity = .north_west,
             //            .win_gravity = .east,
             //            .backing_store = .when_mapped,
@@ -122,7 +151,7 @@ pub fn main() !u8 {
         try conn.send(message_buffer[0..len]);
     }
 
-    const background_graphics_context_id = ids.bg_gc();
+    const background_graphics_context_id = ids.bg_gc;
     std.log.info("background_graphics_context_id {0} 0x{0x}", .{background_graphics_context_id});
     {
         var message_buffer: [x.create_gc.max_len]u8 = undefined;
@@ -135,7 +164,7 @@ pub fn main() !u8 {
         });
         try conn.send(message_buffer[0..len]);
     }
-    const foreground_graphics_context_id = ids.fg_gc();
+    const foreground_graphics_context_id = ids.fg_gc;
     std.log.info("foreground_graphics_context_id {0} 0x{0x}", .{foreground_graphics_context_id});
     {
         var message_buffer: [x.create_gc.max_len]u8 = undefined;
@@ -145,6 +174,8 @@ pub fn main() !u8 {
         }, .{
             .background = 0xff000000,
             .foreground = 0xffffff00,
+            // prevent NoExposure events when we send CopyArea
+            .graphics_exposures = false,
         });
         try conn.send(message_buffer[0..len]);
     }
@@ -184,6 +215,19 @@ pub fn main() !u8 {
             },
         }
     };
+
+    // Create a pixmap to capture the screenshot onto
+    {
+        var msg: [x.create_pixmap.len]u8 = undefined;
+        x.create_pixmap.serialize(&msg, .{
+            .id = ids.pixmap,
+            .drawable_id = ids.window,
+            .depth = depth,
+            .width = screenshot_capture_dims.width,
+            .height = screenshot_capture_dims.height,
+        });
+        try common.send(conn.sock, &msg);
+    }
 
     // Show the window. In the X11 protocol is called mapping a window, and hiding a
     // window is called unmapping. When windows are initially created, they are unmapped
@@ -234,6 +278,17 @@ pub fn main() !u8 {
                 },
                 .button_press => |msg| {
                     std.log.info("button_press: {}", .{msg});
+                    try captureScreenshotToPixmap(
+                        conn.sock,
+                        ids,
+                        screenshot_capture_dims,
+                    );
+                    try render(
+                        conn.sock,
+                        ids,
+                        font_dims,
+                        state,
+                    );
                 },
                 .button_release => |msg| {
                     std.log.info("button_release: {}", .{msg});
@@ -246,8 +301,9 @@ pub fn main() !u8 {
                 },
                 .motion_notify => |msg| {
                     // too much logging
-                    _ = msg;
                     //std.log.info("pointer_motion: {}", .{msg});
+                    state.mouse_x = msg.event_x;
+                    try render(conn.sock, ids, font_dims, state);
                 },
                 .keymap_notify => |msg| {
                     std.log.info("keymap_state: {}", .{msg});
@@ -256,10 +312,9 @@ pub fn main() !u8 {
                     std.log.info("expose: {}", .{msg});
                     try render(
                         conn.sock,
-                        window_id,
-                        background_graphics_context_id,
-                        foreground_graphics_context_id,
+                        ids,
                         font_dims,
+                        state,
                     );
                 },
                 .mapping_notify => |msg| {
@@ -279,8 +334,14 @@ pub fn main() !u8 {
     }
 
     {
+        var msg: [x.free_pixmap.len]u8 = undefined;
+        x.free_pixmap.serialize(&msg, ids.pixmap);
+        try common.send(conn.sock, &msg);
+    }
+
+    {
         var msg: [x.free_colormap.len]u8 = undefined;
-        x.free_colormap.serialize(&msg, ids.colormap());
+        x.free_colormap.serialize(&msg, ids.colormap);
         try conn.send(&msg);
     }
 }
@@ -292,18 +353,52 @@ const FontDims = struct {
     font_ascent: i16, // pixels up from the text basepoint to the top of the text
 };
 
-fn render(
+const ScreenshotCaptureDims = struct {
+    width: u16,
+    height: u16,
+};
+
+const State = struct {
+    screenshot_capture_dims: ScreenshotCaptureDims,
+    mouse_x: i16 = 0,
+};
+
+fn renderString(
     sock: std.os.socket_t,
     drawable_id: u32,
-    background_graphics_context_id: u32,
-    foreground_graphics_context_id: u32,
-    font_dims: FontDims,
+    fg_gc_id: u32,
+    pos_x: i16,
+    pos_y: i16,
+    comptime fmt: []const u8,
+    args: anytype,
 ) !void {
+    var msg: [x.image_text8.max_len]u8 = undefined;
+    const text_buf = msg[x.image_text8.text_offset .. x.image_text8.text_offset + 0xff];
+    const text_len: u8 = @intCast((std.fmt.bufPrint(text_buf, fmt, args) catch @panic("string too long")).len);
+    x.image_text8.serializeNoTextCopy(&msg, text_len, .{
+        .drawable_id = drawable_id,
+        .gc_id = fg_gc_id,
+        .x = pos_x,
+        .y = pos_y,
+    });
+    try common.send(sock, msg[0..x.image_text8.getLen(text_len)]);
+}
+
+fn render(
+    sock: std.os.socket_t,
+    ids: Ids,
+    font_dims: FontDims,
+    state: State,
+) !void {
+    const window_id = ids.window;
+    const screenshot_capture_dims = state.screenshot_capture_dims;
+    const mouse_x = state.mouse_x;
+
     {
         var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
         x.poly_fill_rectangle.serialize(&msg, .{
-            .drawable_id = drawable_id,
-            .gc_id = background_graphics_context_id,
+            .drawable_id = window_id,
+            .gc_id = ids.bg_gc,
         }, &[_]x.Rectangle{
             .{ .x = 100, .y = 100, .width = 200, .height = 200 },
         });
@@ -311,7 +406,7 @@ fn render(
     }
     {
         var msg: [x.clear_area.len]u8 = undefined;
-        x.clear_area.serialize(&msg, false, drawable_id, .{
+        x.clear_area.serialize(&msg, false, window_id, .{
             .x = 150,
             .y = 150,
             .width = 100,
@@ -319,18 +414,72 @@ fn render(
         });
         try common.send(sock, &msg);
     }
+
+    const text_length = 11;
+    const text_width = font_dims.width * text_length;
+    try renderString(
+        sock,
+        window_id,
+        ids.fg_gc,
+        @divTrunc((window_width - @as(i16, @intCast(text_width))), 2) + font_dims.font_left,
+        @divTrunc((window_height - @as(i16, @intCast(font_dims.height))), 2) + font_dims.font_ascent,
+        "Hello X! {}",
+        .{
+            mouse_x,
+        },
+    );
+    // {
+    //     const text_buf = msg[x.image_text8.text_offset .. x.image_text8.text_offset + 0xff];
+    //     const text_literal: []const u8 = std.fmt.bufPrint(text_buf, "Hello X! {d}", .{mouse_x});
+    //     const text = x.Slice(u8, [*]const u8){ .ptr = text_literal.ptr, .len = text_literal.len };
+    //     var msg: [x.image_text8.getLen(text.len)]u8 = undefined;
+
+    //     x.image_text8.serialize(&msg, text, .{
+    //         .drawable_id = window_id,
+    //         .gc_id = ids.fg_gc,
+    //         .x = @divTrunc((window_width - @as(i16, @intCast(text_width))), 2) + font_dims.font_left,
+    //         .y = @divTrunc((window_height - @as(i16, @intCast(font_dims.height))), 2) + font_dims.font_ascent,
+    //     });
+    //     try common.send(sock, &msg);
+    // }
+
     {
-        const text_literal: []const u8 = "Hello X!";
-        const text = x.Slice(u8, [*]const u8){ .ptr = text_literal.ptr, .len = text_literal.len };
-        var msg: [x.image_text8.getLen(text.len)]u8 = undefined;
+        var msg: [x.copy_area.len]u8 = undefined;
+        x.copy_area.serialize(&msg, .{
+            .src_drawable_id = ids.pixmap,
+            .dst_drawable_id = ids.window,
+            .gc_id = ids.fg_gc,
+            .src_x = 0,
+            .src_y = 0,
+            .dst_x = 0,
+            .dst_y = 0,
+            .width = screenshot_capture_dims.width,
+            .height = screenshot_capture_dims.height,
+        });
+        try common.send(sock, &msg);
+    }
+}
 
-        const text_width = font_dims.width * text_literal.len;
-
-        x.image_text8.serialize(&msg, text, .{
-            .drawable_id = drawable_id,
-            .gc_id = foreground_graphics_context_id,
-            .x = @divTrunc((window_width - @as(i16, @intCast(text_width))), 2) + font_dims.font_left,
-            .y = @divTrunc((window_height - @as(i16, @intCast(font_dims.height))), 2) + font_dims.font_ascent,
+fn captureScreenshotToPixmap(
+    sock: std.os.socket_t,
+    ids: Ids,
+    screenshot_capture_dims: ScreenshotCaptureDims,
+) !void {
+    std.log.debug("captureScreenshotToPixmap", .{});
+    {
+        var msg: [x.copy_area.len]u8 = undefined;
+        x.copy_area.serialize(&msg, .{
+            .src_drawable_id = ids.window,
+            .dst_drawable_id = ids.pixmap,
+            .gc_id = ids.fg_gc,
+            // Capture the middle of the screen
+            // TODO: Update to use the actual window dimensions
+            .src_x = (3840 / 2) - @as(i16, @intCast(screenshot_capture_dims.width)),
+            .src_y = (2160 / 2) - @as(i16, @intCast(screenshot_capture_dims.height)),
+            .dst_x = 0,
+            .dst_y = 0,
+            .width = screenshot_capture_dims.width,
+            .height = screenshot_capture_dims.height,
         });
         try common.send(sock, &msg);
     }
