@@ -17,6 +17,7 @@ pub const Ids = struct {
 
     window: u32 = 0,
     colormap: u32 = 0,
+    copy_from_root_gc: u32 = 0,
     bg_gc: u32 = 0,
     fg_gc: u32 = 0,
     pixmap: u32 = 0,
@@ -30,6 +31,7 @@ pub const Ids = struct {
 
         ids.window = ids.generateMonotonicId();
         ids.colormap = ids.generateMonotonicId();
+        ids.copy_from_root_gc = ids.generateMonotonicId();
         ids.bg_gc = ids.generateMonotonicId();
         ids.fg_gc = ids.generateMonotonicId();
         ids.pixmap = ids.generateMonotonicId();
@@ -70,7 +72,8 @@ pub fn main() !u8 {
         break :blk screen;
     };
 
-    const depth = 32;
+    // TODO: Put this back at 32-bit depth for ARGB (alpha transparency)
+    const depth = 24;
     const matching_visual_type = try screen.findMatchingVisualType(depth, .true_color, allocator);
     std.log.debug("matching_visual_type {any}", .{matching_visual_type});
 
@@ -151,6 +154,24 @@ pub fn main() !u8 {
         try conn.send(message_buffer[0..len]);
     }
 
+    std.log.info("copy_from_root_gc {0} 0x{0x}", .{ids.copy_from_root_gc});
+    {
+        var message_buffer: [x.create_gc.max_len]u8 = undefined;
+        const len = x.create_gc.serialize(&message_buffer, .{
+            .gc_id = ids.copy_from_root_gc,
+            .drawable_id = window_id,
+        }, .{
+            .background = 0xff000000,
+            .foreground = 0xffffffff,
+            // Include child windows when we send CopyArea (https://stackoverflow.com/a/52036063/796832).
+            // Otherwise, by default, the window pixels are cropped by the sub-windows.
+            .subwindow_mode = .include_inferiors,
+            // prevent NoExposure events when we send CopyArea
+            .graphics_exposures = false,
+        });
+        try conn.send(message_buffer[0..len]);
+    }
+
     const background_graphics_context_id = ids.bg_gc;
     std.log.info("background_graphics_context_id {0} 0x{0x}", .{background_graphics_context_id});
     {
@@ -159,8 +180,10 @@ pub fn main() !u8 {
             .gc_id = background_graphics_context_id,
             .drawable_id = window_id,
         }, .{
-            .background = 0xff00ff00,
+            .background = 0xff000000,
             .foreground = 0xff0000ff,
+            // prevent NoExposure events when we send CopyArea
+            .graphics_exposures = false,
         });
         try conn.send(message_buffer[0..len]);
     }
@@ -451,7 +474,7 @@ fn render(
             .gc_id = ids.fg_gc,
             .src_x = 0,
             .src_y = 0,
-            .dst_x = 0,
+            .dst_x = 200,
             .dst_y = 0,
             .width = screenshot_capture_dims.width,
             .height = screenshot_capture_dims.height,
@@ -466,16 +489,38 @@ fn captureScreenshotToPixmap(
     screenshot_capture_dims: ScreenshotCaptureDims,
 ) !void {
     std.log.debug("captureScreenshotToPixmap", .{});
+    // {
+    //     // ~~We use copy_plane instead of copy_area because the depth of the root window
+    //     // (24) and the depth of the pixmap (32) are different.~~
+    //     // copy_plane creates a new pixmap where the color of the pixels in the source
+    //     // match the bit_plane mask. Anywhere the mask matches, the pixmap uses the foreground
+    //     // color of the graphics context, otherwise the background color.
+    //     var msg: [x.copy_plane.len]u8 = undefined;
+    //     x.copy_plane.serialize(&msg, .{
+    //         .src_drawable_id = ids.root,
+    //         .dst_drawable_id = ids.pixmap,
+    //         .gc_id = ids.copy_from_root_gc,
+    //         // Capture the middle of the screen
+    //         // TODO: Update to use the actual window dimensions
+    //         .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.width)), 2),
+    //         .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.height)), 2),
+    //         .dst_x = 0,
+    //         .dst_y = 0,
+    //         .width = screenshot_capture_dims.width,
+    //         .height = screenshot_capture_dims.height,
+    //         .bit_plane = 1, //0x010000, //0b000000000000000000000001,
+    //     });
+    //     try common.send(sock, &msg);
+    // }
+
     {
         var msg: [x.copy_area.len]u8 = undefined;
         x.copy_area.serialize(&msg, .{
-            .src_drawable_id = ids.window,
+            .src_drawable_id = ids.root,
             .dst_drawable_id = ids.pixmap,
-            .gc_id = ids.fg_gc,
-            // Capture the middle of the screen
-            // TODO: Update to use the actual window dimensions
-            .src_x = (3840 / 2) - @as(i16, @intCast(screenshot_capture_dims.width)),
-            .src_y = (2160 / 2) - @as(i16, @intCast(screenshot_capture_dims.height)),
+            .gc_id = ids.copy_from_root_gc,
+            .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.width)), 2),
+            .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.height)), 2),
             .dst_x = 0,
             .dst_y = 0,
             .width = screenshot_capture_dims.width,
