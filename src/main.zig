@@ -440,11 +440,11 @@ pub fn main() !u8 {
     };
 
     const render_context = RenderContext{
-        .sock = conn.sock,
-        .ids = ids,
-        .extensions = extensions,
-        .font_dims = font_dims,
-        .state = state,
+        .sock = &conn.sock,
+        .ids = &ids,
+        .extensions = &extensions,
+        .font_dims = &font_dims,
+        .state = &state,
     };
 
     while (true) {
@@ -587,18 +587,18 @@ fn renderString(
 }
 
 const RenderContext = struct {
-    sock: std.os.socket_t,
-    ids: Ids,
-    extensions: Extensions,
-    font_dims: FontDims,
-    state: State,
+    sock: *const std.os.socket_t,
+    ids: *const Ids,
+    extensions: *const Extensions,
+    font_dims: *const FontDims,
+    state: *const State,
 
-    pub fn render(self: @This()) !void {
-        const sock = self.sock;
-        const ids = self.ids;
-        const extensions = self.extensions;
-        const font_dims = self.font_dims;
-        const state = self.state;
+    pub fn render(self: *const @This()) !void {
+        const sock = self.sock.*;
+        const ids = self.ids.*;
+        const extensions = self.extensions.*;
+        const font_dims = self.font_dims.*;
+        const state = self.state.*;
 
         const window_id = ids.window;
         const screenshot_capture_dims = state.screenshot_capture_dims;
@@ -638,36 +638,6 @@ const RenderContext = struct {
                 mouse_x,
             },
         );
-        // {
-        //     const text_buf = msg[x.image_text8.text_offset .. x.image_text8.text_offset + 0xff];
-        //     const text_literal: []const u8 = std.fmt.bufPrint(text_buf, "Hello X! {d}", .{mouse_x});
-        //     const text = x.Slice(u8, [*]const u8){ .ptr = text_literal.ptr, .len = text_literal.len };
-        //     var msg: [x.image_text8.getLen(text.len)]u8 = undefined;
-
-        //     x.image_text8.serialize(&msg, text, .{
-        //         .drawable_id = window_id,
-        //         .gc_id = ids.fg_gc,
-        //         .x = @divTrunc((window_width - @as(i16, @intCast(text_width))), 2) + font_dims.font_left,
-        //         .y = @divTrunc((window_height - @as(i16, @intCast(font_dims.height))), 2) + font_dims.font_ascent,
-        //     });
-        //     try common.send(sock, &msg);
-        // }
-
-        // {
-        //     var msg: [x.copy_area.len]u8 = undefined;
-        //     x.copy_area.serialize(&msg, .{
-        //         .src_drawable_id = ids.pixmap,
-        //         .dst_drawable_id = ids.window,
-        //         .gc_id = ids.fg_gc,
-        //         .src_x = 0,
-        //         .src_y = 0,
-        //         .dst_x = 200,
-        //         .dst_y = 0,
-        //         .width = screenshot_capture_dims.width,
-        //         .height = screenshot_capture_dims.height,
-        //     });
-        //     try common.send(sock, &msg);
-        // }
 
         {
             var msg: [x.render.composite.len]u8 = undefined;
@@ -690,31 +660,14 @@ const RenderContext = struct {
     }
 
     pub fn captureScreenshotToPixmap(self: @This()) !void {
-        const sock = self.sock;
-        const ids = self.ids;
-        const extensions = self.extensions;
-        const state = self.state;
+        const sock = self.sock.*;
+        const ids = self.ids.*;
+        const extensions = self.extensions.*;
+        const state = self.state.*;
 
         const screenshot_capture_dims = state.screenshot_capture_dims;
 
         std.log.debug("captureScreenshotToPixmap", .{});
-
-        // {
-        //     var msg: [x.copy_area.len]u8 = undefined;
-        //     x.copy_area.serialize(&msg, .{
-        //         .src_drawable_id = ids.root,
-        //         .dst_drawable_id = ids.pixmap,
-        //         .gc_id = ids.copy_from_root_gc,
-        //         .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.width)), 2),
-        //         .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.height)), 2),
-        //         .dst_x = 0,
-        //         .dst_y = 0,
-        //         .width = screenshot_capture_dims.width,
-        //         .height = screenshot_capture_dims.height,
-        //     });
-        //     try common.send(sock, &msg);
-        // }
-
         {
             var msg: [x.render.composite.len]u8 = undefined;
             x.render.composite.serialize(&msg, extensions.render.opcode, .{
