@@ -106,7 +106,6 @@ pub fn main() !u8 {
         break :blk screen;
     };
 
-    // TODO: Put this back at 32-bit depth for ARGB (alpha transparency)
     const depth = 32;
     const matching_visual_type = try screen.findMatchingVisualType(depth, .true_color, allocator);
     std.log.debug("matching_visual_type {any}", .{matching_visual_type});
@@ -473,8 +472,6 @@ pub fn main() !u8 {
                     return error.TodoHandleReplyMessage;
                 },
                 .ge_generic => |msg| {
-                    // TODO: When handling a generic message, we need to get the rest of the event out
-                    // of the buffer since we've only read the first 32 bytes so far.
                     std.log.info("todo: handle a GE generic event {}", .{msg});
                     return error.TodoHandleReplyMessage;
                 },
