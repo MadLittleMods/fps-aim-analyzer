@@ -68,7 +68,7 @@ pub fn findMatchingPictureFormat(formats: []const x.render.PictureFormatInfo, de
         if (format.depth != desired_depth) continue;
         return format;
     }
-    return error.VisualTypeNotFound;
+    return error.PictureFormatNotFound;
 }
 
 const ExtensionInfo = struct {
@@ -107,7 +107,7 @@ pub fn main() !u8 {
     };
 
     // TODO: Put this back at 32-bit depth for ARGB (alpha transparency)
-    const depth = 24;
+    const depth = 32;
     const matching_visual_type = try screen.findMatchingVisualType(depth, .true_color, allocator);
     std.log.debug("matching_visual_type {any}", .{matching_visual_type});
 
@@ -354,7 +354,7 @@ pub fn main() !u8 {
     }
     const message_length = try x.readOneMsg(conn.reader(), @alignCast(buf.nextReadBuffer()));
     try checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-    const pict_formats_data: ?struct { matching_picture_format: x.render.PictureFormatInfo } = blk: {
+    const optional_picture_formats_data: ?struct { matching_picture_format_24: x.render.PictureFormatInfo, matching_picture_format_32: x.render.PictureFormatInfo } = blk: {
         switch (x.serverMsgTaggedUnion(@alignCast(buf.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.render.query_pict_formats.Reply = @ptrCast(msg_reply);
@@ -371,7 +371,8 @@ pub fn main() !u8 {
                     });
                 }
                 break :blk .{
-                    .matching_picture_format = try findMatchingPictureFormat(msg.getPictureFormats()[0..], depth),
+                    .matching_picture_format_24 = try findMatchingPictureFormat(msg.getPictureFormats()[0..], 24),
+                    .matching_picture_format_32 = try findMatchingPictureFormat(msg.getPictureFormats()[0..], 32),
                 };
             },
             else => |msg| {
@@ -380,14 +381,23 @@ pub fn main() !u8 {
             },
         }
     };
-    const matching_picture_format = pict_formats_data.?.matching_picture_format;
+    const picture_formats_data = optional_picture_formats_data orelse @panic("Matching picture formats not found");
+    const matching_picture_format = switch (depth) {
+        24 => picture_formats_data.matching_picture_format_24,
+        32 => picture_formats_data.matching_picture_format_32,
+        else => |captured_depth| {
+            std.log.err("Matching picture format not found for depth {}", .{captured_depth});
+            @panic("Matching picture format not found for depth");
+        },
+    };
 
     {
         var msg: [x.render.create_picture.max_len]u8 = undefined;
         const len = x.render.create_picture.serialize(&msg, render_extension.opcode, .{
             .picture_id = ids.picture_root,
             .drawable_id = screen.root,
-            .format_id = matching_picture_format.picture_format_id,
+            // The root window is always 24-bit depth
+            .format_id = picture_formats_data.matching_picture_format_24.picture_format_id,
             .options = .{
                 .subwindow_mode = .include_inferiors,
             },
@@ -694,29 +704,6 @@ fn captureScreenshotToPixmap(
     screenshot_capture_dims: ScreenshotCaptureDims,
 ) !void {
     std.log.debug("captureScreenshotToPixmap", .{});
-    // {
-    //     // ~~We use copy_plane instead of copy_area because the depth of the root window
-    //     // (24) and the depth of the pixmap (32) are different.~~
-    //     // copy_plane creates a new pixmap where the color of the pixels in the source
-    //     // match the bit_plane mask. Anywhere the mask matches, the pixmap uses the foreground
-    //     // color of the graphics context, otherwise the background color.
-    //     var msg: [x.copy_plane.len]u8 = undefined;
-    //     x.copy_plane.serialize(&msg, .{
-    //         .src_drawable_id = ids.root,
-    //         .dst_drawable_id = ids.pixmap,
-    //         .gc_id = ids.copy_from_root_gc,
-    //         // Capture the middle of the screen
-    //         // TODO: Update to use the actual window dimensions
-    //         .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.width)), 2),
-    //         .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.height)), 2),
-    //         .dst_x = 0,
-    //         .dst_y = 0,
-    //         .width = screenshot_capture_dims.width,
-    //         .height = screenshot_capture_dims.height,
-    //         .bit_plane = 1, //0x010000, //0b000000000000000000000001,
-    //     });
-    //     try common.send(sock, &msg);
-    // }
 
     // {
     //     var msg: [x.copy_area.len]u8 = undefined;
