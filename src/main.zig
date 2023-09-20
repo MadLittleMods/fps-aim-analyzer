@@ -52,31 +52,35 @@ pub fn main() !u8 {
         break :blk screen;
     };
 
+    const depth = 32;
+    const matching_visual_type = try screen.findMatchingVisualType(depth, .true_color, allocator);
+    std.log.debug("matching_visual_type {any}", .{matching_visual_type});
+
     // TODO: maybe need to call conn.setup.verify or something?
 
     const ids = Ids{ .base = conn.setup.fixed().resource_id_base };
     const window_id = ids.window();
     std.log.info("window_id {0} 0x{0x}", .{window_id});
-    std.log.info("screen.root_visual visual_id {0} 0x{0x}", .{screen.root_visual});
-    // {
-    //     var message_buffer: [x.create_colormap.len]u8 = undefined;
-    //     x.create_colormap.serialize(&message_buffer, .{
-    //         .id = ids.colormap(),
-    //         .visual_id = screen.root_visual,
-    //         .window_id = window_id,
-    //         .alloc = .none,
-    //     });
-    //     try conn.send(&message_buffer);
-    // }
     {
+        var message_buffer: [x.create_colormap.len]u8 = undefined;
+        x.create_colormap.serialize(&message_buffer, .{
+            .id = ids.colormap(),
+            .window_id = screen.root, //window_id,
+            .visual_id = matching_visual_type.id,
+            .alloc = .none,
+        });
+        try conn.send(&message_buffer);
+    }
+    {
+        std.log.debug("Creating window", .{});
         var message_buffer: [x.create_window.max_len]u8 = undefined;
         const len = x.create_window.serialize(&message_buffer, .{
             .window_id = window_id,
             .parent_window_id = screen.root,
             // Color depth:
             // - 24 for RGB
-            // - 32 for RGBA
-            .depth = 24,
+            // - 32 for ARGB
+            .depth = depth,
             // Place it in the top-right corner of the screen
             .x = screen.pixel_width - window_width,
             .y = 0,
@@ -84,13 +88,14 @@ pub fn main() !u8 {
             .height = window_height,
             .border_width = 0, // TODO: what is this?
             .class = .input_output,
-            .visual_id = screen.root_visual,
+            .visual_id = matching_visual_type.id,
         }, .{
             .bg_pixmap = .none,
-            .bg_pixel = 0x0000aa80,
-            //            //.border_pixmap =
-            .border_pixel = 0x000000ff,
-            // .colormap = @enumFromInt(ids.colormap()),
+            // 0xAARRGGBB
+            .bg_pixel = 0xaa006660,
+            // .border_pixmap =
+            .border_pixel = 0x00000000,
+            .colormap = @enumFromInt(ids.colormap()),
             //            .bit_gravity = .north_west,
             //            .win_gravity = .east,
             //            .backing_store = .when_mapped,
@@ -118,26 +123,28 @@ pub fn main() !u8 {
     }
 
     const background_graphics_context_id = ids.bg_gc();
+    std.log.info("background_graphics_context_id {0} 0x{0x}", .{background_graphics_context_id});
     {
         var message_buffer: [x.create_gc.max_len]u8 = undefined;
         const len = x.create_gc.serialize(&message_buffer, .{
             .gc_id = background_graphics_context_id,
-            .drawable_id = screen.root,
+            .drawable_id = window_id,
         }, .{
-            .background = 0x0000ff00,
-            .foreground = 0x000000ff,
+            .background = 0xff00ff00,
+            .foreground = 0xff0000ff,
         });
         try conn.send(message_buffer[0..len]);
     }
     const foreground_graphics_context_id = ids.fg_gc();
+    std.log.info("foreground_graphics_context_id {0} 0x{0x}", .{foreground_graphics_context_id});
     {
         var message_buffer: [x.create_gc.max_len]u8 = undefined;
         const len = x.create_gc.serialize(&message_buffer, .{
             .gc_id = foreground_graphics_context_id,
-            .drawable_id = screen.root,
+            .drawable_id = window_id,
         }, .{
-            .background = screen.black_pixel,
-            .foreground = 0x00ffff00,
+            .background = 0xff000000,
+            .foreground = 0xffffff00,
         });
         try conn.send(message_buffer[0..len]);
     }
@@ -212,11 +219,15 @@ pub fn main() !u8 {
             //buf.resetIfEmpty();
             switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
                 .err => |msg| {
-                    std.log.err("{}", .{msg});
+                    std.log.err("Received X error: {}", .{msg});
                     return 1;
                 },
                 .reply => |msg| {
                     std.log.info("todo: handle a reply message {}", .{msg});
+                    return error.TodoHandleReplyMessage;
+                },
+                .ge_generic => |msg| {
+                    std.log.info("todo: handle a GE generic event {}", .{msg});
                     return error.TodoHandleReplyMessage;
                 },
                 .key_press => |msg| {
@@ -271,11 +282,11 @@ pub fn main() !u8 {
         }
     }
 
-    // {
-    //     var msg: [x.free_colormap.len]u8 = undefined;
-    //     x.free_colormap.serialize(&msg, ids.colormap());
-    //     try conn.send(&msg);
-    // }
+    {
+        var msg: [x.free_colormap.len]u8 = undefined;
+        x.free_colormap.serialize(&msg, ids.colormap());
+        try conn.send(&msg);
+    }
 }
 
 const FontDims = struct {

@@ -65,7 +65,40 @@ Determine the color depth of your window or the root window ([via StackOverflow]
 
 ## Testing with multiple screens
 
-Add a virtual monitor ([*courtesy of this GitHub issue*](https://github.com/pavlobu/deskreen/issues/42#issue-792962894)):
+> [!WARNING]  
+> These steps don't actually seem to work to add another "screen" in terms of what the X Window Server sees. But still seem like useful commands to keep around until I do figure out how this all works.
+
+Add a virtual monitor ([*courtesy of this GitHub issue*](https://github.com/pavlobu/deskreen/issues/42#issue-792962894)).
+
+List available ports:
+```sh
+$ xrandr
+Screen 0: minimum 320 x 200, current 3840 x 2160, maximum 16384 x 16384
+DisplayPort-0 connected 3840x2160+0+0 (normal left inverted right x axis y axis) 878mm x 485mm
+   3840x2160     60.00*+  30.00    30.00
+   2560x1440     59.95
+   1920x1200     60.00
+   1920x1080     60.00    60.00    50.00    50.00    59.94
+   1600x1200     60.00
+   1680x1050     59.95
+   1280x1024     75.02    60.02
+   1440x900      74.98    59.89
+   1280x960      60.00
+   1280x800      60.00
+   1280x720      60.00    50.00    59.94
+   1024x768      75.03    60.00
+   800x600       75.00    60.32
+   720x576       50.00
+   720x480       60.00    59.94
+   640x480       75.00    72.81    66.67    60.00    59.94
+   720x400       70.08
+DisplayPort-1 disconnected (normal left inverted right x axis y axis)
+DisplayPort-2 disconnected (normal left inverted right x axis y axis)
+HDMI-A-0 disconnected (normal left inverted right x axis y axis)
+   1920x1080     60.00
+```
+
+Add a virtual monitor:
 ```
 xrandr --addmode HDMI-A-0 1920x1080
 xrandr --output HDMI-A-0 --mode 1920x1080 --right-of DisplayPort-0
@@ -75,3 +108,12 @@ To disconnect the display:
 ```
 xrandr --output HDMI-A-0 --off
 ```
+
+List monitors:
+```
+xrandr --listmonitors
+```
+
+Other resources:
+
+ - https://www.youtube.com/watch?v=N9KxpPyJMJA
