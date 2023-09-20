@@ -439,6 +439,14 @@ pub fn main() !u8 {
         .render = render_extension,
     };
 
+    const render_context = RenderContext{
+        .sock = conn.sock,
+        .ids = ids,
+        .extensions = extensions,
+        .font_dims = font_dims,
+        .state = state,
+    };
+
     while (true) {
         {
             const recv_buf = buf.nextReadBuffer();
@@ -483,19 +491,8 @@ pub fn main() !u8 {
                 },
                 .button_press => |msg| {
                     std.log.info("button_press: {}", .{msg});
-                    try captureScreenshotToPixmap(
-                        conn.sock,
-                        ids,
-                        extensions,
-                        screenshot_capture_dims,
-                    );
-                    try render(
-                        conn.sock,
-                        ids,
-                        extensions,
-                        font_dims,
-                        state,
-                    );
+                    try render_context.captureScreenshotToPixmap();
+                    try render_context.render();
                 },
                 .button_release => |msg| {
                     std.log.info("button_release: {}", .{msg});
@@ -510,26 +507,14 @@ pub fn main() !u8 {
                     // too much logging
                     //std.log.info("pointer_motion: {}", .{msg});
                     state.mouse_x = msg.event_x;
-                    try render(
-                        conn.sock,
-                        ids,
-                        extensions,
-                        font_dims,
-                        state,
-                    );
+                    try render_context.render();
                 },
                 .keymap_notify => |msg| {
                     std.log.info("keymap_state: {}", .{msg});
                 },
                 .expose => |msg| {
                     std.log.info("expose: {}", .{msg});
-                    try render(
-                        conn.sock,
-                        ids,
-                        extensions,
-                        font_dims,
-                        state,
-                    );
+                    try render_context.render();
                 },
                 .mapping_notify => |msg| {
                     std.log.info("mapping_notify: {}", .{msg});
@@ -547,6 +532,7 @@ pub fn main() !u8 {
         }
     }
 
+    // Clean-up
     {
         var msg: [x.free_pixmap.len]u8 = undefined;
         x.free_pixmap.serialize(&msg, ids.pixmap);
@@ -558,6 +544,8 @@ pub fn main() !u8 {
         x.free_colormap.serialize(&msg, ids.colormap);
         try conn.send(&msg);
     }
+
+    // TODO: x.render.free_picture
 }
 
 const FontDims = struct {
@@ -598,142 +586,152 @@ fn renderString(
     try common.send(sock, msg[0..x.image_text8.getLen(text_len)]);
 }
 
-fn render(
+const RenderContext = struct {
     sock: std.os.socket_t,
     ids: Ids,
     extensions: Extensions,
     font_dims: FontDims,
     state: State,
-) !void {
-    const window_id = ids.window;
-    const screenshot_capture_dims = state.screenshot_capture_dims;
-    const mouse_x = state.mouse_x;
 
-    {
-        var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
-        x.poly_fill_rectangle.serialize(&msg, .{
-            .drawable_id = window_id,
-            .gc_id = ids.bg_gc,
-        }, &[_]x.Rectangle{
-            .{ .x = 100, .y = 100, .width = 200, .height = 200 },
-        });
-        try common.send(sock, &msg);
+    pub fn render(self: @This()) !void {
+        const sock = self.sock;
+        const ids = self.ids;
+        const extensions = self.extensions;
+        const font_dims = self.font_dims;
+        const state = self.state;
+
+        const window_id = ids.window;
+        const screenshot_capture_dims = state.screenshot_capture_dims;
+        const mouse_x = state.mouse_x;
+
+        {
+            var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
+            x.poly_fill_rectangle.serialize(&msg, .{
+                .drawable_id = window_id,
+                .gc_id = ids.bg_gc,
+            }, &[_]x.Rectangle{
+                .{ .x = 100, .y = 100, .width = 200, .height = 200 },
+            });
+            try common.send(sock, &msg);
+        }
+        {
+            var msg: [x.clear_area.len]u8 = undefined;
+            x.clear_area.serialize(&msg, false, window_id, .{
+                .x = 150,
+                .y = 150,
+                .width = 100,
+                .height = 100,
+            });
+            try common.send(sock, &msg);
+        }
+
+        const text_length = 11;
+        const text_width = font_dims.width * text_length;
+        try renderString(
+            sock,
+            window_id,
+            ids.fg_gc,
+            @divTrunc((window_width - @as(i16, @intCast(text_width))), 2) + font_dims.font_left,
+            @divTrunc((window_height - @as(i16, @intCast(font_dims.height))), 2) + font_dims.font_ascent,
+            "Hello X! {}",
+            .{
+                mouse_x,
+            },
+        );
+        // {
+        //     const text_buf = msg[x.image_text8.text_offset .. x.image_text8.text_offset + 0xff];
+        //     const text_literal: []const u8 = std.fmt.bufPrint(text_buf, "Hello X! {d}", .{mouse_x});
+        //     const text = x.Slice(u8, [*]const u8){ .ptr = text_literal.ptr, .len = text_literal.len };
+        //     var msg: [x.image_text8.getLen(text.len)]u8 = undefined;
+
+        //     x.image_text8.serialize(&msg, text, .{
+        //         .drawable_id = window_id,
+        //         .gc_id = ids.fg_gc,
+        //         .x = @divTrunc((window_width - @as(i16, @intCast(text_width))), 2) + font_dims.font_left,
+        //         .y = @divTrunc((window_height - @as(i16, @intCast(font_dims.height))), 2) + font_dims.font_ascent,
+        //     });
+        //     try common.send(sock, &msg);
+        // }
+
+        // {
+        //     var msg: [x.copy_area.len]u8 = undefined;
+        //     x.copy_area.serialize(&msg, .{
+        //         .src_drawable_id = ids.pixmap,
+        //         .dst_drawable_id = ids.window,
+        //         .gc_id = ids.fg_gc,
+        //         .src_x = 0,
+        //         .src_y = 0,
+        //         .dst_x = 200,
+        //         .dst_y = 0,
+        //         .width = screenshot_capture_dims.width,
+        //         .height = screenshot_capture_dims.height,
+        //     });
+        //     try common.send(sock, &msg);
+        // }
+
+        {
+            var msg: [x.render.composite.len]u8 = undefined;
+            x.render.composite.serialize(&msg, extensions.render.opcode, .{
+                .picture_operation = .over,
+                .src_picture_id = ids.picture_pixmap,
+                .mask_picture_id = 0,
+                .dst_picture_id = ids.picture_window,
+                .src_x = 0,
+                .src_y = 0,
+                .mask_x = 0,
+                .mask_y = 0,
+                .dst_x = 200,
+                .dst_y = 0,
+                .width = screenshot_capture_dims.width,
+                .height = screenshot_capture_dims.height,
+            });
+            try common.send(sock, &msg);
+        }
     }
-    {
-        var msg: [x.clear_area.len]u8 = undefined;
-        x.clear_area.serialize(&msg, false, window_id, .{
-            .x = 150,
-            .y = 150,
-            .width = 100,
-            .height = 100,
-        });
-        try common.send(sock, &msg);
+
+    pub fn captureScreenshotToPixmap(self: @This()) !void {
+        const sock = self.sock;
+        const ids = self.ids;
+        const extensions = self.extensions;
+        const state = self.state;
+
+        const screenshot_capture_dims = state.screenshot_capture_dims;
+
+        std.log.debug("captureScreenshotToPixmap", .{});
+
+        // {
+        //     var msg: [x.copy_area.len]u8 = undefined;
+        //     x.copy_area.serialize(&msg, .{
+        //         .src_drawable_id = ids.root,
+        //         .dst_drawable_id = ids.pixmap,
+        //         .gc_id = ids.copy_from_root_gc,
+        //         .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.width)), 2),
+        //         .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.height)), 2),
+        //         .dst_x = 0,
+        //         .dst_y = 0,
+        //         .width = screenshot_capture_dims.width,
+        //         .height = screenshot_capture_dims.height,
+        //     });
+        //     try common.send(sock, &msg);
+        // }
+
+        {
+            var msg: [x.render.composite.len]u8 = undefined;
+            x.render.composite.serialize(&msg, extensions.render.opcode, .{
+                .picture_operation = .over,
+                .src_picture_id = ids.picture_root,
+                .mask_picture_id = 0,
+                .dst_picture_id = ids.picture_pixmap,
+                .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.width)), 2),
+                .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.height)), 2),
+                .mask_x = 0,
+                .mask_y = 0,
+                .dst_x = 0,
+                .dst_y = 0,
+                .width = screenshot_capture_dims.width,
+                .height = screenshot_capture_dims.height,
+            });
+            try common.send(sock, &msg);
+        }
     }
-
-    const text_length = 11;
-    const text_width = font_dims.width * text_length;
-    try renderString(
-        sock,
-        window_id,
-        ids.fg_gc,
-        @divTrunc((window_width - @as(i16, @intCast(text_width))), 2) + font_dims.font_left,
-        @divTrunc((window_height - @as(i16, @intCast(font_dims.height))), 2) + font_dims.font_ascent,
-        "Hello X! {}",
-        .{
-            mouse_x,
-        },
-    );
-    // {
-    //     const text_buf = msg[x.image_text8.text_offset .. x.image_text8.text_offset + 0xff];
-    //     const text_literal: []const u8 = std.fmt.bufPrint(text_buf, "Hello X! {d}", .{mouse_x});
-    //     const text = x.Slice(u8, [*]const u8){ .ptr = text_literal.ptr, .len = text_literal.len };
-    //     var msg: [x.image_text8.getLen(text.len)]u8 = undefined;
-
-    //     x.image_text8.serialize(&msg, text, .{
-    //         .drawable_id = window_id,
-    //         .gc_id = ids.fg_gc,
-    //         .x = @divTrunc((window_width - @as(i16, @intCast(text_width))), 2) + font_dims.font_left,
-    //         .y = @divTrunc((window_height - @as(i16, @intCast(font_dims.height))), 2) + font_dims.font_ascent,
-    //     });
-    //     try common.send(sock, &msg);
-    // }
-
-    // {
-    //     var msg: [x.copy_area.len]u8 = undefined;
-    //     x.copy_area.serialize(&msg, .{
-    //         .src_drawable_id = ids.pixmap,
-    //         .dst_drawable_id = ids.window,
-    //         .gc_id = ids.fg_gc,
-    //         .src_x = 0,
-    //         .src_y = 0,
-    //         .dst_x = 200,
-    //         .dst_y = 0,
-    //         .width = screenshot_capture_dims.width,
-    //         .height = screenshot_capture_dims.height,
-    //     });
-    //     try common.send(sock, &msg);
-    // }
-
-    {
-        var msg: [x.render.composite.len]u8 = undefined;
-        x.render.composite.serialize(&msg, extensions.render.opcode, .{
-            .picture_operation = .over,
-            .src_picture_id = ids.picture_pixmap,
-            .mask_picture_id = 0,
-            .dst_picture_id = ids.picture_window,
-            .src_x = 0,
-            .src_y = 0,
-            .mask_x = 0,
-            .mask_y = 0,
-            .dst_x = 200,
-            .dst_y = 0,
-            .width = screenshot_capture_dims.width,
-            .height = screenshot_capture_dims.height,
-        });
-        try common.send(sock, &msg);
-    }
-}
-
-fn captureScreenshotToPixmap(
-    sock: std.os.socket_t,
-    ids: Ids,
-    extensions: Extensions,
-    screenshot_capture_dims: ScreenshotCaptureDims,
-) !void {
-    std.log.debug("captureScreenshotToPixmap", .{});
-
-    // {
-    //     var msg: [x.copy_area.len]u8 = undefined;
-    //     x.copy_area.serialize(&msg, .{
-    //         .src_drawable_id = ids.root,
-    //         .dst_drawable_id = ids.pixmap,
-    //         .gc_id = ids.copy_from_root_gc,
-    //         .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.width)), 2),
-    //         .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.height)), 2),
-    //         .dst_x = 0,
-    //         .dst_y = 0,
-    //         .width = screenshot_capture_dims.width,
-    //         .height = screenshot_capture_dims.height,
-    //     });
-    //     try common.send(sock, &msg);
-    // }
-
-    {
-        var msg: [x.render.composite.len]u8 = undefined;
-        x.render.composite.serialize(&msg, extensions.render.opcode, .{
-            .picture_operation = .over,
-            .src_picture_id = ids.picture_root,
-            .mask_picture_id = 0,
-            .dst_picture_id = ids.picture_pixmap,
-            .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.width)), 2),
-            .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.height)), 2),
-            .mask_x = 0,
-            .mask_y = 0,
-            .dst_x = 0,
-            .dst_y = 0,
-            .width = screenshot_capture_dims.width,
-            .height = screenshot_capture_dims.height,
-        });
-        try common.send(sock, &msg);
-    }
-}
+};
