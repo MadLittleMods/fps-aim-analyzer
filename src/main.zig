@@ -51,7 +51,7 @@ pub fn main() !u8 {
         }
         break :blk screen;
     };
-    
+
     const depth = 32;
     const matching_visual_type = try screen.findMatchingVisualType(depth, .true_color, allocator);
     std.log.debug("matching_visual_type {any}", .{matching_visual_type});
@@ -65,7 +65,7 @@ pub fn main() !u8 {
         var message_buffer: [x.create_colormap.len]u8 = undefined;
         x.create_colormap.serialize(&message_buffer, .{
             .id = ids.colormap(),
-            .window_id = screen.root,//window_id,
+            .window_id = screen.root, //window_id,
             .visual_id = matching_visual_type.id,
             .alloc = .none,
         });
@@ -224,6 +224,10 @@ pub fn main() !u8 {
                 },
                 .reply => |msg| {
                     std.log.info("todo: handle a reply message {}", .{msg});
+                    return error.TodoHandleReplyMessage;
+                },
+                .ge_generic => |msg| {
+                    std.log.info("todo: handle a GE generic event {}", .{msg});
                     return error.TodoHandleReplyMessage;
                 },
                 .key_press => |msg| {
