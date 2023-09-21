@@ -1,84 +1,16 @@
 const std = @import("std");
 const x = @import("x");
-const common = @import("x11common.zig");
+const common = @import("x11/x11_common.zig");
+const x11_extension_utils = @import("x11//x11_extension_utils.zig");
+const x_render_extension = @import("x11/x_render_extension.zig");
+const render_utils = @import("render_utils.zig");
 
 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 const allocator = arena.allocator();
 
-const window_width = 400;
-const window_height = 400;
-
-pub const Ids = struct {
-    const Self = @This();
-
-    root: u32,
-    base: u32,
-    _current_id: u32,
-
-    window: u32 = 0,
-    colormap: u32 = 0,
-    copy_from_root_gc: u32 = 0,
-    bg_gc: u32 = 0,
-    fg_gc: u32 = 0,
-    pixmap: u32 = 0,
-    // For use with the X Render extension
-    picture_root: u32 = 0,
-    picture_window: u32 = 0,
-    picture_pixmap: u32 = 0,
-
-    pub fn init(root: u32, base: u32) Self {
-        var ids = Ids{
-            .root = root,
-            .base = base,
-            ._current_id = base,
-        };
-
-        ids.window = ids.generateMonotonicId();
-        ids.colormap = ids.generateMonotonicId();
-        ids.copy_from_root_gc = ids.generateMonotonicId();
-        ids.bg_gc = ids.generateMonotonicId();
-        ids.fg_gc = ids.generateMonotonicId();
-        ids.pixmap = ids.generateMonotonicId();
-        ids.picture_root = ids.generateMonotonicId();
-        ids.picture_window = ids.generateMonotonicId();
-        ids.picture_pixmap = ids.generateMonotonicId();
-
-        return ids;
-    }
-
-    /// Always increasing ID everytime the function is called
-    fn generateMonotonicId(self: *Ids) u32 {
-        const current_id = self._current_id;
-        self._current_id += 1;
-        return current_id;
-    }
-};
-
-fn checkMessageLengthFitsInBuffer(message_length: usize, buffer_limit: usize) !void {
-    if (message_length > buffer_limit) {
-        std.debug.panic("Reply is bigger than our buffer (data corruption will ensue) {} > {}. In order to fix, increase the buffer size.", .{
-            message_length,
-            buffer_limit,
-        });
-    }
-}
-
-pub fn findMatchingPictureFormat(formats: []const x.render.PictureFormatInfo, desired_depth: u8) !x.render.PictureFormatInfo {
-    for (formats) |format| {
-        if (format.depth != desired_depth) continue;
-        return format;
-    }
-    return error.PictureFormatNotFound;
-}
-
-const ExtensionInfo = struct {
-    extension_name: []const u8,
-    opcode: u8,
-    base_error_code: u8,
-};
-
-const Extensions = struct {
-    render: ExtensionInfo,
+const window_dimensions = render_utils.Dimensions{
+    .width = 400,
+    .height = 400,
 };
 
 pub fn main() !u8 {
@@ -94,11 +26,6 @@ pub fn main() !u8 {
         std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(fixed.vendor_len)});
         const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
         const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
-        std.log.debug("fmt list off={} limit={}", .{ format_list_offset, format_list_limit });
-        const formats = try conn.setup.getFormatList(format_list_offset, format_list_limit);
-        for (formats, 0..) |format, i| {
-            std.log.debug("format[{}] depth={:3} bpp={:3} scanpad={:3}", .{ i, format.depth, format.bits_per_pixel, format.scanline_pad });
-        }
         var screen = conn.setup.getFirstScreenPtr(format_list_limit);
         inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
             std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
@@ -106,157 +33,73 @@ pub fn main() !u8 {
         break :blk screen;
     };
 
-    const depth = 32;
-    const matching_visual_type = try screen.findMatchingVisualType(depth, .true_color, allocator);
-    std.log.debug("matching_visual_type {any}", .{matching_visual_type});
+    const ids = render_utils.Ids.init(
+        screen.root,
+        conn.setup.fixed().resource_id_base,
+    );
 
-    const screenshot_capture_dims = ScreenshotCaptureDims{
+    const depth = 32;
+
+    const screenshot_capture_dimensions = render_utils.Dimensions{
         .width = 200,
         .height = 150,
     };
     var state = State{
-        .screenshot_capture_dims = screenshot_capture_dims,
+        .screenshot_capture_dimensions = screenshot_capture_dimensions,
     };
+
+    // Create a big buffer that we can use to read messages and replies from the X server.
+    const double_buffer = try x.DoubleBuffer.init(
+        std.mem.alignForward(usize, 8000, std.mem.page_size),
+        .{ .memfd_name = "ZigX11DoubleBuffer" },
+    );
+    defer double_buffer.deinit(); // not necessary but good to test
+    std.log.info("Read buffer capacity is {}", .{double_buffer.half_len});
+    var buffer = double_buffer.contiguousReadBuffer();
+    const buffer_limit = buffer.half_len;
+    _ = buffer_limit;
 
     // TODO: maybe need to call conn.setup.verify or something?
 
-    const ids = Ids.init(
-        screen.root,
-        conn.setup.fixed().resource_id_base,
+    const optional_render_extension = try x11_extension_utils.getExtensionInfo(
+        conn.sock,
+        &buffer,
+        "RENDER",
     );
-    const window_id = ids.window;
-    std.log.info("window_id {0} 0x{0x}", .{window_id});
-    {
-        var message_buffer: [x.create_colormap.len]u8 = undefined;
-        x.create_colormap.serialize(&message_buffer, .{
-            .id = ids.colormap,
-            .window_id = screen.root, //window_id,
-            .visual_id = matching_visual_type.id,
-            .alloc = .none,
-        });
-        try conn.send(&message_buffer);
-    }
-    {
-        std.log.debug("Creating window", .{});
-        var message_buffer: [x.create_window.max_len]u8 = undefined;
-        const len = x.create_window.serialize(&message_buffer, .{
-            .window_id = window_id,
-            .parent_window_id = screen.root,
-            // Color depth:
-            // - 24 for RGB
-            // - 32 for ARGB
-            .depth = depth,
-            // Place it in the top-right corner of the screen
-            .x = screen.pixel_width - window_width,
-            .y = 0,
-            .width = window_width,
-            .height = window_height,
-            .border_width = 0, // TODO: what is this?
-            .class = .input_output,
-            .visual_id = matching_visual_type.id,
-        }, .{
-            .bg_pixmap = .none,
-            // 0xAARRGGBB
-            .bg_pixel = 0xaa006660,
-            // .border_pixmap =
-            .border_pixel = 0x00000000,
-            .colormap = @enumFromInt(ids.colormap),
-            //            .bit_gravity = .north_west,
-            //            .win_gravity = .east,
-            //            .backing_store = .when_mapped,
-            //            .backing_planes = 0x1234,
-            //            .backing_pixel = 0xbbeeeeff,
-            //
-            // Whether this window overrides structure control facilities. Basically, a
-            // suggestion whether the window manager to decorate this window (false) or
-            // we want to override the behavior. We set this to true to disable the
-            // window controls (basically a borderless window).
-            .override_redirect = true,
-            //            .save_under = true,
-            .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
-            //                | x.event.pointer_motion_hint WHAT THIS DO?
-            //                | x.event.button1_motion  WHAT THIS DO?
-            //                | x.event.button2_motion  WHAT THIS DO?
-            //                | x.event.button3_motion  WHAT THIS DO?
-            //                | x.event.button4_motion  WHAT THIS DO?
-            //                | x.event.button5_motion  WHAT THIS DO?
-            //                | x.event.button_motion  WHAT THIS DO?
+    const render_extension = optional_render_extension orelse @panic("RENDER extension not found");
 
-            //            .dont_propagate = 1,
-        });
-        try conn.send(message_buffer[0..len]);
-    }
+    try x_render_extension.ensureCompatibleVersionOfXRenderExtension(
+        conn.sock,
+        &buffer,
+        &render_extension,
+    );
 
-    std.log.info("copy_from_root_gc {0} 0x{0x}", .{ids.copy_from_root_gc});
-    {
-        var message_buffer: [x.create_gc.max_len]u8 = undefined;
-        const len = x.create_gc.serialize(&message_buffer, .{
-            .gc_id = ids.copy_from_root_gc,
-            .drawable_id = window_id,
-        }, .{
-            .background = 0xff000000,
-            .foreground = 0xffffffff,
-            // Include child windows when we send CopyArea (https://stackoverflow.com/a/52036063/796832).
-            // Otherwise, by default, the window pixels are cropped by the sub-windows.
-            .subwindow_mode = .include_inferiors,
-            // prevent NoExposure events when we send CopyArea
-            .graphics_exposures = false,
-        });
-        try conn.send(message_buffer[0..len]);
-    }
+    const extensions = x11_extension_utils.Extensions{
+        .render = render_extension,
+    };
 
-    const background_graphics_context_id = ids.bg_gc;
-    std.log.info("background_graphics_context_id {0} 0x{0x}", .{background_graphics_context_id});
-    {
-        var message_buffer: [x.create_gc.max_len]u8 = undefined;
-        const len = x.create_gc.serialize(&message_buffer, .{
-            .gc_id = background_graphics_context_id,
-            .drawable_id = window_id,
-        }, .{
-            .background = 0xff000000,
-            .foreground = 0xff0000ff,
-            // prevent NoExposure events when we send CopyArea
-            .graphics_exposures = false,
-        });
-        try conn.send(message_buffer[0..len]);
-    }
-    const foreground_graphics_context_id = ids.fg_gc;
-    std.log.info("foreground_graphics_context_id {0} 0x{0x}", .{foreground_graphics_context_id});
-    {
-        var message_buffer: [x.create_gc.max_len]u8 = undefined;
-        const len = x.create_gc.serialize(&message_buffer, .{
-            .gc_id = foreground_graphics_context_id,
-            .drawable_id = window_id,
-        }, .{
-            .background = 0xff000000,
-            .foreground = 0xffffff00,
-            // prevent NoExposure events when we send CopyArea
-            .graphics_exposures = false,
-        });
-        try conn.send(message_buffer[0..len]);
-    }
+    try render_utils.createResources(
+        conn.sock,
+        &buffer,
+        &ids,
+        screen,
+        &extensions,
+        depth,
+        window_dimensions,
+        screenshot_capture_dimensions,
+    );
 
     // get some font information
     {
         const text_literal = [_]u16{'m'};
         const text = x.Slice(u16, [*]const u16){ .ptr = &text_literal, .len = text_literal.len };
-        var msg: [x.query_text_extents.getLen(text.len)]u8 = undefined;
-        x.query_text_extents.serialize(&msg, foreground_graphics_context_id, text);
-        try conn.send(&msg);
+        var message_buffer: [x.query_text_extents.getLen(text.len)]u8 = undefined;
+        x.query_text_extents.serialize(&message_buffer, ids.fg_gc, text);
+        try conn.send(&message_buffer);
     }
-
-    const double_buf = try x.DoubleBuffer.init(
-        std.mem.alignForward(usize, 8000, std.mem.page_size),
-        .{ .memfd_name = "ZigX11DoubleBuffer" },
-    );
-    defer double_buf.deinit(); // not necessary but good to test
-    std.log.info("read buffer capacity is {}", .{double_buf.half_len});
-    var buf = double_buf.contiguousReadBuffer();
-    const buffer_limit = buf.half_len;
-
     const font_dims: FontDims = blk: {
-        _ = try x.readOneMsg(conn.reader(), @alignCast(buf.nextReadBuffer()));
-        switch (x.serverMsgTaggedUnion(@alignCast(buf.double_buffer_ptr))) {
+        _ = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
+        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.ServerMsg.QueryTextExtents = @ptrCast(msg_reply);
                 break :blk .{
@@ -267,177 +110,20 @@ pub fn main() !u8 {
                 };
             },
             else => |msg| {
-                std.log.err("expected a reply but got {}", .{msg});
+                std.log.err("expected a reply for `x.query_text_extents` but got {}", .{msg});
                 return 1;
             },
         }
     };
-
-    // Create a pixmap to capture the screenshot onto
-    {
-        var msg: [x.create_pixmap.len]u8 = undefined;
-        x.create_pixmap.serialize(&msg, .{
-            .id = ids.pixmap,
-            .drawable_id = ids.window,
-            .depth = depth,
-            .width = screenshot_capture_dims.width,
-            .height = screenshot_capture_dims.height,
-        });
-        try common.send(conn.sock, &msg);
-    }
-
-    {
-        const ext_name = comptime x.Slice(u16, [*]const u8).initComptime("RENDER");
-        var msg: [x.query_extension.getLen(ext_name.len)]u8 = undefined;
-        x.query_extension.serialize(&msg, ext_name);
-        try conn.send(&msg);
-    }
-    _ = try x.readOneMsg(conn.reader(), @alignCast(buf.nextReadBuffer()));
-    const optional_render_extension = blk: {
-        switch (x.serverMsgTaggedUnion(@alignCast(buf.double_buffer_ptr))) {
-            .reply => |msg_reply| {
-                const msg: *x.ServerMsg.QueryExtension = @ptrCast(msg_reply);
-                if (msg.present == 0) {
-                    std.log.info("RENDER extension: not present", .{});
-                    break :blk null;
-                }
-                std.debug.assert(msg.present == 1);
-                std.log.info("RENDER extension: opcode={} base_error_code={}", .{ msg.major_opcode, msg.first_error });
-                std.log.info("RENDER extension: {}", .{msg});
-                break :blk ExtensionInfo{
-                    .extension_name = "RENDER",
-                    .opcode = msg.major_opcode,
-                    .base_error_code = msg.first_error,
-                };
-            },
-            else => |msg| {
-                std.log.err("expected a reply but got {}", .{msg});
-                return 1;
-            },
-        }
-    };
-    const render_extension = optional_render_extension orelse @panic("RENDER extension not found");
-
-    {
-        var msg: [x.render.query_version.len]u8 = undefined;
-        x.render.query_version.serialize(&msg, render_extension.opcode, .{
-            .major_version = 0,
-            .minor_version = 11,
-        });
-        try conn.send(&msg);
-    }
-    _ = try x.readOneMsg(conn.reader(), @alignCast(buf.nextReadBuffer()));
-    switch (x.serverMsgTaggedUnion(@alignCast(buf.double_buffer_ptr))) {
-        .reply => |msg_reply| {
-            const msg: *x.render.query_version.Reply = @ptrCast(msg_reply);
-            std.log.info("RENDER extension: version {}.{}", .{ msg.major_version, msg.minor_version });
-            if (msg.major_version != 0) {
-                std.log.err("xrender extension major version {} too new", .{msg.major_version});
-                return 1;
-            }
-            if (msg.minor_version < 11) {
-                std.log.err("xrender extension minor version {} too old", .{msg.minor_version});
-                return 1;
-            }
-        },
-        else => |msg| {
-            std.log.err("expected a reply but got {}", .{msg});
-            return 1;
-        },
-    }
-
-    {
-        var msg: [x.render.query_pict_formats.len]u8 = undefined;
-        x.render.query_pict_formats.serialize(&msg, render_extension.opcode);
-        try conn.send(&msg);
-    }
-    const message_length = try x.readOneMsg(conn.reader(), @alignCast(buf.nextReadBuffer()));
-    try checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-    const optional_picture_formats_data: ?struct { matching_picture_format_24: x.render.PictureFormatInfo, matching_picture_format_32: x.render.PictureFormatInfo } = blk: {
-        switch (x.serverMsgTaggedUnion(@alignCast(buf.double_buffer_ptr))) {
-            .reply => |msg_reply| {
-                const msg: *x.render.query_pict_formats.Reply = @ptrCast(msg_reply);
-                std.log.info("RENDER extension: pict formats num_formats={}, num_screens={}, num_depths={}, num_visuals={}", .{
-                    msg.num_formats,
-                    msg.num_screens,
-                    msg.num_depths,
-                    msg.num_visuals,
-                });
-                for (msg.getPictureFormats(), 0..) |format, i| {
-                    std.log.info("RENDER extension: pict format ({}) {any}", .{
-                        i,
-                        format,
-                    });
-                }
-                break :blk .{
-                    .matching_picture_format_24 = try findMatchingPictureFormat(msg.getPictureFormats()[0..], 24),
-                    .matching_picture_format_32 = try findMatchingPictureFormat(msg.getPictureFormats()[0..], 32),
-                };
-            },
-            else => |msg| {
-                std.log.err("expected a reply but got {}", .{msg});
-                return 1;
-            },
-        }
-    };
-    const picture_formats_data = optional_picture_formats_data orelse @panic("Matching picture formats not found");
-    const matching_picture_format = switch (depth) {
-        24 => picture_formats_data.matching_picture_format_24,
-        32 => picture_formats_data.matching_picture_format_32,
-        else => |captured_depth| {
-            std.log.err("Matching picture format not found for depth {}", .{captured_depth});
-            @panic("Matching picture format not found for depth");
-        },
-    };
-
-    {
-        var msg: [x.render.create_picture.max_len]u8 = undefined;
-        const len = x.render.create_picture.serialize(&msg, render_extension.opcode, .{
-            .picture_id = ids.picture_root,
-            .drawable_id = screen.root,
-            // The root window is always 24-bit depth
-            .format_id = picture_formats_data.matching_picture_format_24.picture_format_id,
-            .options = .{
-                .subwindow_mode = .include_inferiors,
-            },
-        });
-        try conn.send(msg[0..len]);
-    }
-
-    {
-        var msg: [x.render.create_picture.max_len]u8 = undefined;
-        const len = x.render.create_picture.serialize(&msg, render_extension.opcode, .{
-            .picture_id = ids.picture_window,
-            .drawable_id = ids.window,
-            .format_id = matching_picture_format.picture_format_id,
-            .options = .{},
-        });
-        try conn.send(msg[0..len]);
-    }
-
-    {
-        var msg: [x.render.create_picture.max_len]u8 = undefined;
-        const len = x.render.create_picture.serialize(&msg, render_extension.opcode, .{
-            .picture_id = ids.picture_pixmap,
-            .drawable_id = ids.pixmap,
-            .format_id = matching_picture_format.picture_format_id,
-            .options = .{},
-        });
-        try conn.send(msg[0..len]);
-    }
 
     // Show the window. In the X11 protocol is called mapping a window, and hiding a
     // window is called unmapping. When windows are initially created, they are unmapped
     // (or hidden).
     {
         var msg: [x.map_window.len]u8 = undefined;
-        x.map_window.serialize(&msg, window_id);
+        x.map_window.serialize(&msg, ids.window);
         try conn.send(&msg);
     }
-
-    const extensions = Extensions{
-        .render = render_extension,
-    };
 
     const render_context = RenderContext{
         .sock = &conn.sock,
@@ -449,9 +135,9 @@ pub fn main() !u8 {
 
     while (true) {
         {
-            const recv_buf = buf.nextReadBuffer();
+            const recv_buf = buffer.nextReadBuffer();
             if (recv_buf.len == 0) {
-                std.log.err("buffer size {} not big enough!", .{buf.half_len});
+                std.log.err("buffer size {} not big enough!", .{buffer.half_len});
                 return 1;
             }
             const len = try x.readSock(conn.sock, recv_buf, 0);
@@ -459,16 +145,16 @@ pub fn main() !u8 {
                 std.log.info("X server connection closed", .{});
                 return 0;
             }
-            buf.reserve(len);
+            buffer.reserve(len);
         }
         while (true) {
-            const data = buf.nextReservedBuffer();
+            const data = buffer.nextReservedBuffer();
             if (data.len < 32)
                 break;
             const msg_len = x.parseMsgLen(data[0..32].*);
             if (data.len < msg_len)
                 break;
-            buf.release(msg_len);
+            buffer.release(msg_len);
             //buf.resetIfEmpty();
             switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
                 .err => |msg| {
@@ -533,19 +219,7 @@ pub fn main() !u8 {
     }
 
     // Clean-up
-    {
-        var msg: [x.free_pixmap.len]u8 = undefined;
-        x.free_pixmap.serialize(&msg, ids.pixmap);
-        try common.send(conn.sock, &msg);
-    }
-
-    {
-        var msg: [x.free_colormap.len]u8 = undefined;
-        x.free_colormap.serialize(&msg, ids.colormap);
-        try conn.send(&msg);
-    }
-
-    // TODO: x.render.free_picture
+    try render_utils.cleanupResources(ids);
 }
 
 const FontDims = struct {
@@ -555,13 +229,8 @@ const FontDims = struct {
     font_ascent: i16, // pixels up from the text basepoint to the top of the text
 };
 
-const ScreenshotCaptureDims = struct {
-    width: u16,
-    height: u16,
-};
-
 const State = struct {
-    screenshot_capture_dims: ScreenshotCaptureDims,
+    screenshot_capture_dimensions: render_utils.Dimensions,
     mouse_x: i16 = 0,
 };
 
@@ -588,8 +257,8 @@ fn renderString(
 
 const RenderContext = struct {
     sock: *const std.os.socket_t,
-    ids: *const Ids,
-    extensions: *const Extensions,
+    ids: *const render_utils.Ids,
+    extensions: *const x11_extension_utils.Extensions,
     font_dims: *const FontDims,
     state: *const State,
 
@@ -601,7 +270,7 @@ const RenderContext = struct {
         const state = self.state.*;
 
         const window_id = ids.window;
-        const screenshot_capture_dims = state.screenshot_capture_dims;
+        const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
         const mouse_x = state.mouse_x;
 
         {
@@ -631,8 +300,8 @@ const RenderContext = struct {
             sock,
             window_id,
             ids.fg_gc,
-            @divTrunc((window_width - @as(i16, @intCast(text_width))), 2) + font_dims.font_left,
-            @divTrunc((window_height - @as(i16, @intCast(font_dims.height))), 2) + font_dims.font_ascent,
+            @divTrunc(@as(i16, @intCast(window_dimensions.width)) - @as(i16, @intCast(text_width)), 2) + font_dims.font_left,
+            @divTrunc(@as(i16, @intCast(window_dimensions.height)) - @as(i16, @intCast(font_dims.height)), 2) + font_dims.font_ascent,
             "Hello X! {}",
             .{
                 mouse_x,
@@ -652,8 +321,8 @@ const RenderContext = struct {
                 .mask_y = 0,
                 .dst_x = 200,
                 .dst_y = 0,
-                .width = screenshot_capture_dims.width,
-                .height = screenshot_capture_dims.height,
+                .width = screenshot_capture_dimensions.width,
+                .height = screenshot_capture_dimensions.height,
             });
             try common.send(sock, &msg);
         }
@@ -665,7 +334,7 @@ const RenderContext = struct {
         const extensions = self.extensions.*;
         const state = self.state.*;
 
-        const screenshot_capture_dims = state.screenshot_capture_dims;
+        const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
 
         std.log.debug("captureScreenshotToPixmap", .{});
         {
@@ -675,14 +344,14 @@ const RenderContext = struct {
                 .src_picture_id = ids.picture_root,
                 .mask_picture_id = 0,
                 .dst_picture_id = ids.picture_pixmap,
-                .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.width)), 2),
-                .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dims.height)), 2),
+                .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dimensions.width)), 2),
+                .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dimensions.height)), 2),
                 .mask_x = 0,
                 .mask_y = 0,
                 .dst_x = 0,
                 .dst_y = 0,
-                .width = screenshot_capture_dims.width,
-                .height = screenshot_capture_dims.height,
+                .width = screenshot_capture_dimensions.width,
+                .height = screenshot_capture_dimensions.height,
             });
             try common.send(sock, &msg);
         }
