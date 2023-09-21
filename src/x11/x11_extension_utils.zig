@@ -3,16 +3,23 @@ const x = @import("x");
 const common = @import("./x11_common.zig");
 const buffer_utils = @import("../buffer_utils.zig");
 
+/// X server extension info.
 pub const ExtensionInfo = struct {
     extension_name: []const u8,
+    /// The extension opcode is used to identify which X extension a given request is
+    /// intended for (used as the major opcode). This essentially namespaces any extension
+    /// requests. The extension differentiates its own requests by using a minor opcode.
     opcode: u8,
+    /// Extension error codes are added on top of this base error code.
     base_error_code: u8,
 };
 
+/// A map of X server extension names to their info.
 pub const Extensions = struct {
     render: ExtensionInfo,
 };
 
+/// Determines whether the extension is available on the server.
 pub fn getExtensionInfo(
     sock: std.os.socket_t,
     buffer: *x.ContiguousReadBuffer,
@@ -34,12 +41,16 @@ pub fn getExtensionInfo(
             .reply => |msg_reply| {
                 const msg: *x.ServerMsg.QueryExtension = @ptrCast(msg_reply);
                 if (msg.present == 0) {
-                    std.log.info("RENDER extension: not present", .{});
+                    std.log.info("{s} extension: not present", .{extension_name});
                     break :blk null;
                 }
                 std.debug.assert(msg.present == 1);
-                std.log.info("RENDER extension: opcode={} base_error_code={}", .{ msg.major_opcode, msg.first_error });
-                std.log.info("RENDER extension: {}", .{msg});
+                std.log.info("{s} extension: opcode={} base_error_code={}", .{
+                    extension_name,
+                    msg.major_opcode,
+                    msg.first_error,
+                });
+                std.log.info("{s} extension: {}", .{ extension_name, msg });
                 break :blk ExtensionInfo{
                     .extension_name = extension_name,
                     .opcode = msg.major_opcode,

@@ -11,10 +11,16 @@ const common = @import("./x11_common.zig");
 const x11_extension_utils = @import("./x11_extension_utils.zig");
 const buffer_utils = @import("../buffer_utils.zig");
 
+/// Check to make sure we're using a compatible version of the X Render extension
+/// that supports all of the features we need.
 pub fn ensureCompatibleVersionOfXRenderExtension(
     sock: std.os.socket_t,
     buffer: *x.ContiguousReadBuffer,
     render_extension: *const x11_extension_utils.ExtensionInfo,
+    version: struct {
+        major_version: u32,
+        minor_version: u32,
+    },
 ) !void {
     const reader = common.SocketReader{ .context = sock };
     const buffer_limit = buffer.half_len;
@@ -22,8 +28,8 @@ pub fn ensureCompatibleVersionOfXRenderExtension(
     {
         var message_buffer: [x.render.query_version.len]u8 = undefined;
         x.render.query_version.serialize(&message_buffer, render_extension.opcode, .{
-            .major_version = 0,
-            .minor_version = 11,
+            .major_version = version.major_version,
+            .minor_version = version.minor_version,
         });
         try common.send(sock, &message_buffer);
     }
@@ -33,12 +39,22 @@ pub fn ensureCompatibleVersionOfXRenderExtension(
         .reply => |msg_reply| {
             const msg: *x.render.query_version.Reply = @ptrCast(msg_reply);
             std.log.info("RENDER extension: version {}.{}", .{ msg.major_version, msg.minor_version });
-            if (msg.major_version != 0) {
-                std.log.err("X Render extension major version {} too new", .{msg.major_version});
+            if (msg.major_version > version.major_version or msg.minor_version > version.minor_version) {
+                std.log.err("X Render extension version {}.{} too new (expected {}.{})", .{
+                    msg.major_version,
+                    msg.minor_version,
+                    version.major_version,
+                    version.minor_version,
+                });
                 return error.XRenderExtensionTooNew;
             }
-            if (msg.minor_version < 11) {
-                std.log.err("X Render extension minor version {} too old", .{msg.minor_version});
+            if (msg.major_version < version.major_version or msg.minor_version < version.minor_version) {
+                std.log.err("X Render extension minor version {}.{} too old (expected {}.{})", .{
+                    msg.major_version,
+                    msg.minor_version,
+                    version.major_version,
+                    version.minor_version,
+                });
                 return error.XRenderExtensionTooOld;
             }
         },

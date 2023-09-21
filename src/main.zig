@@ -4,6 +4,8 @@ const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11//x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const render_utils = @import("render_utils.zig");
+const AppState = @import("app_state.zig").AppState;
+const buffer_utils = @import("buffer_utils.zig");
 
 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 const allocator = arena.allocator();
@@ -44,7 +46,8 @@ pub fn main() !u8 {
         .width = 200,
         .height = 150,
     };
-    var state = State{
+    var state = AppState{
+        .window_dimensions = window_dimensions,
         .screenshot_capture_dimensions = screenshot_capture_dimensions,
     };
 
@@ -57,10 +60,12 @@ pub fn main() !u8 {
     std.log.info("Read buffer capacity is {}", .{double_buffer.half_len});
     var buffer = double_buffer.contiguousReadBuffer();
     const buffer_limit = buffer.half_len;
-    _ = buffer_limit;
 
     // TODO: maybe need to call conn.setup.verify or something?
 
+    // We use the X Render extension for capturing screenshots and splatting them onto
+    // our window. Useful because their "composite" request works with mismatched depths
+    // between the source and destinations.
     const optional_render_extension = try x11_extension_utils.getExtensionInfo(
         conn.sock,
         &buffer,
@@ -72,8 +77,21 @@ pub fn main() !u8 {
         conn.sock,
         &buffer,
         &render_extension,
+        .{
+            // We arbitrarily require version 0.11 of the X Render extension just
+            // because it's the latest but came out in 2009 so it's pretty much
+            // ubiquitous anyway. Feature-wise, we only use "Composite" which came out
+            // in 0.0.
+            //
+            // For more info on what's changed in each version, see the "15. Extension
+            // Versioning" section of the X Render extension protocol docs,
+            // https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
+            .major_version = 0,
+            .minor_version = 11,
+        },
     );
 
+    // Assemble a map of X extension info
     const extensions = x11_extension_utils.Extensions{
         .render = render_extension,
     };
@@ -89,7 +107,7 @@ pub fn main() !u8 {
         screenshot_capture_dimensions,
     );
 
-    // get some font information
+    // Get some font information
     {
         const text_literal = [_]u16{'m'};
         const text = x.Slice(u16, [*]const u16){ .ptr = &text_literal, .len = text_literal.len };
@@ -97,8 +115,9 @@ pub fn main() !u8 {
         x.query_text_extents.serialize(&message_buffer, ids.fg_gc, text);
         try conn.send(&message_buffer);
     }
-    const font_dims: FontDims = blk: {
-        _ = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
+    const font_dims: render_utils.FontDims = blk: {
+        const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
+        try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.ServerMsg.QueryTextExtents = @ptrCast(msg_reply);
@@ -125,7 +144,7 @@ pub fn main() !u8 {
         try conn.send(&msg);
     }
 
-    const render_context = RenderContext{
+    const render_context = render_utils.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,
         .extensions = &extensions,
@@ -135,18 +154,19 @@ pub fn main() !u8 {
 
     while (true) {
         {
-            const recv_buf = buffer.nextReadBuffer();
-            if (recv_buf.len == 0) {
+            const receive_buffer = buffer.nextReadBuffer();
+            if (receive_buffer.len == 0) {
                 std.log.err("buffer size {} not big enough!", .{buffer.half_len});
                 return 1;
             }
-            const len = try x.readSock(conn.sock, recv_buf, 0);
+            const len = try x.readSock(conn.sock, receive_buffer, 0);
             if (len == 0) {
                 std.log.info("X server connection closed", .{});
                 return 0;
             }
             buffer.reserve(len);
         }
+
         while (true) {
             const data = buffer.nextReservedBuffer();
             if (data.len < 32)
@@ -221,139 +241,3 @@ pub fn main() !u8 {
     // Clean-up
     try render_utils.cleanupResources(ids);
 }
-
-const FontDims = struct {
-    width: u8,
-    height: u8,
-    font_left: i16, // pixels to the left of the text basepoint
-    font_ascent: i16, // pixels up from the text basepoint to the top of the text
-};
-
-const State = struct {
-    screenshot_capture_dimensions: render_utils.Dimensions,
-    mouse_x: i16 = 0,
-};
-
-fn renderString(
-    sock: std.os.socket_t,
-    drawable_id: u32,
-    fg_gc_id: u32,
-    pos_x: i16,
-    pos_y: i16,
-    comptime fmt: []const u8,
-    args: anytype,
-) !void {
-    var msg: [x.image_text8.max_len]u8 = undefined;
-    const text_buf = msg[x.image_text8.text_offset .. x.image_text8.text_offset + 0xff];
-    const text_len: u8 = @intCast((std.fmt.bufPrint(text_buf, fmt, args) catch @panic("string too long")).len);
-    x.image_text8.serializeNoTextCopy(&msg, text_len, .{
-        .drawable_id = drawable_id,
-        .gc_id = fg_gc_id,
-        .x = pos_x,
-        .y = pos_y,
-    });
-    try common.send(sock, msg[0..x.image_text8.getLen(text_len)]);
-}
-
-const RenderContext = struct {
-    sock: *const std.os.socket_t,
-    ids: *const render_utils.Ids,
-    extensions: *const x11_extension_utils.Extensions,
-    font_dims: *const FontDims,
-    state: *const State,
-
-    pub fn render(self: *const @This()) !void {
-        const sock = self.sock.*;
-        const ids = self.ids.*;
-        const extensions = self.extensions.*;
-        const font_dims = self.font_dims.*;
-        const state = self.state.*;
-
-        const window_id = ids.window;
-        const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
-        const mouse_x = state.mouse_x;
-
-        {
-            var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
-            x.poly_fill_rectangle.serialize(&msg, .{
-                .drawable_id = window_id,
-                .gc_id = ids.bg_gc,
-            }, &[_]x.Rectangle{
-                .{ .x = 100, .y = 100, .width = 200, .height = 200 },
-            });
-            try common.send(sock, &msg);
-        }
-        {
-            var msg: [x.clear_area.len]u8 = undefined;
-            x.clear_area.serialize(&msg, false, window_id, .{
-                .x = 150,
-                .y = 150,
-                .width = 100,
-                .height = 100,
-            });
-            try common.send(sock, &msg);
-        }
-
-        const text_length = 11;
-        const text_width = font_dims.width * text_length;
-        try renderString(
-            sock,
-            window_id,
-            ids.fg_gc,
-            @divTrunc(@as(i16, @intCast(window_dimensions.width)) - @as(i16, @intCast(text_width)), 2) + font_dims.font_left,
-            @divTrunc(@as(i16, @intCast(window_dimensions.height)) - @as(i16, @intCast(font_dims.height)), 2) + font_dims.font_ascent,
-            "Hello X! {}",
-            .{
-                mouse_x,
-            },
-        );
-
-        {
-            var msg: [x.render.composite.len]u8 = undefined;
-            x.render.composite.serialize(&msg, extensions.render.opcode, .{
-                .picture_operation = .over,
-                .src_picture_id = ids.picture_pixmap,
-                .mask_picture_id = 0,
-                .dst_picture_id = ids.picture_window,
-                .src_x = 0,
-                .src_y = 0,
-                .mask_x = 0,
-                .mask_y = 0,
-                .dst_x = 200,
-                .dst_y = 0,
-                .width = screenshot_capture_dimensions.width,
-                .height = screenshot_capture_dimensions.height,
-            });
-            try common.send(sock, &msg);
-        }
-    }
-
-    pub fn captureScreenshotToPixmap(self: @This()) !void {
-        const sock = self.sock.*;
-        const ids = self.ids.*;
-        const extensions = self.extensions.*;
-        const state = self.state.*;
-
-        const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
-
-        std.log.debug("captureScreenshotToPixmap", .{});
-        {
-            var msg: [x.render.composite.len]u8 = undefined;
-            x.render.composite.serialize(&msg, extensions.render.opcode, .{
-                .picture_operation = .over,
-                .src_picture_id = ids.picture_root,
-                .mask_picture_id = 0,
-                .dst_picture_id = ids.picture_pixmap,
-                .src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dimensions.width)), 2),
-                .src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dimensions.height)), 2),
-                .mask_x = 0,
-                .mask_y = 0,
-                .dst_x = 0,
-                .dst_y = 0,
-                .width = screenshot_capture_dimensions.width,
-                .height = screenshot_capture_dimensions.height,
-            });
-            try common.send(sock, &msg);
-        }
-    }
-};
