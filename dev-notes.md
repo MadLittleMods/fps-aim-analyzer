@@ -62,6 +62,43 @@ Determine the color depth of your window or the root window ([via StackOverflow]
   [...]
 ```
 
+Finding installed extensions to the X.org server:
+
+([via StackOverflow](https://askubuntu.com/questions/995954/how-to-list-extensions-of-x-server-in-ubuntu-16-04/995962#995962))
+```sh
+$ xdpyinfo -display :0 -queryExtensions | awk '/^number of extensions:/,/^default screen number/'
+number of extensions:    28
+    BIG-REQUESTS  (opcode: 133)
+    Composite  (opcode: 142)
+    DAMAGE  (opcode: 143, base event: 91, base error: 152)
+    DOUBLE-BUFFER  (opcode: 145, base error: 153)
+    DPMS  (opcode: 147)
+    DRI2  (opcode: 155, base event: 119)
+    DRI3  (opcode: 149)
+    GLX  (opcode: 152, base event: 95, base error: 158)
+    Generic Event Extension  (opcode: 128)
+    MIT-SCREEN-SAVER  (opcode: 144, base event: 92)
+    MIT-SHM  (opcode: 130, base event: 65, base error: 128)
+    Present  (opcode: 148)
+    RANDR  (opcode: 140, base event: 89, base error: 147)
+    RECORD  (opcode: 146, base error: 154)
+    RENDER  (opcode: 139, base error: 142)
+    SECURITY  (opcode: 137, base event: 86, base error: 138)
+    SHAPE  (opcode: 129, base event: 64)
+    SYNC  (opcode: 134, base event: 83, base error: 134)
+    X-Resource  (opcode: 150)
+    XC-MISC  (opcode: 136)
+    XFIXES  (opcode: 138, base event: 87, base error: 140)
+    XFree86-DGA  (opcode: 154, base event: 112, base error: 179)
+    XFree86-VidModeExtension  (opcode: 153, base error: 172)
+    XINERAMA  (opcode: 141)
+    XInputExtension  (opcode: 131, base event: 66, base error: 129)
+    XKEYBOARD  (opcode: 135, base event: 85, base error: 137)
+    XTEST  (opcode: 132)
+    XVideo  (opcode: 151, base event: 93, base error: 155)
+default screen number:    0
+```
+
 
 ## Testing with multiple screens
 
