@@ -6,8 +6,8 @@ const buffer_utils = @import("buffer_utils.zig");
 const AppState = @import("app_state.zig").AppState;
 
 pub const Dimensions = struct {
-    width: u16,
-    height: u16,
+    width: i16,
+    height: i16,
 };
 
 /// Stores the IDs of the all of the resources used when communicating with the X Window server.
@@ -84,11 +84,15 @@ pub fn createResources(
     screen: *align(4) x.Screen,
     extensions: *const x11_extension_utils.Extensions,
     depth: u8,
-    window_dimensions: Dimensions,
-    screenshot_capture_dimensions: Dimensions,
+    state: *const AppState,
 ) !void {
     const reader = common.SocketReader{ .context = sock };
     const buffer_limit = buffer.half_len;
+
+    const root_screen_dimensions = state.root_screen_dimensions;
+    const window_dimensions = state.window_dimensions;
+    const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
+    const margin = state.margin;
 
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_allocator.deinit();
@@ -116,6 +120,7 @@ pub fn createResources(
     }
     {
         std.log.debug("Creating window_id {0} 0x{0x}", .{ids.window});
+
         var message_buffer: [x.create_window.max_len]u8 = undefined;
         const len = x.create_window.serialize(&message_buffer, .{
             .window_id = ids.window,
@@ -125,10 +130,10 @@ pub fn createResources(
             // - 32 for ARGB
             .depth = depth,
             // Place it in the top-right corner of the screen
-            .x = screen.pixel_width - window_dimensions.width,
-            .y = 0,
-            .width = window_dimensions.width,
-            .height = window_dimensions.height,
+            .x = @intCast(root_screen_dimensions.width - window_dimensions.width - margin),
+            .y = @intCast(margin),
+            .width = @intCast(window_dimensions.width),
+            .height = @intCast(window_dimensions.height),
             // It's unclear what this is for, but we just need to set it to something
             // since it's one of the arguments.
             .border_width = 0,
@@ -210,8 +215,8 @@ pub fn createResources(
             .id = ids.pixmap,
             .drawable_id = ids.window,
             .depth = depth,
-            .width = screenshot_capture_dimensions.width,
-            .height = screenshot_capture_dimensions.height,
+            .width = @intCast(screenshot_capture_dimensions.width),
+            .height = @intCast(screenshot_capture_dimensions.height),
         });
         try common.send(sock, &message_buffer);
     }
@@ -375,9 +380,10 @@ pub const RenderContext = struct {
         const state = self.state.*;
 
         const window_id = ids.window;
-        const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
-        const mouse_x = state.mouse_x;
         const window_dimensions = state.window_dimensions;
+        const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
+        const padding = state.padding;
+        const mouse_x = state.mouse_x;
 
         // Draw a big blue square in the middle of the window
         {
@@ -409,8 +415,8 @@ pub const RenderContext = struct {
             sock,
             window_id,
             ids.fg_gc,
-            @divTrunc(@as(i16, @intCast(window_dimensions.width)) - @as(i16, @intCast(text_width)), 2) + font_dims.font_left,
-            @divTrunc(@as(i16, @intCast(window_dimensions.height)) - @as(i16, @intCast(font_dims.height)), 2) + font_dims.font_ascent,
+            @divFloor(window_dimensions.width - text_width, 2) + font_dims.font_left,
+            @divFloor(window_dimensions.height - font_dims.height, 2) + font_dims.font_ascent,
             "Hello X! {}",
             .{
                 mouse_x,
@@ -429,10 +435,10 @@ pub const RenderContext = struct {
                 .src_y = 0,
                 .mask_x = 0,
                 .mask_y = 0,
-                .dst_x = 200,
-                .dst_y = 0,
-                .width = screenshot_capture_dimensions.width,
-                .height = screenshot_capture_dimensions.height,
+                .dst_x = padding,
+                .dst_y = padding,
+                .width = @intCast(screenshot_capture_dimensions.width),
+                .height = @intCast(screenshot_capture_dimensions.height),
             });
             try common.send(sock, &msg);
         }
@@ -446,15 +452,15 @@ pub const RenderContext = struct {
         const extensions = self.extensions.*;
         const state = self.state.*;
 
+        const root_screen_dimensions = state.root_screen_dimensions;
         const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
 
-        // TODO: Use actual screen dimensions instead of these hard-coded values
-        const src_x = (3840 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dimensions.width)), 2);
-        const src_y = (2160 / 2) - @divExact(@as(i16, @intCast(screenshot_capture_dimensions.height)), 2);
+        const capture_x = @divFloor(root_screen_dimensions.width, 2) - @divFloor(screenshot_capture_dimensions.width, 2);
+        const capture_y = @divFloor(root_screen_dimensions.height, 2) - @divFloor(screenshot_capture_dimensions.height, 2);
 
         std.log.debug("captureScreenshotToPixmap x={}, y={}, width={}, height={}", .{
-            src_x,
-            src_y,
+            capture_x,
+            capture_y,
             screenshot_capture_dimensions.width,
             screenshot_capture_dimensions.height,
         });
@@ -469,14 +475,14 @@ pub const RenderContext = struct {
                 .src_picture_id = ids.picture_root,
                 .mask_picture_id = 0,
                 .dst_picture_id = ids.picture_pixmap,
-                .src_x = src_x,
-                .src_y = src_y,
+                .src_x = capture_x,
+                .src_y = capture_y,
                 .mask_x = 0,
                 .mask_y = 0,
                 .dst_x = 0,
                 .dst_y = 0,
-                .width = screenshot_capture_dimensions.width,
-                .height = screenshot_capture_dimensions.height,
+                .width = @intCast(screenshot_capture_dimensions.width),
+                .height = @intCast(screenshot_capture_dimensions.height),
             });
             try common.send(sock, &msg);
         }

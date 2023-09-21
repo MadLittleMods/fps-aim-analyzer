@@ -10,11 +10,6 @@ const buffer_utils = @import("buffer_utils.zig");
 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 const allocator = arena.allocator();
 
-const window_dimensions = render_utils.Dimensions{
-    .width = 400,
-    .height = 400,
-};
-
 pub fn main() !u8 {
     try x.wsaStartup();
     const conn = try common.connect(allocator);
@@ -42,13 +37,32 @@ pub fn main() !u8 {
 
     const depth = 32;
 
-    const screenshot_capture_dimensions = render_utils.Dimensions{
-        .width = 200,
-        .height = 150,
+    const root_screen_dimensions = render_utils.Dimensions{
+        .width = @intCast(screen.pixel_width),
+        .height = @intCast(screen.pixel_height),
     };
+
+    const screenshot_capture_scale = 20;
+    const screenshot_capture_dimensions = render_utils.Dimensions{
+        .width = @intCast(@divTrunc(screen.pixel_width, screenshot_capture_scale)),
+        .height = @intCast(@divTrunc(screen.pixel_height, screenshot_capture_scale)),
+    };
+
+    const max_screenshots_shown = 6;
+    const margin = 10;
+    const padding = 10;
+    const window_dimensions = render_utils.Dimensions{
+        .width = screenshot_capture_dimensions.width + (2 * padding),
+        .height = (max_screenshots_shown * (screenshot_capture_dimensions.height + (2 * padding))),
+    };
+
     var state = AppState{
+        .root_screen_dimensions = root_screen_dimensions,
         .window_dimensions = window_dimensions,
         .screenshot_capture_dimensions = screenshot_capture_dimensions,
+        .max_screenshots_shown = max_screenshots_shown,
+        .margin = margin,
+        .padding = padding,
     };
 
     // Create a big buffer that we can use to read messages and replies from the X server.
@@ -103,8 +117,7 @@ pub fn main() !u8 {
         screen,
         &extensions,
         depth,
-        window_dimensions,
-        screenshot_capture_dimensions,
+        &state,
     );
 
     // Get some font information
