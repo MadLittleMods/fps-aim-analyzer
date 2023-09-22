@@ -20,6 +20,18 @@ Guides:
 
  - A walkthrough of using the X Window system, https://magcius.github.io/xplain/article/index.html
 
+#### Extensions
+
+See the note below on *"Finding installed extensions to the X.org server"* to discover all of what you can use.
+
+In this project, we rely on the X Render Extension to handle the screenshot capturing from an opaque window and compositing it on top of our transparent window. With normal X operations, you can't mix different depths (24-bit RGB vs 32-bit ARGB).
+
+ - The X Rendering Extension protocol docs:
+    - https://www.keithp.com/~keithp/render/protocol.html
+    - https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
+ - XML definitions of the protocol: https://gitlab.freedesktop.org/xorg/proto/xcbproto/-/blob/98eeebfc2d7db5377b85437418fb942ea30ffc0d/src/render.xml
+ - C library: https://gitlab.freedesktop.org/xorg/lib/libxrender
+
 
 #### Debugging
 
