@@ -49,11 +49,11 @@ pub fn main() !u8 {
     };
 
     const max_screenshots_shown = 6;
-    const margin = 10;
+    const margin = 20;
     const padding = 10;
     const window_dimensions = render_utils.Dimensions{
         .width = screenshot_capture_dimensions.width + (2 * padding),
-        .height = (max_screenshots_shown * (screenshot_capture_dimensions.height + (2 * padding))),
+        .height = (max_screenshots_shown * (screenshot_capture_dimensions.height + padding)) + padding,
     };
 
     var state = AppState{
@@ -157,7 +157,7 @@ pub fn main() !u8 {
         try conn.send(&msg);
     }
 
-    const render_context = render_utils.RenderContext{
+    var render_context = render_utils.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,
         .extensions = &extensions,

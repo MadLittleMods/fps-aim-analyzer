@@ -7,6 +7,7 @@ pub const AppState = struct {
     window_dimensions: render_utils.Dimensions,
     screenshot_capture_dimensions: render_utils.Dimensions,
     max_screenshots_shown: u8,
+    current_screenshot_index: u8 = 0,
     margin: i16,
     padding: i16,
 

@@ -5,6 +5,19 @@ const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const buffer_utils = @import("buffer_utils.zig");
 const AppState = @import("app_state.zig").AppState;
 
+fn GetEncompassingSignedInt(comptime T: type) type {
+    if (@typeInfo(T).Int.signedness == .signed) {
+        @panic("asdf");
+    }
+
+    return @Type(.{
+        .Int = .{
+            .bits = 2 * @typeInfo(T).Int.bits,
+            .signedness = .signed,
+        },
+    });
+}
+
 pub const Dimensions = struct {
     width: i16,
     height: i16,
@@ -92,6 +105,7 @@ pub fn createResources(
     const root_screen_dimensions = state.root_screen_dimensions;
     const window_dimensions = state.window_dimensions;
     const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
+    const max_screenshots_shown = state.max_screenshots_shown;
     const margin = state.margin;
 
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -216,7 +230,7 @@ pub fn createResources(
             .drawable_id = ids.window,
             .depth = depth,
             .width = @intCast(screenshot_capture_dimensions.width),
-            .height = @intCast(screenshot_capture_dimensions.height),
+            .height = @intCast(max_screenshots_shown * screenshot_capture_dimensions.height),
         });
         try common.send(sock, &message_buffer);
     }
@@ -369,7 +383,7 @@ pub const RenderContext = struct {
     ids: *const Ids,
     extensions: *const x11_extension_utils.Extensions,
     font_dims: *const FontDims,
-    state: *const AppState,
+    state: *AppState,
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
@@ -382,6 +396,8 @@ pub const RenderContext = struct {
         const window_id = ids.window;
         const window_dimensions = state.window_dimensions;
         const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
+        const max_screenshots_shown = state.max_screenshots_shown;
+        const current_screenshot_index = state.current_screenshot_index;
         const padding = state.padding;
         const mouse_x = state.mouse_x;
 
@@ -424,7 +440,24 @@ pub const RenderContext = struct {
         );
 
         // Copy our screenshot to our window
-        {
+        for (0..max_screenshots_shown) |screen_shot_offset_usize| {
+            const UnsignedInt = @TypeOf(max_screenshots_shown);
+            const SignedInt = GetEncompassingSignedInt(@TypeOf(max_screenshots_shown));
+            const screen_shot_offset = @as(UnsignedInt, @intCast(screen_shot_offset_usize));
+
+            // We need a `SignedInt` during the calculation because we want to be able
+            // to go negative and have `@mod(...)` wrap us back around within range.
+            //
+            // It's safe to cast from `SignedInt` back to `UnsignedInt` because the
+            // `@mod(...)` guarantees that the result is no bigger than
+            // `max_screenshots_shown` which is what `UnsignedInt` is derived from.
+            const screen_shot_index: UnsignedInt = @as(UnsignedInt, @intCast(
+                @mod(
+                    @as(SignedInt, @intCast(current_screenshot_index)) - @as(SignedInt, @intCast(screen_shot_offset)) - 1,
+                    max_screenshots_shown,
+                ),
+            ));
+
             var msg: [x.render.composite.len]u8 = undefined;
             x.render.composite.serialize(&msg, extensions.render.opcode, .{
                 .picture_operation = .over,
@@ -432,11 +465,11 @@ pub const RenderContext = struct {
                 .mask_picture_id = 0,
                 .dst_picture_id = ids.picture_window,
                 .src_x = 0,
-                .src_y = 0,
+                .src_y = @intCast(screen_shot_index * screenshot_capture_dimensions.height),
                 .mask_x = 0,
                 .mask_y = 0,
                 .dst_x = padding,
-                .dst_y = padding,
+                .dst_y = @intCast((screen_shot_offset * (screenshot_capture_dimensions.height + padding)) + padding),
                 .width = @intCast(screenshot_capture_dimensions.width),
                 .height = @intCast(screenshot_capture_dimensions.height),
             });
@@ -446,7 +479,7 @@ pub const RenderContext = struct {
 
     /// Capture a screenshot of the root window (whatever is displayed on the screen)
     /// and store it in our pixmap.
-    pub fn captureScreenshotToPixmap(self: @This()) !void {
+    pub fn captureScreenshotToPixmap(self: *@This()) !void {
         const sock = self.sock.*;
         const ids = self.ids.*;
         const extensions = self.extensions.*;
@@ -454,11 +487,14 @@ pub const RenderContext = struct {
 
         const root_screen_dimensions = state.root_screen_dimensions;
         const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
+        const max_screenshots_shown = state.max_screenshots_shown;
+        const current_screenshot_index = state.current_screenshot_index;
 
         const capture_x = @divFloor(root_screen_dimensions.width, 2) - @divFloor(screenshot_capture_dimensions.width, 2);
         const capture_y = @divFloor(root_screen_dimensions.height, 2) - @divFloor(screenshot_capture_dimensions.height, 2);
 
-        std.log.debug("captureScreenshotToPixmap x={}, y={}, width={}, height={}", .{
+        std.log.debug("captureScreenshotToPixmap index={} from x={}, y={}, width={}, height={}", .{
+            current_screenshot_index,
             capture_x,
             capture_y,
             screenshot_capture_dimensions.width,
@@ -480,11 +516,13 @@ pub const RenderContext = struct {
                 .mask_x = 0,
                 .mask_y = 0,
                 .dst_x = 0,
-                .dst_y = 0,
+                .dst_y = current_screenshot_index * screenshot_capture_dimensions.height,
                 .width = @intCast(screenshot_capture_dimensions.width),
                 .height = @intCast(screenshot_capture_dimensions.height),
             });
             try common.send(sock, &msg);
         }
+
+        self.state.current_screenshot_index = @rem(current_screenshot_index + 1, max_screenshots_shown);
     }
 };
