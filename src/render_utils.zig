@@ -5,14 +5,16 @@ const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const buffer_utils = @import("buffer_utils.zig");
 const AppState = @import("app_state.zig").AppState;
 
-fn GetEncompassingSignedInt(comptime T: type) type {
-    if (@typeInfo(T).Int.signedness == .signed) {
-        @panic("asdf");
+/// Given an unsigned integer type, returns a signed integer type that can hold the
+/// entire positive range of the unsigned integer type.
+fn GetEncompassingSignedInt(comptime unsigned_T: type) type {
+    if (@typeInfo(unsigned_T).Int.signedness == .signed) {
+        @panic("This function only makes sense to use with unsigned integer types but you passed in a signed integer.");
     }
 
     return @Type(.{
         .Int = .{
-            .bits = 2 * @typeInfo(T).Int.bits,
+            .bits = 2 * @typeInfo(unsigned_T).Int.bits,
             .signedness = .signed,
         },
     });
@@ -397,7 +399,7 @@ pub const RenderContext = struct {
         const window_dimensions = state.window_dimensions;
         const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
         const max_screenshots_shown = state.max_screenshots_shown;
-        const current_screenshot_index = state.current_screenshot_index;
+        const next_screenshot_index = state.next_screenshot_index;
         const padding = state.padding;
         const mouse_x = state.mouse_x;
 
@@ -439,7 +441,7 @@ pub const RenderContext = struct {
             },
         );
 
-        // Copy our screenshot to our window
+        // Copy the screenshots to our window
         for (0..max_screenshots_shown) |screen_shot_offset_usize| {
             const UnsignedInt = @TypeOf(max_screenshots_shown);
             const SignedInt = GetEncompassingSignedInt(@TypeOf(max_screenshots_shown));
@@ -453,7 +455,7 @@ pub const RenderContext = struct {
             // `max_screenshots_shown` which is what `UnsignedInt` is derived from.
             const screen_shot_index: UnsignedInt = @as(UnsignedInt, @intCast(
                 @mod(
-                    @as(SignedInt, @intCast(current_screenshot_index)) - @as(SignedInt, @intCast(screen_shot_offset)) - 1,
+                    @as(SignedInt, @intCast(next_screenshot_index)) - @as(SignedInt, @intCast(screen_shot_offset)) - 1,
                     max_screenshots_shown,
                 ),
             ));
@@ -488,13 +490,13 @@ pub const RenderContext = struct {
         const root_screen_dimensions = state.root_screen_dimensions;
         const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
         const max_screenshots_shown = state.max_screenshots_shown;
-        const current_screenshot_index = state.current_screenshot_index;
+        const next_screenshot_index = state.next_screenshot_index;
 
         const capture_x = @divFloor(root_screen_dimensions.width, 2) - @divFloor(screenshot_capture_dimensions.width, 2);
         const capture_y = @divFloor(root_screen_dimensions.height, 2) - @divFloor(screenshot_capture_dimensions.height, 2);
 
         std.log.debug("captureScreenshotToPixmap index={} from x={}, y={}, width={}, height={}", .{
-            current_screenshot_index,
+            next_screenshot_index,
             capture_x,
             capture_y,
             screenshot_capture_dimensions.width,
@@ -516,13 +518,16 @@ pub const RenderContext = struct {
                 .mask_x = 0,
                 .mask_y = 0,
                 .dst_x = 0,
-                .dst_y = current_screenshot_index * screenshot_capture_dimensions.height,
+                // We store all captured screenshots in the same `pixmap` in a film
+                // strip layout stacked on top of each other. We only keep track of the
+                // N most recent screenshots (defined by max_screenshots_shown).
+                .dst_y = next_screenshot_index * screenshot_capture_dimensions.height,
                 .width = @intCast(screenshot_capture_dimensions.width),
                 .height = @intCast(screenshot_capture_dimensions.height),
             });
             try common.send(sock, &msg);
         }
 
-        self.state.current_screenshot_index = @rem(current_screenshot_index + 1, max_screenshots_shown);
+        self.state.next_screenshot_index = @rem(next_screenshot_index + 1, max_screenshots_shown);
     }
 };
