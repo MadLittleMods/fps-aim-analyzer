@@ -17,6 +17,7 @@ pub const ExtensionInfo = struct {
 /// A map of X server extension names to their info.
 pub const Extensions = struct {
     render: ExtensionInfo,
+    input: ExtensionInfo,
 };
 
 /// Determines whether the extension is available on the server.

@@ -3,6 +3,7 @@ const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11//x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
+const x_input_extension = @import("x11/x_input_extension.zig");
 const render_utils = @import("render_utils.zig");
 const AppState = @import("app_state.zig").AppState;
 const buffer_utils = @import("buffer_utils.zig");
@@ -105,9 +106,33 @@ pub fn main() !u8 {
         },
     );
 
+    // We use the X Input extension to detect clicks on the game window (or whatever
+    // window) they happen to be on. Useful because we can detect clicks even when our
+    // window is not focused and doesn't have to be directly clicked.
+    const optional_input_extension = try x11_extension_utils.getExtensionInfo(
+        conn.sock,
+        &buffer,
+        "XInputExtension",
+    );
+    const input_extension = optional_input_extension orelse @panic("XInputExtension extension not found");
+
+    try x_input_extension.ensureCompatibleVersionOfXInputExtension(
+        conn.sock,
+        &buffer,
+        &input_extension,
+        .{
+            // We arbitrarily require version 2.3 of the X Input extension
+            // because that's the latest version and is sufficiently old
+            // and ubiquitous.
+            .major_version = 2,
+            .minor_version = 3,
+        },
+    );
+
     // Assemble a map of X extension info
     const extensions = x11_extension_utils.Extensions{
         .render = render_extension,
+        .input = input_extension,
     };
 
     try render_utils.createResources(
@@ -119,6 +144,22 @@ pub fn main() !u8 {
         depth,
         &state,
     );
+
+    // Register for events from the X Input extension for when the mouse is clicked
+    {
+        var event_masks = [_]x.inputext.EventMask{
+                .{
+                    .device_id = .all_master,
+                    .mask = x.inputext.event.raw_button_press,
+                }
+            };
+        var message_buffer: [x.inputext.select_events.getLen(@as(u16, @intCast(event_masks.len)))]u8 = undefined;
+        const len = x.inputext.select_events.serialize(&message_buffer, extensions.input.opcode, .{
+            .window_id = ids.root,
+            .masks = event_masks[0..],
+        });
+        try conn.send(message_buffer[0..len]);
+    }
 
     // Get some font information
     {
@@ -198,9 +239,22 @@ pub fn main() !u8 {
                     std.log.info("todo: handle a reply message {}", .{msg});
                     return error.TodoHandleReplyMessage;
                 },
-                .ge_generic => |msg| {
-                    std.log.info("todo: handle a GE generic event {}", .{msg});
-                    return error.TodoHandleReplyMessage;
+                .generic_extension_event => |msg| {
+                    if(msg.ext_opcode == extensions.input.opcode) {
+                        switch (x.inputext.genericExtensionEventTaggedUnion(@alignCast(data.ptr))) {
+                            .raw_button_press => |extension_message| {
+                                std.log.info("raw_button_press {}", .{extension_message});
+                                if(extension_message.detail == 1) {
+                                    try render_context.captureScreenshotToPixmap();
+                                    try render_context.render();
+                                }
+                            },
+                            else => unreachable, // We did not register for these events so we should not see them
+                        }
+                    } else {
+                        std.log.info("TODO: handle a GE generic event {}", .{msg});
+                        return error.TodoHandleGenericExtensionEvent;
+                    }
                 },
                 .key_press => |msg| {
                     std.log.info("key_press: keycode={}", .{msg.keycode});
@@ -210,8 +264,6 @@ pub fn main() !u8 {
                 },
                 .button_press => |msg| {
                     std.log.info("button_press: {}", .{msg});
-                    try render_context.captureScreenshotToPixmap();
-                    try render_context.render();
                 },
                 .button_release => |msg| {
                     std.log.info("button_release: {}", .{msg});

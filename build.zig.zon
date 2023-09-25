@@ -3,8 +3,8 @@
     .version = "0.1.0",
     .dependencies = .{
         .zigx = .{
-            .url = "https://github.com/MadLittleMods/zigx/archive/ad97e8925f897a6e6cd36f42532d5a0a104d0278.tar.gz",
-            .hash = "12203605dbc064c7c1bbbf3bb98d2521ca8d059d86a75b44eb2fefac469e1d8b6e68",
+            .url = "https://github.com/MadLittleMods/zigx/archive/bf27262d7bb54313b5d3723aca2c43a1766ad8b6.tar.gz",
+            .hash = "1220c8b01c95fddc74233ada73b4b204a279a53fb9498816cea6aadc31194b3a9103",
         },
     },
 }
