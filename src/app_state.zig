@@ -22,6 +22,8 @@ pub const AppState = struct {
     /// The amount of spacing between each screenshot.
     padding: i16,
 
+    last_click_ts: u32 = 0,
+
     /// The current mouse position relative to the window.
     mouse_x: i16 = 0,
 };
