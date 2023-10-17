@@ -17,6 +17,8 @@ Tested with Zig 0.11.0
 zig build run
 ```
 
+![](https://github.com/MadLittleMods/fps-aim-analyzer/assets/558581/d5d7539d-f5f5-440d-9863-8bda58e1f68e)
+
 
 ### Dev notes
 
