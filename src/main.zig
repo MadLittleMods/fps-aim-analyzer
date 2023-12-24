@@ -147,12 +147,10 @@ pub fn main() !u8 {
 
     // Register for events from the X Input extension for when the mouse is clicked
     {
-        var event_masks = [_]x.inputext.EventMask{
-                .{
-                    .device_id = .all_master,
-                    .mask = x.inputext.event.raw_button_press,
-                }
-            };
+        var event_masks = [_]x.inputext.EventMask{.{
+            .device_id = .all_master,
+            .mask = x.inputext.event.raw_button_press,
+        }};
         var message_buffer: [x.inputext.select_events.getLen(@as(u16, @intCast(event_masks.len)))]u8 = undefined;
         const len = x.inputext.select_events.serialize(&message_buffer, extensions.input.opcode, .{
             .window_id = ids.root,
@@ -240,11 +238,11 @@ pub fn main() !u8 {
                     return error.TodoHandleReplyMessage;
                 },
                 .generic_extension_event => |msg| {
-                    if(msg.ext_opcode == extensions.input.opcode) {
+                    if (msg.ext_opcode == extensions.input.opcode) {
                         switch (x.inputext.genericExtensionEventTaggedUnion(@alignCast(data.ptr))) {
                             .raw_button_press => |extension_message| {
                                 std.log.info("raw_button_press {}", .{extension_message});
-                                if(extension_message.detail == 1) {
+                                if (extension_message.detail == 1) {
                                     try render_context.captureScreenshotToPixmap();
                                     try render_context.render();
                                 }
