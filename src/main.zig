@@ -15,25 +15,38 @@ pub fn main() !u8 {
     try x.wsaStartup();
     const conn = try common.connect(allocator);
     defer std.os.shutdown(conn.sock, .both) catch {};
+    const conn_setup_fixed_fields = conn.setup.fixed();
+    // Print out some info about the X server we connected to
+    {
+        inline for (@typeInfo(@TypeOf(conn_setup_fixed_fields.*)).Struct.fields) |field| {
+            std.log.debug("{s}: {any}", .{ field.name, @field(conn_setup_fixed_fields, field.name) });
+        }
+        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
+    }
 
-    const screen = blk: {
-        const fixed = conn.setup.fixed();
-        inline for (@typeInfo(@TypeOf(fixed.*)).Struct.fields) |field| {
-            std.log.debug("{s}: {any}", .{ field.name, @field(fixed, field.name) });
-        }
-        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(fixed.vendor_len)});
-        const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
-        const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
-        var screen = conn.setup.getFirstScreenPtr(format_list_limit);
-        inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
-            std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
-        }
-        break :blk screen;
+    const screen = render_utils.getFirstScreenFromConnectionSetup(conn.setup);
+    inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
+        std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
+    }
+
+    const pixmap_formats = try render_utils.getPixmapFormatsFromConnectionSetup(conn.setup);
+    const root_window_pixmap_format = try render_utils.findMatchingPixmapFormatForDepth(
+        pixmap_formats,
+        screen.root_depth,
+    );
+
+    const image_byte_order: std.builtin.Endian = switch (conn_setup_fixed_fields.image_byte_order) {
+        .lsb_first => .Little,
+        .msb_first => .Big,
+        else => |order| {
+            std.log.err("unknown image-byte-order {}", .{order});
+            return 0xff;
+        },
     };
 
     const ids = render_utils.Ids.init(
         screen.root,
-        conn.setup.fixed().resource_id_base,
+        conn_setup_fixed_fields.resource_id_base,
     );
 
     const depth = 32;
@@ -49,6 +62,17 @@ pub fn main() !u8 {
         .height = @intCast(@divTrunc(screen.pixel_height, screenshot_capture_scale)),
     };
 
+    // Start out with the bottom-right corner of the screen
+    const ammo_counter_bounding_box_dimensions = render_utils.Dimensions{
+        .width = 30, //@intCast(@divTrunc(screen.pixel_width, 2)),
+        .height = 30, //@intCast(@divTrunc(screen.pixel_height, 2)),
+    };
+    const ammo_counter_bounding_box = render_utils.BoundingClientRect{
+        .x = @as(i16, @intCast(screen.pixel_width)) - ammo_counter_bounding_box_dimensions.width,
+        .y = @as(i16, @intCast(screen.pixel_height)) - ammo_counter_bounding_box_dimensions.height,
+        .dimensions = ammo_counter_bounding_box_dimensions,
+    };
+
     const max_screenshots_shown = 6;
     const margin = 20;
     const padding = 10;
@@ -61,6 +85,7 @@ pub fn main() !u8 {
         .root_screen_dimensions = root_screen_dimensions,
         .window_dimensions = window_dimensions,
         .screenshot_capture_dimensions = screenshot_capture_dimensions,
+        .ammo_counter_bounding_box = ammo_counter_bounding_box,
         .max_screenshots_shown = max_screenshots_shown,
         .margin = margin,
         .padding = padding,
@@ -68,7 +93,7 @@ pub fn main() !u8 {
 
     // Create a big buffer that we can use to read messages and replies from the X server.
     const double_buffer = try x.DoubleBuffer.init(
-        std.mem.alignForward(usize, 8000, std.mem.page_size),
+        std.mem.alignForward(usize, std.math.pow(usize, 2, 32), std.mem.page_size),
         .{ .memfd_name = "ZigX11DoubleBuffer" },
     );
     defer double_buffer.deinit(); // not necessary but good to test
@@ -187,9 +212,9 @@ pub fn main() !u8 {
         }
     };
 
-    // Show the window. In the X11 protocol is called mapping a window, and hiding a
-    // window is called unmapping. When windows are initially created, they are unmapped
-    // (or hidden).
+    // Show the window. In the X11 protocol, this is called mapping a window, and hiding
+    // a window is called unmapping. When windows are initially created, they are
+    // unmapped (or hidden).
     {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, ids.window);
@@ -199,8 +224,11 @@ pub fn main() !u8 {
     var render_context = render_utils.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,
+        .root_screen_depth = screen.root_depth,
         .extensions = &extensions,
         .font_dims = &font_dims,
+        .image_byte_order = image_byte_order,
+        .root_window_pixmap_format = root_window_pixmap_format,
         .state = &state,
     };
 
@@ -208,7 +236,9 @@ pub fn main() !u8 {
         {
             const receive_buffer = buffer.nextReadBuffer();
             if (receive_buffer.len == 0) {
-                std.log.err("buffer size {} not big enough!", .{buffer.half_len});
+                std.log.err("buffer size {} not big enough to fit the bytes we received!", .{
+                    buffer.half_len,
+                });
                 return 1;
             }
             const len = try x.readSock(conn.sock, receive_buffer, 0);
@@ -234,8 +264,11 @@ pub fn main() !u8 {
                     return 1;
                 },
                 .reply => |msg| {
-                    std.log.info("todo: handle a reply message {}", .{msg});
-                    return error.TodoHandleReplyMessage;
+                    // We assume any reply here will be to the `get_image` request but
+                    // normally you would want some state machine sequencer to match up
+                    // requests with replies.
+                    const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
+                    try render_context.analyzeScreenCapture(get_image_reply);
                 },
                 .generic_extension_event => |msg| {
                     if (msg.ext_opcode == extensions.input.opcode) {
@@ -247,7 +280,9 @@ pub fn main() !u8 {
                                     try render_context.render();
                                 }
                             },
-                            else => unreachable, // We did not register for these events so we should not see them
+                            // We did not register for these events so we should not see them
+                            else => @panic("Received unexpected generic extension " ++
+                                "event that we did not register for"),
                         }
                     } else {
                         std.log.info("TODO: handle a GE generic event {}", .{msg});
@@ -290,17 +325,33 @@ pub fn main() !u8 {
                 },
                 .no_exposure => |msg| std.debug.panic("unexpected no_exposure {}", .{msg}),
                 .unhandled => |msg| {
-                    std.log.info("todo: server msg {}", .{msg});
+                    std.log.info("todo: unhandled server msg {}", .{msg});
                     return error.UnhandledServerMsg;
                 },
                 .map_notify,
                 .reparent_notify,
                 .configure_notify,
-                => unreachable, // did not register for these
+                // We did not register for these
+                => @panic("Received unexpected event event that we did not register for"),
             }
+        }
+
+        {
+            var get_image_msg: [x.get_image.len]u8 = undefined;
+            x.get_image.serialize(&get_image_msg, .{
+                .format = .z_pixmap,
+                .drawable_id = ids.root,
+                .x = @intCast(ammo_counter_bounding_box.x),
+                .y = @intCast(ammo_counter_bounding_box.y),
+                .width = @intCast(ammo_counter_bounding_box.dimensions.width),
+                .height = @intCast(ammo_counter_bounding_box.dimensions.height),
+                .plane_mask = 0xffffffff,
+            });
+            // We handle the reply to this request above (see `analyzeScreenCapture`)
+            try common.send(conn.sock, &get_image_msg);
         }
     }
 
     // Clean-up
-    try render_utils.cleanupResources(ids);
+    try render_utils.cleanupResources(conn.sock, &ids);
 }
