@@ -5,6 +5,7 @@ const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const buffer_utils = @import("buffer_utils.zig");
 const print_utils = @import("print_utils.zig");
 const AppState = @import("app_state.zig").AppState;
+const image_conversion = @import("vision/image_conversion.zig");
 
 /// Given an unsigned integer type, returns a signed integer type that can hold the
 /// entire positive range of the unsigned integer type.
@@ -603,11 +604,11 @@ pub const RenderContext = struct {
         const capture_width: i64 = self.state.ammo_counter_bounding_box.dimensions.width;
         const capture_height: i64 = self.state.ammo_counter_bounding_box.dimensions.height;
 
-        std.log.debug("capture_width={} capture_height={} image_data.len={}", .{
-            capture_width,
-            capture_height,
-            image_data.len,
-        });
+        // std.log.debug("capture_width={} capture_height={} image_data.len={}", .{
+        //     capture_width,
+        //     capture_height,
+        //     image_data.len,
+        // });
 
         // Given our request for an image with the width/height specified,
         // make sure we got at least the right amount of data back to
@@ -630,7 +631,7 @@ pub const RenderContext = struct {
         while ((image_data_index + bytes_per_pixel_in_data) < image_data.len) : (image_data_index += bytes_per_pixel_in_data) {
             if (width_index >= capture_width) {
                 // For Debugging: Print a newline after each row
-                std.debug.print("\n", .{});
+                // std.debug.print("\n", .{});
                 width_index = 0;
                 height_index += 1;
             }
@@ -641,14 +642,14 @@ pub const RenderContext = struct {
                 break;
             }
 
-            const padded_pixel_value = image_data[image_data_index..(image_data_index + bytes_per_pixel_in_data)];
-            const pixel_value = std.mem.readVarInt(
-                u32,
-                padded_pixel_value,
-                self.image_byte_order,
-            );
-            // For Debugging: Print out the pixels
-            std.debug.print("0x{x} ", .{pixel_value});
+            // const padded_pixel_value = image_data[image_data_index..(image_data_index + bytes_per_pixel_in_data)];
+            // const pixel_value = std.mem.readVarInt(
+            //     u32,
+            //     padded_pixel_value,
+            //     self.image_byte_order,
+            // );
+            // // For Debugging: Print out the pixels
+            // std.debug.print("0x{x} ", .{pixel_value});
 
             width_index += 1;
         }

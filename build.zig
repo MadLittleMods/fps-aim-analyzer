@@ -27,7 +27,12 @@ pub fn build(b: *std.Build) void {
     // Other example of using zigx,
     // https://github.com/marler8997/image-viewer/blob/f189f2547890d61a1770327e105b01fc704f98c4/build.zig#L43-L44
     const zigx_dep = b.dependency("zigx", .{});
+    // Make the `zigx` module available to be imported via `@import("x")`
     exe.addModule("x", zigx_dep.module("zigx"));
+
+    const zigimg_dep = b.dependency("zigimg", .{});
+    // Make the `zigimg` module available to be imported via `@import("zigimg")`
+    exe.addModule("zigimg", zigimg_dep.module("zigimg"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -64,6 +69,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    unit_tests.addModule("x", zigx_dep.module("zigx"));
+    unit_tests.addModule("zigimg", zigimg_dep.module("zigimg"));
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

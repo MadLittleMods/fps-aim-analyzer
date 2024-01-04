@@ -355,3 +355,7 @@ pub fn main() !u8 {
     // Clean-up
     try render_utils.cleanupResources(conn.sock, &ids);
 }
+
+test {
+    _ = @import("vision/vision.zig");
+}

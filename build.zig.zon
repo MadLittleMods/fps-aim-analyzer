@@ -6,5 +6,9 @@
             .url = "https://github.com/MadLittleMods/zigx/archive/e705925e859e9c271f1292f10774b6d2eabf4872.tar.gz",
             .hash = "1220781c33a02bbf069233a4f9007b067b4f6f4846b98d5324274fae058a9ab9abcb",
         },
+        .zigimg = .{
+            .url = "https://github.com/MadLittleMods/zigimg/archive/3f5e61e3f243fa6d17dafab7d43a9d4fd02b167c.tar.gz",
+            .hash = "1220411a7238035912beba994fb7c6a96fd813ce9903c8871c11d19f9353f74237a0",
+        },
     },
 }
