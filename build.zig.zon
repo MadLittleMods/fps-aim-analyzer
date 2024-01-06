@@ -1,6 +1,9 @@
 .{
     .name = "aim-analyzer",
     .version = "0.1.0",
+    .paths = .{
+        "",
+    },
     .dependencies = .{
         .zigx = .{
             .url = "https://github.com/MadLittleMods/zigx/archive/e705925e859e9c271f1292f10774b6d2eabf4872.tar.gz",

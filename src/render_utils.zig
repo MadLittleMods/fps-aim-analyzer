@@ -128,7 +128,7 @@ pub fn getFirstScreenFromConnectionSetup(conn_setup: x.ConnectSetup) *x.Screen {
 
     const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
     const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
-    var screen_ptr = conn_setup.getFirstScreenPtr(format_list_limit);
+    const screen_ptr = conn_setup.getFirstScreenPtr(format_list_limit);
 
     return screen_ptr;
 }

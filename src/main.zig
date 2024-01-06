@@ -8,10 +8,14 @@ const render_utils = @import("render_utils.zig");
 const AppState = @import("app_state.zig").AppState;
 const buffer_utils = @import("buffer_utils.zig");
 
-var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-const allocator = arena.allocator();
-
 pub fn main() !u8 {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer switch (gpa.deinit()) {
+        .ok => {},
+        .leak => std.log.err("GPA allocator: Memory leak detected", .{}),
+    };
+
     try x.wsaStartup();
     const conn = try common.connect(allocator);
     defer std.os.shutdown(conn.sock, .both) catch {};
