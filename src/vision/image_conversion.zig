@@ -9,7 +9,76 @@ pub const RGBPixel = struct {
     r: f32,
     g: f32,
     b: f32,
+
+    /// Usage: RGBPixel.fromHexNumber(0x4ae728)
+    fn fromHexNumber(hex_color: u24) RGBPixel {
+        // Red channel:
+        // Shift the hex color right 16 bits to get the red component all the way down,
+        // then make sure we only select the lowest 8 bits by using `& 0xFF`
+        const red = (hex_color >> 16) & 0xFF;
+        // Greeen channel:
+        // Shift the hex color right 8 bits to get the green component all the way down,
+        // then make sure we only select the lowest 8 bits by using `& 0xFF`
+        const green = (hex_color >> 8) & 0xFF;
+        // Blue channel:
+        // No need to shift the hex color to get the blue component all the way down,
+        // but we still need to make sure we only select the lowest 8 bits by using `& 0xFF`
+        const blue = hex_color & 0xFF;
+
+        // Convert from [0, 255] to [0, 1]
+        return RGBPixel{
+            .r = @as(f32, @floatFromInt(red)) / 255.0,
+            .g = @as(f32, @floatFromInt(green)) / 255.0,
+            .b = @as(f32, @floatFromInt(blue)) / 255.0,
+        };
+    }
 };
+
+test "RGBPixel.fromHexNumber" {
+    // White
+    try testRGBApproxEqAbs(
+        RGBPixel{ .r = 1.0, .g = 1.0, .b = 1.0 },
+        RGBPixel.fromHexNumber(0xffffff),
+        1e-4,
+    );
+    // Black
+    try testRGBApproxEqAbs(
+        RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 },
+        RGBPixel.fromHexNumber(0x000000),
+        1e-4,
+    );
+    // Red
+    try testRGBApproxEqAbs(
+        RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 },
+        RGBPixel.fromHexNumber(0xff0000),
+        1e-4,
+    );
+    // Green
+    try testRGBApproxEqAbs(
+        RGBPixel{ .r = 0.0, .g = 1.0, .b = 0.0 },
+        RGBPixel.fromHexNumber(0x00ff00),
+        1e-4,
+    );
+    // Blue
+    try testRGBApproxEqAbs(
+        RGBPixel{ .r = 0.0, .g = 0.0, .b = 1.0 },
+        RGBPixel.fromHexNumber(0x0000ff),
+        1e-4,
+    );
+
+    // Green-ish
+    try testRGBApproxEqAbs(
+        RGBPixel{ .r = 0.290196, .g = 0.905882, .b = 0.156862 },
+        RGBPixel.fromHexNumber(0x4ae728),
+        1e-4,
+    );
+    // Blue-ish
+    try testRGBApproxEqAbs(
+        RGBPixel{ .r = 0.239215, .g = 0.431372, .b = 0.647058 },
+        RGBPixel.fromHexNumber(0x3d6ea5),
+        1e-4,
+    );
+}
 
 /// All values are in the range [0, 1]
 pub const HSVPixel = struct {
@@ -67,15 +136,15 @@ fn load_image(allocator: std.mem.Allocator) !ImageData {
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
 // [0, 360) if we want degrees or [0, 1) if we want it normalized.
-const h_raw_lower_bound = -1;
-const h_raw_upper_bound = 5;
-const h_raw_range: comptime_float = h_raw_upper_bound - h_raw_lower_bound;
+const h_raw_lower_bound = -1.0;
+const h_raw_upper_bound = 5.0;
+const h_raw_range = h_raw_upper_bound - h_raw_lower_bound;
 
-const h_degree_upper_bound: comptime_float = 360;
-const h_degree_scaler: comptime_float = h_degree_upper_bound / h_raw_range;
+const h_degree_upper_bound = 360.0;
+const h_degree_scaler = h_degree_upper_bound / h_raw_range;
 
-const h_normalized_upper_bound: comptime_float = 1;
-const h_normalized_scaler: comptime_float = h_normalized_upper_bound / h_raw_range;
+const h_normalized_upper_bound = 1.0;
+const h_normalized_scaler = h_normalized_upper_bound / h_raw_range;
 
 comptime {
     // Just sanity check that comptime math worked out
@@ -89,6 +158,7 @@ comptime {
 
 // Based on https://stackoverflow.com/questions/3018313/algorithm-to-convert-rgb-to-hsv-and-hsv-to-rgb-in-range-0-255-for-both/6930407#6930407
 // Other notes: https://cs.stackexchange.com/questions/64549/convert-hsv-to-rgb-colors/127918#127918
+// Other implementation where I picked up some comment explanations, https://github.com/nitrogenez/prism/blob/9152942425546f6110bd0202d7671d6ff5b25de5/src/spaces/HSV.zig#L9-L40
 fn rgb_to_hsv(rgb_pixel: RGBPixel) HSVPixel {
     // TODO: Check if RGB is normalized [0, 1]
 
@@ -114,18 +184,17 @@ fn rgb_to_hsv(rgb_pixel: RGBPixel) HSVPixel {
 
     const s: f32 = (delta / max);
 
-    // Find which color is the max. Ideally, we would use `std.math.approxEqAbs(f32, a,
-    // b, 1e-4)` to compare whether floats are equal but this will suffice.
+    // Find which color is the max.
     //
-    // Before we scale hue, it is in the range [-1, 5) where:
-    // [−1, 1) when the max is R,
-    // [1, 3) when the max is G,
-    // [3, 5) when the max is B,
+    // Before we scale `h_raw`, it is in the range [-1, 5) where:
+    //  - [−1, 1) when the max is R,
+    //  - [ 1, 3) when the max is G,
+    //  - [ 3, 5) when the max is B,
     var h_raw: f32 = 0.0;
-    if (r >= max) {
+    if (r == max) {
         // between yellow & magenta
         h_raw = 0.0 + (g - b) / delta;
-    } else if (g >= max) {
+    } else if (g == max) {
         // between cyan & yellow
         h_raw = 2.0 + (b - r) / delta;
     } else {
@@ -149,6 +218,18 @@ fn rgb_to_hsv(rgb_pixel: RGBPixel) HSVPixel {
     };
 }
 
+fn testRGBApproxEqAbs(expected: RGBPixel, actual: RGBPixel, tolerance: f32) !void {
+    try std.testing.expectApproxEqAbs(expected.r, actual.r, tolerance);
+    try std.testing.expectApproxEqAbs(expected.g, actual.g, tolerance);
+    try std.testing.expectApproxEqAbs(expected.b, actual.b, tolerance);
+}
+
+fn testHSVApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !void {
+    try std.testing.expectApproxEqAbs(expected.h, actual.h, tolerance);
+    try std.testing.expectApproxEqAbs(expected.s, actual.s, tolerance);
+    try std.testing.expectApproxEqAbs(expected.v, actual.v, tolerance);
+}
+
 test "rgb_to_hsv" {
     // Grayscale
     try std.testing.expectEqual(
@@ -164,7 +245,49 @@ test "rgb_to_hsv" {
         rgb_to_hsv(RGBPixel{ .r = 0.5, .g = 0.5, .b = 0.5 }),
     );
 
-    // TODO: More tests
+    // 0 degree red
+    try testHSVApproxEqAbs(
+        HSVPixel{ .h = 0.0, .s = 1.0, .v = 1.0 },
+        rgb_to_hsv(RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 }),
+        1e-4,
+    );
+    // 360 degree red
+    try testHSVApproxEqAbs(
+        HSVPixel{ .h = 1.0, .s = 1.0, .v = 1.0 },
+        rgb_to_hsv(RGBPixel{ .r = 1.0, .g = 0.0, .b = 1e-4 }),
+        1e-4,
+    );
+    // Cyan
+    try testHSVApproxEqAbs(
+        HSVPixel{ .h = 0.5, .s = 1.0, .v = 1.0 },
+        rgb_to_hsv(RGBPixel{ .r = 0.0, .g = 1.0, .b = 1.0 }),
+        1e-4,
+    );
+    // Magenta
+    try testHSVApproxEqAbs(
+        HSVPixel{ .h = 0.833333, .s = 1.0, .v = 1.0 },
+        rgb_to_hsv(RGBPixel{ .r = 1.0, .g = 0.0, .b = 1.0 }),
+        1e-4,
+    );
+    // Yellow
+    try testHSVApproxEqAbs(
+        HSVPixel{ .h = 0.166666, .s = 1.0, .v = 1.0 },
+        rgb_to_hsv(RGBPixel{ .r = 1.0, .g = 1.0, .b = 0.0 }),
+        1e-4,
+    );
+
+    // Green-ish
+    try testHSVApproxEqAbs(
+        HSVPixel{ .h = 0.3036649, .s = 0.8268398, .v = 0.905882 },
+        rgb_to_hsv(RGBPixel.fromHexNumber(0x4ae728)),
+        1e-4,
+    );
+    // Blue-ish
+    try testHSVApproxEqAbs(
+        HSVPixel{ .h = 0.588141, .s = 0.630303, .v = 0.647058 },
+        rgb_to_hsv(RGBPixel.fromHexNumber(0x3d6ea5)),
+        1e-4,
+    );
 }
 
 test "asdf" {

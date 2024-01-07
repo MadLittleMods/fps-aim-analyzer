@@ -23,6 +23,9 @@ pub fn assert(ok: bool, msg: []const u8, args: anytype) void {
 
 /// `std.math.approxEqAbs` but with support for `comptime_float`
 ///
+/// FIXME: This can be removed once https://github.com/ziglang/zig/pull/18463 is merged
+/// and we're using a supported version of Zig.
+///
 /// Performs an approximate comparison of two floating point values `x` and `y`.
 /// Returns true if the absolute difference between them is less or equal than
 /// the specified tolerance.
