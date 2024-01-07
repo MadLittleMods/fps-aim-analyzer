@@ -11,7 +11,7 @@ pub const RGBPixel = struct {
     b: f32,
 
     /// Usage: RGBPixel.fromHexNumber(0x4ae728)
-    fn fromHexNumber(hex_color: u24) RGBPixel {
+    pub fn fromHexNumber(hex_color: u24) RGBPixel {
         // Red channel:
         // Shift the hex color right 16 bits to get the red component all the way down,
         // then make sure we only select the lowest 8 bits by using `& 0xFF`
@@ -93,46 +93,90 @@ pub const PixelData = union(enum) {
 };
 
 pub const ImageData = struct {
-    width: u32,
-    height: u32,
+    width: usize,
+    height: usize,
+    /// Row-major order
     pixels: []const PixelData,
 
-    pub fn deinit(self: *ImageData, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const @This(), allocator: std.mem.Allocator) void {
         allocator.free(self.pixels);
     }
-};
 
-fn load_image(allocator: std.mem.Allocator) !ImageData {
-    const image_file_path = "/home/eric/Downloads/36-1080-export-from-gimp.png";
+    pub fn loadImageFromFilePath(image_file_path: []const u8, allocator: std.mem.Allocator) !@This() {
+        var img = try zigimg.Image.fromFilePath(allocator, image_file_path);
+        defer img.deinit();
 
-    var img = try zigimg.Image.fromFilePath(allocator, image_file_path);
-    defer img.deinit();
+        var output_rgb_pixels = try allocator.alloc(PixelData, img.pixels.len());
+        switch (img.pixels) {
+            .rgb24 => |rgb_pixels| {
+                for (rgb_pixels, output_rgb_pixels) |pixel, *output_rgb_pixel| {
+                    const zigimg_color_f32 = pixel.toColorf32();
+                    output_rgb_pixel.* = PixelData{ .rgb = RGBPixel{
+                        .r = zigimg_color_f32.r,
+                        .g = zigimg_color_f32.g,
+                        .b = zigimg_color_f32.b,
+                    } };
+                }
+            },
+            else => {
+                return error.UnsupportedPixelFormat;
+            },
+        }
 
-    std.debug.print("\nasdf {} {}", .{
-        img.pixels.len(),
-    });
+        // img.rawBytes();
+        // img.pixels.asBytes()
 
-    var output_rgb_pixels = allocator.alloc(PixelData, img.pixels.len());
-    switch (img.pixels) {
-        .rgb24 => |rgb_pixels| {
-            for (rgb_pixels, output_rgb_pixels) |pixel, *output_rgb_pixel| {
-                output_rgb_pixel.* = pixel.toColorf32();
-            }
-        },
-        else => {
-            return error.UnsupportedPixelFormat;
-        },
+        return ImageData{
+            .width = img.width,
+            .height = img.height,
+            .pixels = output_rgb_pixels,
+        };
     }
 
-    // img.rawBytes();
-    // img.pixels.asBytes()
+    pub fn saveImageToFilePath(self: *const @This(), image_file_path: []const u8, allocator: std.mem.Allocator) !void {
+        var img = try zigimg.Image.create(
+            allocator,
+            self.width,
+            self.height,
+            .rgb24,
+        );
+        defer img.deinit();
 
-    return ImageData{
-        .width = img.width,
-        .height = img.height,
-        .pixels = output_rgb_pixels,
-    };
-}
+        for (img.pixels.rgb24, self.pixels) |*output_pixel, pixel| {
+            output_pixel.* = zigimg.color.Rgb24{
+                .r = @as(u8, @as(u8, @intFromFloat(pixel.rgb.r * 255.0))),
+                .g = @as(u8, @as(u8, @intFromFloat(pixel.rgb.g * 255.0))),
+                .b = @as(u8, @as(u8, @intFromFloat(pixel.rgb.b * 255.0))),
+            };
+        }
+
+        try img.writeToFilePath(image_file_path, .{ .png = .{} });
+    }
+
+    pub fn crop(
+        self: *const @This(),
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        allocator: std.mem.Allocator,
+    ) !@This() {
+        var output_rgb_pixels = try allocator.alloc(PixelData, width * height);
+        for (0..height) |crop_y| {
+            for (0..width) |crop_x| {
+                const src_x = x + crop_x;
+                const src_y = y + crop_y;
+                output_rgb_pixels[crop_y * width + crop_x] = self.pixels[src_y * self.width + src_x];
+            }
+        }
+
+        return ImageData{
+            .width = width,
+            .height = height,
+            .pixels = output_rgb_pixels,
+        };
+    }
+};
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
 // [0, 360) if we want degrees or [0, 1) if we want it normalized.
@@ -159,7 +203,7 @@ comptime {
 // Based on https://stackoverflow.com/questions/3018313/algorithm-to-convert-rgb-to-hsv-and-hsv-to-rgb-in-range-0-255-for-both/6930407#6930407
 // Other notes: https://cs.stackexchange.com/questions/64549/convert-hsv-to-rgb-colors/127918#127918
 // Other implementation where I picked up some comment explanations, https://github.com/nitrogenez/prism/blob/9152942425546f6110bd0202d7671d6ff5b25de5/src/spaces/HSV.zig#L9-L40
-fn rgb_to_hsv(rgb_pixel: RGBPixel) HSVPixel {
+pub fn rgb_to_hsv(rgb_pixel: RGBPixel) HSVPixel {
     // TODO: Check if RGB is normalized [0, 1]
 
     const r = rgb_pixel.r;
@@ -306,5 +350,20 @@ test "asdf" {
     // }
 
     const allocator = std.testing.allocator;
-    _ = try load_image(allocator);
+    const image_data = try ImageData.loadImageFromFilePath("/home/eric/Downloads/36-1080-export-from-gimp.png", allocator);
+    defer image_data.deinit(allocator);
+
+    const half_width = @divFloor(image_data.width, 2);
+    const half_height = @divFloor(image_data.height, 2);
+    const cropped_image_data = try image_data.crop(
+        // Bottom-right corner (where the ammo count is)
+        half_width,
+        half_height,
+        image_data.width - half_width,
+        image_data.height - half_height,
+        allocator,
+    );
+    defer cropped_image_data.deinit(allocator);
+
+    try cropped_image_data.saveImageToFilePath("/home/eric/Downloads/36-1080-export-from-gimp-cropped.png", allocator);
 }
