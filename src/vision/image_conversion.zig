@@ -34,6 +34,18 @@ pub const RGBPixel = struct {
     }
 };
 
+fn testRGBApproxEqAbs(expected: RGBPixel, actual: RGBPixel, tolerance: f32) !void {
+    try std.testing.expectApproxEqAbs(expected.r, actual.r, tolerance);
+    try std.testing.expectApproxEqAbs(expected.g, actual.g, tolerance);
+    try std.testing.expectApproxEqAbs(expected.b, actual.b, tolerance);
+}
+
+fn testHSVApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !void {
+    try std.testing.expectApproxEqAbs(expected.h, actual.h, tolerance);
+    try std.testing.expectApproxEqAbs(expected.s, actual.s, tolerance);
+    try std.testing.expectApproxEqAbs(expected.v, actual.v, tolerance);
+}
+
 test "RGBPixel.fromHexNumber" {
     // White
     try testRGBApproxEqAbs(
@@ -106,7 +118,7 @@ pub const ImageData = struct {
         var img = try zigimg.Image.fromFilePath(allocator, image_file_path);
         defer img.deinit();
 
-        var output_rgb_pixels = try allocator.alloc(PixelData, img.pixels.len());
+        const output_rgb_pixels = try allocator.alloc(PixelData, img.pixels.len());
         switch (img.pixels) {
             .rgb24 => |rgb_pixels| {
                 for (rgb_pixels, output_rgb_pixels) |pixel, *output_rgb_pixel| {
@@ -203,7 +215,7 @@ comptime {
 // Based on https://stackoverflow.com/questions/3018313/algorithm-to-convert-rgb-to-hsv-and-hsv-to-rgb-in-range-0-255-for-both/6930407#6930407
 // Other notes: https://cs.stackexchange.com/questions/64549/convert-hsv-to-rgb-colors/127918#127918
 // Other implementation where I picked up some comment explanations, https://github.com/nitrogenez/prism/blob/9152942425546f6110bd0202d7671d6ff5b25de5/src/spaces/HSV.zig#L9-L40
-pub fn rgb_to_hsv(rgb_pixel: RGBPixel) HSVPixel {
+pub fn rgb_to_hsv_pixel(rgb_pixel: RGBPixel) HSVPixel {
     // TODO: Check if RGB is normalized [0, 1]
 
     const r = rgb_pixel.r;
@@ -262,76 +274,69 @@ pub fn rgb_to_hsv(rgb_pixel: RGBPixel) HSVPixel {
     };
 }
 
-fn testRGBApproxEqAbs(expected: RGBPixel, actual: RGBPixel, tolerance: f32) !void {
-    try std.testing.expectApproxEqAbs(expected.r, actual.r, tolerance);
-    try std.testing.expectApproxEqAbs(expected.g, actual.g, tolerance);
-    try std.testing.expectApproxEqAbs(expected.b, actual.b, tolerance);
-}
-
-fn testHSVApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !void {
-    try std.testing.expectApproxEqAbs(expected.h, actual.h, tolerance);
-    try std.testing.expectApproxEqAbs(expected.s, actual.s, tolerance);
-    try std.testing.expectApproxEqAbs(expected.v, actual.v, tolerance);
-}
-
-test "rgb_to_hsv" {
+test "rgb_to_hsv_pixel" {
     // Grayscale
     try std.testing.expectEqual(
         HSVPixel{ .h = 0.0, .s = 0.0, .v = 0.0 },
-        rgb_to_hsv(RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 }),
+        rgb_to_hsv_pixel(RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 }),
     );
     try std.testing.expectEqual(
         HSVPixel{ .h = 0.0, .s = 0.0, .v = 1.0 },
-        rgb_to_hsv(RGBPixel{ .r = 1.0, .g = 1.0, .b = 1.0 }),
+        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 1.0, .b = 1.0 }),
     );
     try std.testing.expectEqual(
         HSVPixel{ .h = 0.0, .s = 0.0, .v = 0.5 },
-        rgb_to_hsv(RGBPixel{ .r = 0.5, .g = 0.5, .b = 0.5 }),
+        rgb_to_hsv_pixel(RGBPixel{ .r = 0.5, .g = 0.5, .b = 0.5 }),
     );
 
     // 0 degree red
     try testHSVApproxEqAbs(
         HSVPixel{ .h = 0.0, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv(RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 }),
+        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 }),
         1e-4,
     );
     // 360 degree red
     try testHSVApproxEqAbs(
         HSVPixel{ .h = 1.0, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv(RGBPixel{ .r = 1.0, .g = 0.0, .b = 1e-4 }),
+        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 0.0, .b = 1e-4 }),
         1e-4,
     );
     // Cyan
     try testHSVApproxEqAbs(
         HSVPixel{ .h = 0.5, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv(RGBPixel{ .r = 0.0, .g = 1.0, .b = 1.0 }),
+        rgb_to_hsv_pixel(RGBPixel{ .r = 0.0, .g = 1.0, .b = 1.0 }),
         1e-4,
     );
     // Magenta
     try testHSVApproxEqAbs(
         HSVPixel{ .h = 0.833333, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv(RGBPixel{ .r = 1.0, .g = 0.0, .b = 1.0 }),
+        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 0.0, .b = 1.0 }),
         1e-4,
     );
     // Yellow
     try testHSVApproxEqAbs(
         HSVPixel{ .h = 0.166666, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv(RGBPixel{ .r = 1.0, .g = 1.0, .b = 0.0 }),
+        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 1.0, .b = 0.0 }),
         1e-4,
     );
 
     // Green-ish
     try testHSVApproxEqAbs(
         HSVPixel{ .h = 0.3036649, .s = 0.8268398, .v = 0.905882 },
-        rgb_to_hsv(RGBPixel.fromHexNumber(0x4ae728)),
+        rgb_to_hsv_pixel(RGBPixel.fromHexNumber(0x4ae728)),
         1e-4,
     );
     // Blue-ish
     try testHSVApproxEqAbs(
         HSVPixel{ .h = 0.588141, .s = 0.630303, .v = 0.647058 },
-        rgb_to_hsv(RGBPixel.fromHexNumber(0x3d6ea5)),
+        rgb_to_hsv_pixel(RGBPixel.fromHexNumber(0x3d6ea5)),
         1e-4,
     );
+}
+
+pub fn rgb_to_hsv_image(rgb_image: ImageData) ImageData {
+    _ = rgb_image;
+    // TODO
 }
 
 test "asdf" {
