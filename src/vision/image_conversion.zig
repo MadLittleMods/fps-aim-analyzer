@@ -34,13 +34,13 @@ pub const RGBPixel = struct {
     }
 };
 
-fn testRGBApproxEqAbs(expected: RGBPixel, actual: RGBPixel, tolerance: f32) !void {
+fn testRgbApproxEqAbs(expected: RGBPixel, actual: RGBPixel, tolerance: f32) !void {
     try std.testing.expectApproxEqAbs(expected.r, actual.r, tolerance);
     try std.testing.expectApproxEqAbs(expected.g, actual.g, tolerance);
     try std.testing.expectApproxEqAbs(expected.b, actual.b, tolerance);
 }
 
-fn testHSVApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !void {
+fn testHsvApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !void {
     try std.testing.expectApproxEqAbs(expected.h, actual.h, tolerance);
     try std.testing.expectApproxEqAbs(expected.s, actual.s, tolerance);
     try std.testing.expectApproxEqAbs(expected.v, actual.v, tolerance);
@@ -48,44 +48,44 @@ fn testHSVApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !voi
 
 test "RGBPixel.fromHexNumber" {
     // White
-    try testRGBApproxEqAbs(
+    try testRgbApproxEqAbs(
         RGBPixel{ .r = 1.0, .g = 1.0, .b = 1.0 },
         RGBPixel.fromHexNumber(0xffffff),
         1e-4,
     );
     // Black
-    try testRGBApproxEqAbs(
+    try testRgbApproxEqAbs(
         RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 },
         RGBPixel.fromHexNumber(0x000000),
         1e-4,
     );
     // Red
-    try testRGBApproxEqAbs(
+    try testRgbApproxEqAbs(
         RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 },
         RGBPixel.fromHexNumber(0xff0000),
         1e-4,
     );
     // Green
-    try testRGBApproxEqAbs(
+    try testRgbApproxEqAbs(
         RGBPixel{ .r = 0.0, .g = 1.0, .b = 0.0 },
         RGBPixel.fromHexNumber(0x00ff00),
         1e-4,
     );
     // Blue
-    try testRGBApproxEqAbs(
+    try testRgbApproxEqAbs(
         RGBPixel{ .r = 0.0, .g = 0.0, .b = 1.0 },
         RGBPixel.fromHexNumber(0x0000ff),
         1e-4,
     );
 
     // Green-ish
-    try testRGBApproxEqAbs(
+    try testRgbApproxEqAbs(
         RGBPixel{ .r = 0.290196, .g = 0.905882, .b = 0.156862 },
         RGBPixel.fromHexNumber(0x4ae728),
         1e-4,
     );
     // Blue-ish
-    try testRGBApproxEqAbs(
+    try testRgbApproxEqAbs(
         RGBPixel{ .r = 0.239215, .g = 0.431372, .b = 0.647058 },
         RGBPixel.fromHexNumber(0x3d6ea5),
         1e-4,
@@ -99,16 +99,11 @@ pub const HSVPixel = struct {
     v: f32,
 };
 
-pub const PixelData = union(enum) {
-    rgb: RGBPixel,
-    hsv: HSVPixel,
-};
-
-pub const ImageData = struct {
+pub const RGBImage = struct {
     width: usize,
     height: usize,
-    /// Row-major order
-    pixels: []const PixelData,
+    /// Row-major order (line by line)
+    pixels: []const RGBPixel,
 
     pub fn deinit(self: *const @This(), allocator: std.mem.Allocator) void {
         allocator.free(self.pixels);
@@ -118,16 +113,16 @@ pub const ImageData = struct {
         var img = try zigimg.Image.fromFilePath(allocator, image_file_path);
         defer img.deinit();
 
-        const output_rgb_pixels = try allocator.alloc(PixelData, img.pixels.len());
+        const output_rgb_pixels = try allocator.alloc(RGBPixel, img.pixels.len());
         switch (img.pixels) {
             .rgb24 => |rgb_pixels| {
                 for (rgb_pixels, output_rgb_pixels) |pixel, *output_rgb_pixel| {
                     const zigimg_color_f32 = pixel.toColorf32();
-                    output_rgb_pixel.* = PixelData{ .rgb = RGBPixel{
+                    output_rgb_pixel.* = RGBPixel{
                         .r = zigimg_color_f32.r,
                         .g = zigimg_color_f32.g,
                         .b = zigimg_color_f32.b,
-                    } };
+                    };
                 }
             },
             else => {
@@ -138,7 +133,7 @@ pub const ImageData = struct {
         // img.rawBytes();
         // img.pixels.asBytes()
 
-        return ImageData{
+        return .{
             .width = img.width,
             .height = img.height,
             .pixels = output_rgb_pixels,
@@ -173,7 +168,7 @@ pub const ImageData = struct {
         height: usize,
         allocator: std.mem.Allocator,
     ) !@This() {
-        var output_rgb_pixels = try allocator.alloc(PixelData, width * height);
+        var output_rgb_pixels = try allocator.alloc(RGBPixel, width * height);
         for (0..height) |crop_y| {
             for (0..width) |crop_x| {
                 const src_x = x + crop_x;
@@ -182,12 +177,19 @@ pub const ImageData = struct {
             }
         }
 
-        return ImageData{
+        return .{
             .width = width,
             .height = height,
             .pixels = output_rgb_pixels,
         };
     }
+};
+
+pub const HSVImage = struct {
+    width: usize,
+    height: usize,
+    /// Row-major order (line by line)
+    pixels: []const HSVPixel,
 };
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
@@ -212,10 +214,12 @@ comptime {
     );
 }
 
+/// Convert an RGB pixel to an HSV pixel.
+///
 // Based on https://stackoverflow.com/questions/3018313/algorithm-to-convert-rgb-to-hsv-and-hsv-to-rgb-in-range-0-255-for-both/6930407#6930407
 // Other notes: https://cs.stackexchange.com/questions/64549/convert-hsv-to-rgb-colors/127918#127918
 // Other implementation where I picked up some comment explanations, https://github.com/nitrogenez/prism/blob/9152942425546f6110bd0202d7671d6ff5b25de5/src/spaces/HSV.zig#L9-L40
-pub fn rgb_to_hsv_pixel(rgb_pixel: RGBPixel) HSVPixel {
+pub fn rgbToHsvPixel(rgb_pixel: RGBPixel) HSVPixel {
     // TODO: Check if RGB is normalized [0, 1]
 
     const r = rgb_pixel.r;
@@ -274,101 +278,134 @@ pub fn rgb_to_hsv_pixel(rgb_pixel: RGBPixel) HSVPixel {
     };
 }
 
-test "rgb_to_hsv_pixel" {
+/// Convert an HSV pixel to an RGB pixel.
+///
+// Based on https://stackoverflow.com/questions/24852345/hsv-to-rgb-color-conversion/26856771#26856771
+// Other: https://github.com/wjakob/instant-meshes/blob/7b3160864a2e1025af498c84cfed91cbfb613698/src/common.h#L358-L376
+pub fn hsvToRgbPixel(hsv_pixel: HSVPixel) RGBPixel {
+    if (hsv_pixel.s == 0.0) {
+        // Achromatic (grey)
+        return RGBPixel{
+            .r = hsv_pixel.v,
+            .g = hsv_pixel.v,
+            .b = hsv_pixel.v,
+        };
+    }
+
+    const h_scaled = hsv_pixel.h * 6.0;
+    const h_scaled_floor = @floor(h_scaled);
+    const fractional_part_of_h = h_scaled - h_scaled_floor;
+
+    const p = hsv_pixel.v * (1.0 - hsv_pixel.s);
+    const q = hsv_pixel.v * (1.0 - hsv_pixel.s * fractional_part_of_h);
+    const t = hsv_pixel.v * (1.0 - hsv_pixel.s * (1.0 - fractional_part_of_h));
+
+    switch (@as(u3, @intFromFloat(h_scaled_floor))) {
+        0 => return .{ .r = hsv_pixel.v, .g = t, .b = p },
+        1 => return .{ .r = q, .g = hsv_pixel.v, .b = p },
+        2 => return .{ .r = p, .g = hsv_pixel.v, .b = t },
+        3 => return .{ .r = p, .g = q, .b = hsv_pixel.v },
+        4 => return .{ .r = t, .g = p, .b = hsv_pixel.v },
+        else => return .{ .r = hsv_pixel.v, .g = p, .b = q },
+    }
+}
+
+/// Test that `rgbToHsvPixel` and `hsvToRgbPixel` are inverses of each other.
+fn _testRgbAndHsvConversion(rgb_pixel: RGBPixel, hsv_pixel: HSVPixel) !void {
+    try testHsvApproxEqAbs(
+        hsv_pixel,
+        rgbToHsvPixel(rgb_pixel),
+        1e-4,
+    );
+
+    try testRgbApproxEqAbs(
+        rgb_pixel,
+        hsvToRgbPixel(hsv_pixel),
+        1e-4,
+    );
+}
+
+test "rgbToHsvPixel and hsvToRgbPixel" {
     // Grayscale
-    try std.testing.expectEqual(
+    try _testRgbAndHsvConversion(
+        RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 },
         HSVPixel{ .h = 0.0, .s = 0.0, .v = 0.0 },
-        rgb_to_hsv_pixel(RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 }),
     );
-    try std.testing.expectEqual(
+    try _testRgbAndHsvConversion(
+        RGBPixel{ .r = 1.0, .g = 1.0, .b = 1.0 },
         HSVPixel{ .h = 0.0, .s = 0.0, .v = 1.0 },
-        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 1.0, .b = 1.0 }),
     );
-    try std.testing.expectEqual(
+    try _testRgbAndHsvConversion(
+        RGBPixel{ .r = 0.5, .g = 0.5, .b = 0.5 },
         HSVPixel{ .h = 0.0, .s = 0.0, .v = 0.5 },
-        rgb_to_hsv_pixel(RGBPixel{ .r = 0.5, .g = 0.5, .b = 0.5 }),
     );
 
     // 0 degree red
-    try testHSVApproxEqAbs(
+    try _testRgbAndHsvConversion(
+        RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 },
         HSVPixel{ .h = 0.0, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 }),
-        1e-4,
     );
     // 360 degree red
-    try testHSVApproxEqAbs(
-        HSVPixel{ .h = 1.0, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 0.0, .b = 1e-4 }),
-        1e-4,
+    try _testRgbAndHsvConversion(
+        RGBPixel{ .r = 1.0, .g = 0.0, .b = 1e-6 },
+        HSVPixel{ .h = 1.0 - 1e-6, .s = 1.0, .v = 1.0 },
     );
     // Cyan
-    try testHSVApproxEqAbs(
+    try _testRgbAndHsvConversion(
+        RGBPixel{ .r = 0.0, .g = 1.0, .b = 1.0 },
         HSVPixel{ .h = 0.5, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv_pixel(RGBPixel{ .r = 0.0, .g = 1.0, .b = 1.0 }),
-        1e-4,
     );
     // Magenta
-    try testHSVApproxEqAbs(
+    try _testRgbAndHsvConversion(
+        RGBPixel{ .r = 1.0, .g = 0.0, .b = 1.0 },
         HSVPixel{ .h = 0.833333, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 0.0, .b = 1.0 }),
-        1e-4,
     );
     // Yellow
-    try testHSVApproxEqAbs(
+    try _testRgbAndHsvConversion(
+        RGBPixel{ .r = 1.0, .g = 1.0, .b = 0.0 },
         HSVPixel{ .h = 0.166666, .s = 1.0, .v = 1.0 },
-        rgb_to_hsv_pixel(RGBPixel{ .r = 1.0, .g = 1.0, .b = 0.0 }),
-        1e-4,
     );
 
     // Green-ish
-    try testHSVApproxEqAbs(
+    try _testRgbAndHsvConversion(
+        RGBPixel.fromHexNumber(0x4ae728),
         HSVPixel{ .h = 0.3036649, .s = 0.8268398, .v = 0.905882 },
-        rgb_to_hsv_pixel(RGBPixel.fromHexNumber(0x4ae728)),
-        1e-4,
     );
     // Blue-ish
-    try testHSVApproxEqAbs(
+    try _testRgbAndHsvConversion(
+        RGBPixel.fromHexNumber(0x3d6ea5),
         HSVPixel{ .h = 0.588141, .s = 0.630303, .v = 0.647058 },
-        rgb_to_hsv_pixel(RGBPixel.fromHexNumber(0x3d6ea5)),
-        1e-4,
     );
 }
 
-pub fn rgb_to_hsv_image(rgb_image: ImageData) ImageData {
-    _ = rgb_image;
-    // TODO
+pub fn rgbToHsvImage(rgb_image: RGBImage, allocator: std.mem.Allocator) HSVImage {
+    const output_hsv_pixels = try allocator.alloc(HSVPixel, rgb_image.pixels.len);
+    for (output_hsv_pixels, rgb_image.pixels) |*output_hsv_pixel, rgb_pixel| {
+        output_hsv_pixel.* = rgbToHsvPixel(rgb_pixel);
+    }
+
+    return .{
+        .width = rgb_image.width,
+        .height = rgb_image.height,
+        .pixels = output_hsv_pixels,
+    };
 }
 
-test "asdf" {
-    // std.debug.assert(std.fs.path.isAbsolute(abs_dir_path));
-    // var iterable_dir = try fs.openDirAbsolute(abs_dir_path, .{ .iterate = true });
-    // defer iterable_dir.close();
+pub fn hsvToRgbImage(hsv_image: HSVImage, allocator: std.mem.Allocator) RGBImage {
+    const output_rgb_pixels = try allocator.alloc(RGBPixel, hsv_image.pixels.len);
+    for (output_rgb_pixels, hsv_image.pixels) |*output_rgb_pixel, hsv_pixel| {
+        output_rgb_pixel.* = hsvToRgbPixel(hsv_pixel);
+    }
 
-    // var it = iterable_dir.iterate();
-    // while (try it.next()) |entry| {
-    //     switch (entry.kind) {
-    //         .file, .sym_link => {},
-    //         else => continue,
-    //     }
+    return .{
+        .width = hsv_image.width,
+        .height = hsv_image.height,
+        .pixels = output_rgb_pixels,
+    };
+}
 
-    //     // entry.name;
-    // }
-
-    const allocator = std.testing.allocator;
-    const image_data = try ImageData.loadImageFromFilePath("/home/eric/Downloads/36-1080-export-from-gimp.png", allocator);
-    defer image_data.deinit(allocator);
-
-    const half_width = @divFloor(image_data.width, 2);
-    const half_height = @divFloor(image_data.height, 2);
-    const cropped_image_data = try image_data.crop(
-        // Bottom-right corner (where the ammo count is)
-        half_width,
-        half_height,
-        image_data.width - half_width,
-        image_data.height - half_height,
-        allocator,
-    );
-    defer cropped_image_data.deinit(allocator);
-
-    try cropped_image_data.saveImageToFilePath("/home/eric/Downloads/36-1080-export-from-gimp-cropped.png", allocator);
+pub fn hsvPixelInRange(pixel: HSVPixel, lower_bound: HSVPixel, upper_bound: HSVPixel) bool {
+    return pixel.h >= lower_bound.h and pixel.h <= upper_bound.h and
+        pixel.s >= lower_bound.s and pixel.s <= upper_bound.s and
+        pixel.v >= lower_bound.v and pixel.v <= upper_bound.v;
 }
