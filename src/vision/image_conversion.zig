@@ -10,6 +10,29 @@ pub const RGBPixel = struct {
     g: f32,
     b: f32,
 
+    // We can do some extra checks for hard-coded values during compilation but let's
+    // avoid the overhead if someone is creating a pixel dynamically.
+    pub fn init(comptime r: f32, comptime g: f32, comptime b: f32) @This() {
+        if (r < 0.0 or r > 1.0) {
+            @compileLog("r=", r);
+            @compileError("When creating an RGBPixel, r must be in the range [0, 1]");
+        }
+        if (g < 0.0 or g > 1.0) {
+            @compileLog("g=", g);
+            @compileError("When creating an RGBPixel, g must be in the range [0, 1]");
+        }
+        if (b < 0.0 or b > 1.0) {
+            @compileLog("b=", b);
+            @compileError("When creating an RGBPixel, b must be in the range [0, 1]");
+        }
+
+        return .{
+            .r = r,
+            .g = g,
+            .b = b,
+        };
+    }
+
     /// Usage: RGBPixel.fromHexNumber(0x4ae728)
     pub fn fromHexNumber(hex_color: u24) RGBPixel {
         // Red channel:
@@ -97,6 +120,29 @@ pub const HSVPixel = struct {
     h: f32,
     s: f32,
     v: f32,
+
+    // We can do some extra checks for hard-coded values during compilation but let's
+    // avoid the overhead if someone is creating a pixel dynamically.
+    pub fn init(comptime h: f32, comptime s: f32, comptime v: f32) @This() {
+        if (h < 0.0 or h > 1.0) {
+            @compileLog("h=", h);
+            @compileError("When creating an HSVPixel, h must be in the range [0, 1]");
+        }
+        if (s < 0.0 or s > 1.0) {
+            @compileLog("s=", s);
+            @compileError("When creating an HSVPixel, s must be in the range [0, 1]");
+        }
+        if (v < 0.0 or v > 1.0) {
+            @compileLog("v=", v);
+            @compileError("When creating an HSVPixel, v must be in the range [0, 1]");
+        }
+
+        return .{
+            .h = h,
+            .s = s,
+            .v = v,
+        };
+    }
 };
 
 pub const RGBImage = struct {
@@ -151,9 +197,9 @@ pub const RGBImage = struct {
 
         for (img.pixels.rgb24, self.pixels) |*output_pixel, pixel| {
             output_pixel.* = zigimg.color.Rgb24{
-                .r = @as(u8, @as(u8, @intFromFloat(pixel.rgb.r * 255.0))),
-                .g = @as(u8, @as(u8, @intFromFloat(pixel.rgb.g * 255.0))),
-                .b = @as(u8, @as(u8, @intFromFloat(pixel.rgb.b * 255.0))),
+                .r = @as(u8, @as(u8, @intFromFloat(pixel.r * 255.0))),
+                .g = @as(u8, @as(u8, @intFromFloat(pixel.g * 255.0))),
+                .b = @as(u8, @as(u8, @intFromFloat(pixel.b * 255.0))),
             };
         }
 
@@ -190,6 +236,44 @@ pub const HSVImage = struct {
     height: usize,
     /// Row-major order (line by line)
     pixels: []const HSVPixel,
+
+    pub fn deinit(self: *const @This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.pixels);
+    }
+
+    pub fn saveImageToFilePath(self: *const @This(), image_file_path: []const u8, allocator: std.mem.Allocator) !void {
+        const rgb_image = try hsvToRgbImage(self.*, allocator);
+        defer rgb_image.deinit(allocator);
+
+        try rgb_image.saveImageToFilePath(
+            image_file_path,
+            allocator,
+        );
+    }
+
+    pub fn crop(
+        self: *const @This(),
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        allocator: std.mem.Allocator,
+    ) !@This() {
+        var output_hsv_pixels = try allocator.alloc(HSVPixel, width * height);
+        for (0..height) |crop_y| {
+            for (0..width) |crop_x| {
+                const src_x = x + crop_x;
+                const src_y = y + crop_y;
+                output_hsv_pixels[crop_y * width + crop_x] = self.pixels[src_y * self.width + src_x];
+            }
+        }
+
+        return .{
+            .width = width,
+            .height = height,
+            .pixels = output_hsv_pixels,
+        };
+    }
 };
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
@@ -292,6 +376,7 @@ pub fn hsvToRgbPixel(hsv_pixel: HSVPixel) RGBPixel {
         };
     }
 
+    // [0, 6]
     const h_scaled = hsv_pixel.h * 6.0;
     const h_scaled_floor = @floor(h_scaled);
     const fractional_part_of_h = h_scaled - h_scaled_floor;
@@ -378,7 +463,7 @@ test "rgbToHsvPixel and hsvToRgbPixel" {
     );
 }
 
-pub fn rgbToHsvImage(rgb_image: RGBImage, allocator: std.mem.Allocator) HSVImage {
+pub fn rgbToHsvImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !HSVImage {
     const output_hsv_pixels = try allocator.alloc(HSVPixel, rgb_image.pixels.len);
     for (output_hsv_pixels, rgb_image.pixels) |*output_hsv_pixel, rgb_pixel| {
         output_hsv_pixel.* = rgbToHsvPixel(rgb_pixel);
@@ -391,7 +476,7 @@ pub fn rgbToHsvImage(rgb_image: RGBImage, allocator: std.mem.Allocator) HSVImage
     };
 }
 
-pub fn hsvToRgbImage(hsv_image: HSVImage, allocator: std.mem.Allocator) RGBImage {
+pub fn hsvToRgbImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !RGBImage {
     const output_rgb_pixels = try allocator.alloc(RGBPixel, hsv_image.pixels.len);
     for (output_rgb_pixels, hsv_image.pixels) |*output_rgb_pixel, hsv_pixel| {
         output_rgb_pixel.* = hsvToRgbPixel(hsv_pixel);
@@ -408,4 +493,14 @@ pub fn hsvPixelInRange(pixel: HSVPixel, lower_bound: HSVPixel, upper_bound: HSVP
     return pixel.h >= lower_bound.h and pixel.h <= upper_bound.h and
         pixel.s >= lower_bound.s and pixel.s <= upper_bound.s and
         pixel.v >= lower_bound.v and pixel.v <= upper_bound.v;
+}
+
+test "hsvPixelInRange" {
+    try std.testing.expect(hsvPixelInRange(
+        HSVPixel{ .h = 6.60075366e-01, .s = 7.25409865e-01, .v = 9.56862747e-01 },
+        // OpenCV: (90, 34, 214)
+        HSVPixel.init(0.5, 0.133333, 0.839215),
+        // OpenCV: (152, 255, 255)
+        HSVPixel.init(0.844444, 1.0, 1.0),
+    ));
 }
