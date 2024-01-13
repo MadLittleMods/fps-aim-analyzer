@@ -219,9 +219,11 @@ test "findHaloChromaticAberrationText" {
     const rgb_image = try RGBImage.loadImageFromFilePath("screenshot-data/halo-infinite/1080/default/36.png", allocator);
     defer rgb_image.deinit(allocator);
 
+    const cropped_asdf = try cropImage(rgb_image, 500, 500, 12, 6, allocator);
+    defer cropped_asdf.deinit(allocator);
     try printLabeledImage(
         "rgb_image",
-        try cropImage(rgb_image, 500, 500, 12, 6, allocator),
+        cropped_asdf,
         allocator,
     );
 

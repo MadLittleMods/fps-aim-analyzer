@@ -3,6 +3,18 @@ const image_conversion = @import("../vision/image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
 const rgbToHsvImage = image_conversion.rgbToHsvImage;
 
+fn repeatString(string: []const u8, repeat: usize, allocator: std.mem.Allocator) ![]const u8 {
+    const resultant_string = try allocator.alloc(u8, repeat * string.len);
+    for (0..repeat) |repeat_index| {
+        for (0..string.len) |code_point_index| {
+            const current_code_point_index = repeat_index * string.len + code_point_index;
+            resultant_string[current_code_point_index] = string[code_point_index];
+        }
+    }
+
+    return resultant_string;
+}
+
 /// Add ANSI escape codes to around a given string to make it a certain RGB color in the terminal
 pub fn decorateStringWithAnsiColor(
     input_string: []const u8,
@@ -32,7 +44,11 @@ pub fn decorateStringWithAnsiColor(
             },
         );
     }
-    defer allocator.free(foreground_color_code_string);
+    defer {
+        if (optional_foreground_hex_color) |_| {
+            allocator.free(foreground_color_code_string);
+        }
+    }
 
     var background_color_code_string: []const u8 = "";
     if (optional_background_hex_color) |background_hex_color| {
@@ -55,7 +71,11 @@ pub fn decorateStringWithAnsiColor(
             },
         );
     }
-    defer allocator.free(background_color_code_string);
+    defer {
+        if (optional_background_hex_color) |_| {
+            allocator.free(background_color_code_string);
+        }
+    }
 
     var possible_combinator_string: []const u8 = "";
     if (optional_foreground_hex_color != null and optional_background_hex_color != null) {
@@ -139,25 +159,27 @@ fn getCharacterForPixelValue(
     };
 }
 
-/// Print an image to the terminal using unicode block characters to visualize the pixel
+/// Turn an image into a string of unicode block characters to visualize the pixel
 /// values.
-pub fn printImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
+pub fn allocPrintImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
     var width: usize = rgb_image.width;
     var height: usize = rgb_image.height;
 
     const hsv_image = try rgbToHsvImage(rgb_image, allocator);
     defer hsv_image.deinit(allocator);
 
-    std.debug.print("┌", .{});
-    for (0..width) |column_index| {
-        _ = column_index;
-        std.debug.print("──", .{});
+    const row_strings = try allocator.alloc([]const u8, height);
+    defer {
+        for (row_strings) |row_string| {
+            allocator.free(row_string);
+        }
+        allocator.free(row_strings);
     }
-    std.debug.print("┐\n", .{});
+
+    const pixel_strings = try allocator.alloc([]const u8, width);
+    defer allocator.free(pixel_strings);
 
     for (0..height) |row_index| {
-        std.debug.print("│", .{});
-
         const row_start_index = row_index * width;
         for (0..width) |column_index| {
             const pixel_index = row_start_index + column_index;
@@ -180,10 +202,10 @@ pub fn printImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
                 255 * (rgb_image.pixels[pixel_index].r * pixel_character.opacity_compensation_factor),
             );
             const g: u8 = @intFromFloat(
-                255 * (rgb_image.pixels[pixel_index].r * pixel_character.opacity_compensation_factor),
+                255 * (rgb_image.pixels[pixel_index].g * pixel_character.opacity_compensation_factor),
             );
             const b: u8 = @intFromFloat(
-                255 * (rgb_image.pixels[pixel_index].r * pixel_character.opacity_compensation_factor),
+                255 * (rgb_image.pixels[pixel_index].b * pixel_character.opacity_compensation_factor),
             );
 
             const colored_pixel_string = try decorateStringWithAnsiColor(
@@ -195,40 +217,81 @@ pub fn printImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
                 0x000000,
                 allocator,
             );
-            defer allocator.free(colored_pixel_string);
-            std.debug.print("{s}", .{
-                colored_pixel_string,
-            });
+            pixel_strings[column_index] = colored_pixel_string;
         }
-        std.debug.print("│\n", .{});
+
+        const pixel_row_string = try std.mem.concat(allocator, u8, pixel_strings);
+        defer {
+            // After we're done with the pixel strings, clean them up
+            for (pixel_strings) |pixel_string| {
+                allocator.free(pixel_string);
+            }
+
+            defer allocator.free(pixel_row_string);
+        }
+
+        row_strings[row_index] = try std.fmt.allocPrint(
+            allocator,
+            "|{s}|\n",
+            .{
+                pixel_row_string,
+            },
+        );
     }
 
-    std.debug.print("└", .{});
-    for (0..width) |column_index| {
-        _ = column_index;
-        std.debug.print("──", .{});
-    }
-    std.debug.print("┘\n", .{});
-}
+    const border_filler_string = try repeatString("─", width * 2, allocator);
+    defer allocator.free(border_filler_string);
+    const border_top_string = try std.fmt.allocPrint(allocator, "┌{s}┐\n", .{
+        border_filler_string,
+    });
+    defer allocator.free(border_top_string);
+    const border_bottom_string = try std.fmt.allocPrint(allocator, "└{s}┘", .{
+        border_filler_string,
+    });
+    defer allocator.free(border_bottom_string);
 
-fn repeatString(string: []const u8, repeat: usize, allocator: std.mem.Allocator) ![]const u8 {
-    const resultant_string = try allocator.alloc(u8, repeat * string.len);
-    for (0..repeat) |repeat_index| {
-        for (0..string.len) |code_point_index| {
-            const current_code_point_index = repeat_index * string.len + code_point_index;
-            resultant_string[current_code_point_index] = string[code_point_index];
-        }
-    }
+    const main_image_string = try std.mem.concat(allocator, u8, row_strings);
+    defer allocator.free(main_image_string);
+
+    const resultant_string = try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
+        border_top_string,
+        main_image_string,
+        border_bottom_string,
+    });
 
     return resultant_string;
+}
+
+/// Turn an image into a string of unicode block characters to visualize the pixel
+/// values with a label tag above it.
+pub fn allocPrintLabeledImage(label_string: []const u8, rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
+    const top_filler_string = try repeatString("─", label_string.len, allocator);
+    defer allocator.free(top_filler_string);
+
+    const image_string = try allocPrintImage(rgb_image, allocator);
+    defer allocator.free(image_string);
+
+    const resultant_string = try std.fmt.allocPrint(allocator, "┌─{s}─┐\n│ {s} │\n{s}", .{
+        top_filler_string,
+        label_string,
+        image_string,
+    });
+
+    return resultant_string;
+}
+
+/// Print an image to the terminal using unicode block characters to visualize the pixel
+/// values.
+pub fn printImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
+    const image_string = try allocPrintImage(rgb_image, allocator);
+    defer allocator.free(image_string);
+    std.debug.print("{s}", .{image_string});
 }
 
 /// Print an labeled image to the terminal using unicode block characters to visualize
 /// the pixel values.
 pub fn printLabeledImage(label_string: []const u8, rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
-    const top_filler_string = try repeatString("─", label_string.len, allocator);
-    defer allocator.free(top_filler_string);
-    std.debug.print("┌─{s}─┐\n", .{top_filler_string});
-    std.debug.print("│ {s} │\n", .{label_string});
-    try printImage(rgb_image, allocator);
+    const image_string = try allocPrintLabeledImage(label_string, rgb_image, allocator);
+    defer allocator.free(image_string);
+    std.debug.print("{s}", .{image_string});
 }
