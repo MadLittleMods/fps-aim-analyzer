@@ -159,9 +159,12 @@ fn getCharacterForPixelValue(
     };
 }
 
-/// Turn an image into a string of unicode block characters to visualize the pixel
-/// values.
-pub fn allocPrintImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
+/// Turn an image into a string of unicode block characters and ANSI escape codes to
+/// visualize the pixel values in a terminal. This uses block/shade characters so it's
+/// also useful for copy/pasting into a plain-text document like a README but also takes
+/// up a lot of space since we have to use 2 characers per pixel to maintain a decent
+/// aspect ratio.
+pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
     var width: usize = rgb_image.width;
     var height: usize = rgb_image.height;
 
@@ -210,7 +213,7 @@ pub fn allocPrintImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]con
 
             const colored_pixel_string = try decorateStringWithAnsiColor(
                 pixel_string,
-                // Create a white/grey color with the pixel value copied to every color channel.
+                // Assemble a hex color from the RGB values
                 (@as(u24, r) << 16) |
                     (@as(u24, g) << 8) |
                     (@as(u24, b) << 0),
@@ -261,13 +264,135 @@ pub fn allocPrintImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]con
     return resultant_string;
 }
 
+/// Turn an image into a string of unicode half-block characters and ANSI escape codes
+/// to visualize the pixel values in a terminal. This takes up half the
+/// horizontal/vertical realestate since we're able to pack in 1x2 pixels per character.
+///
+/// If you're looking for a plain-text copy/pasteable version, use `allocPrintImage`
+/// which uses full-block/shade characeters but at the cost of taking up more
+/// horizontal/vertical realestate.
+pub fn allocPrintHalfBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
+    var width: usize = rgb_image.width;
+    var height: usize = rgb_image.height;
+
+    const half_height_rows: usize = @intFromFloat(@ceil(@as(f32, @floatFromInt(height)) / 2.0));
+    const row_strings = try allocator.alloc([]const u8, half_height_rows);
+    defer {
+        for (row_strings) |row_string| {
+            allocator.free(row_string);
+        }
+        allocator.free(row_strings);
+    }
+
+    const pixel_strings = try allocator.alloc([]const u8, width);
+    defer allocator.free(pixel_strings);
+
+    var row_index: usize = 0;
+    var pixel_row_index: usize = 0;
+    while (pixel_row_index < height) : ({
+        row_index += 1;
+        pixel_row_index += 2;
+    }) {
+        const pixel_row_start_index1 = pixel_row_index * width;
+        const pixel_row_start_index2 = (pixel_row_index + 1) * width;
+        for (0..width) |column_index| {
+            const pixel_index1 = pixel_row_start_index1 + column_index;
+            const pixel_index2 = pixel_row_start_index2 + column_index;
+
+            const r1: u8 = @intFromFloat(255 * rgb_image.pixels[pixel_index1].r);
+            const g1: u8 = @intFromFloat(255 * rgb_image.pixels[pixel_index1].g);
+            const b1: u8 = @intFromFloat(255 * rgb_image.pixels[pixel_index1].b);
+
+            const r2: u8 = if (pixel_row_index + 1 < height) @intFromFloat(255 * rgb_image.pixels[pixel_index2].r) else 0;
+            const g2: u8 = if (pixel_row_index + 1 < height) @intFromFloat(255 * rgb_image.pixels[pixel_index2].g) else 0;
+            const b2: u8 = if (pixel_row_index + 1 < height) @intFromFloat(255 * rgb_image.pixels[pixel_index2].b) else 0;
+
+            const colored_pixel_string = try decorateStringWithAnsiColor(
+                "\u{2584}",
+                // Assemble a hex color from the RGB values
+                (@as(u24, r2) << 16) |
+                    (@as(u24, g2) << 8) |
+                    (@as(u24, b2) << 0),
+                (@as(u24, r1) << 16) |
+                    (@as(u24, g1) << 8) |
+                    (@as(u24, b1) << 0),
+                allocator,
+            );
+            pixel_strings[column_index] = colored_pixel_string;
+        }
+
+        const pixel_row_string = try std.mem.concat(allocator, u8, pixel_strings);
+        defer allocator.free(pixel_row_string);
+        defer {
+            // After we're done with the pixel strings, clean them up
+            for (pixel_strings) |pixel_string| {
+                allocator.free(pixel_string);
+            }
+        }
+
+        row_strings[row_index] = try std.fmt.allocPrint(
+            allocator,
+            "|{s}|\n",
+            .{
+                pixel_row_string,
+            },
+        );
+    }
+
+    const border_filler_string = try repeatString("─", width, allocator);
+    defer allocator.free(border_filler_string);
+    const border_top_string = try std.fmt.allocPrint(allocator, "┌{s}┐\n", .{
+        border_filler_string,
+    });
+    defer allocator.free(border_top_string);
+    const border_bottom_string = try std.fmt.allocPrint(allocator, "└{s}┘", .{
+        border_filler_string,
+    });
+    defer allocator.free(border_bottom_string);
+
+    const main_image_string = try std.mem.concat(allocator, u8, row_strings);
+    defer allocator.free(main_image_string);
+
+    const resultant_string = try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
+        border_top_string,
+        main_image_string,
+        border_bottom_string,
+    });
+
+    return resultant_string;
+}
+
+pub const PrintType = enum {
+    /// Print using full block/shade characters. This gives nice plain-text
+    /// copy/pasteable output but takes up a lot of horizontal/vertical realestate since
+    /// we use 2 characers per pixel to maintain a decent aspect ratio.
+    full_block,
+    /// Print using half block/shade characters. This takes up half the
+    /// horizontal/vertical realestate since we're able to pack in 1x2 pixels per
+    /// character.
+    half_block,
+    // TODO: Print using the kitty graphics protocol instead of unicode block characters
+};
+
+pub fn allocPrintImage(rgb_image: RGBImage, print_type: PrintType, allocator: std.mem.Allocator) ![]const u8 {
+    return switch (print_type) {
+        .full_block => allocPrintBlockImage(rgb_image, allocator),
+        .half_block => allocPrintHalfBlockImage(rgb_image, allocator),
+    };
+}
+
 /// Turn an image into a string of unicode block characters to visualize the pixel
 /// values with a label tag above it.
-pub fn allocPrintLabeledImage(label_string: []const u8, rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
+pub fn allocPrintLabeledImage(
+    label_string: []const u8,
+    rgb_image: RGBImage,
+    print_type: PrintType,
+    allocator: std.mem.Allocator,
+) ![]const u8 {
     const top_filler_string = try repeatString("─", label_string.len, allocator);
     defer allocator.free(top_filler_string);
 
-    const image_string = try allocPrintImage(rgb_image, allocator);
+    const image_string = try allocPrintImage(rgb_image, print_type, allocator);
     defer allocator.free(image_string);
 
     const resultant_string = try std.fmt.allocPrint(allocator, "┌─{s}─┐\n│ {s} │\n{s}", .{
@@ -281,16 +406,26 @@ pub fn allocPrintLabeledImage(label_string: []const u8, rgb_image: RGBImage, all
 
 /// Print an image to the terminal using unicode block characters to visualize the pixel
 /// values.
-pub fn printImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
-    const image_string = try allocPrintImage(rgb_image, allocator);
+pub fn printImage(rgb_image: RGBImage, print_type: PrintType, allocator: std.mem.Allocator) !void {
+    const image_string = try allocPrintImage(rgb_image, print_type, allocator);
     defer allocator.free(image_string);
     std.debug.print("\n{s}", .{image_string});
 }
 
 /// Print an labeled image to the terminal using unicode block characters to visualize
 /// the pixel values.
-pub fn printLabeledImage(label_string: []const u8, rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
-    const image_string = try allocPrintLabeledImage(label_string, rgb_image, allocator);
+pub fn printLabeledImage(
+    label_string: []const u8,
+    rgb_image: RGBImage,
+    print_type: PrintType,
+    allocator: std.mem.Allocator,
+) !void {
+    const image_string = try allocPrintLabeledImage(
+        label_string,
+        rgb_image,
+        print_type,
+        allocator,
+    );
     defer allocator.free(image_string);
     std.debug.print("\n{s}", .{image_string});
 }

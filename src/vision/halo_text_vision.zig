@@ -426,6 +426,7 @@ test "findHaloChromaticAberrationText" {
             try printLabeledImage(
                 test_case.label,
                 cropped_image,
+                .full_block,
                 allocator,
             );
 
@@ -468,22 +469,26 @@ test "asdf" {
     defer rgb_image.deinit(allocator);
 
     const half_width = @divFloor(rgb_image.width, 2);
+    _ = half_width;
     const half_height = @divFloor(rgb_image.height, 2);
+    _ = half_height;
     const cropped_rgb_image = try cropImage(
         rgb_image,
         // Bottom-right corner (where the ammo count is)
-        half_width,
-        half_height,
-        rgb_image.width - half_width,
-        rgb_image.height - half_height,
+        // half_width,
+        // half_height,
+        // rgb_image.width - half_width,
+        // rgb_image.height - half_height,
         // Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
-        // 1410,
-        // 877,
-        // 40,
-        // 26,
+        1410,
+        877,
+        40,
+        26,
         allocator,
     );
     defer cropped_rgb_image.deinit(allocator);
+
+    try printLabeledImage("asdf", cropped_rgb_image, .half_block, allocator);
 
     try cropped_rgb_image.saveImageToFilePath("/home/eric/Downloads/36-1080-export-from-gimp-cropped.png", allocator);
 
