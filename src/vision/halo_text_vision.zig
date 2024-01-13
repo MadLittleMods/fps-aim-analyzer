@@ -91,19 +91,15 @@ pub fn checkForChromaticAberrationConditionInHsvPixel(hsv_pixel: HSVPixel, condi
     };
 }
 
+/// Checks for a series of blue, cyan, yellow, red pixels in order within a buffer which
+/// indicates the chromatic aberration text in Halo.
 pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPixel) bool {
     // We want to check to see that the following conditions are met in order
     var conditions = std.EnumArray(ChromaticAberrationCondition, bool).initDefault(false, .{});
     const num_conditions = @typeInfo(ChromaticAberrationCondition).Enum.fields.len;
 
-    std.debug.print("\ncheckForChromaticAberrationInPixelBuffer {}", .{hsv_pixel_buffer.len});
-
     // There aren't enough pixel values to meet all of the conditions so we can stop early
     if (hsv_pixel_buffer.len < num_conditions) {
-        std.debug.print("\n\tNot enough pixels in buffer {} meet all conditions {}", .{
-            hsv_pixel_buffer.len,
-            num_conditions,
-        });
         return false;
     }
 
@@ -117,22 +113,9 @@ pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPix
             return true;
         }
 
-        std.debug.print("\n\tconditions {any}, next condition {s}, checking hsv pixel ({}, {}, {})", .{
-            conditions.values,
-            if (optional_next_unmet_condition) |next_unmet_condition| @tagName(next_unmet_condition) else "none",
-            hsv_pixel.h,
-            hsv_pixel.s,
-            hsv_pixel.v,
-        });
-
         // There aren't enough pixel values left to meet all of the conditions so we can
         // stop early
         if (hsv_pixel_buffer.len - pixel_index < num_conditions_left) {
-            std.debug.print("\n\tNot enough pixels left to meet all conditions ({}/{}) and {} conditions are left", .{
-                pixel_index,
-                hsv_pixel_buffer.len,
-                num_conditions_left,
-            });
             return false;
         }
 
@@ -148,10 +131,6 @@ pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPix
         }
     }
 
-    std.debug.print("\n\tconditions {any}", .{
-        conditions.values,
-    });
-
     // Check that all conditions are met after looping through the buffer
     var condition_iterator = conditions.iterator();
     while (condition_iterator.next()) |entry| {
@@ -164,7 +143,6 @@ pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPix
 }
 
 pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.Allocator) !HSVImage {
-    std.debug.print("\n\n\nfindHaloChromaticAberrationText\n======================", .{});
     const output_hsv_pixels = try allocator.alloc(HSVPixel, hsv_image.pixels.len);
     @memset(output_hsv_pixels, HSVPixel{ .h = 0, .s = 0, .v = 0 });
 
@@ -173,7 +151,6 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
     const buffer_size: usize = 6;
 
     // Look for Chromatic Aberration in the rows
-    std.debug.print("\nfindHaloChromaticAberrationText in rows {}x{}", .{ hsv_image.width, hsv_image.height });
     for (0..hsv_image.height) |y| {
         const row_start_pixel_index = y * hsv_image.width;
         const row_end_pixel_index = row_start_pixel_index + hsv_image.width;
@@ -204,7 +181,6 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
     }
 
     // Look for Chromatic Aberration in the columns
-    std.debug.print("\n\nfindHaloChromaticAberrationText in columns {}x{}", .{ hsv_image.width, hsv_image.height });
     var column_pixel_buffer = try allocator.alloc(HSVPixel, buffer_size);
     defer allocator.free(column_pixel_buffer);
     for (0..hsv_image.width) |x| {
@@ -240,6 +216,46 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
         .height = hsv_image.height,
         .pixels = output_hsv_pixels,
     };
+}
+
+/// Assemble a string showing which chromatic aberration conditions are met for a given pixel
+fn debugStringConditionsForPixel(hsv_pixel: HSVPixel, allocator: std.mem.Allocator) ![]const u8 {
+    // Go over each pixel and make a little map showing which conditions are met
+    const fields = @typeInfo(ChromaticAberrationCondition).Enum.fields;
+    const condition_strings = try allocator.alloc([]const u8, fields.len);
+    defer allocator.free(condition_strings);
+    inline for (fields, 0..) |field, field_index| {
+        const passes_condition = checkForChromaticAberrationConditionInHsvPixel(
+            hsv_pixel,
+            @field(ChromaticAberrationCondition, field.name),
+        );
+        condition_strings[field_index] = try decorateStringWithAnsiColor(
+            if (passes_condition) "\u{29BF}" else " ",
+            switch (@field(ChromaticAberrationCondition, field.name)) {
+                .blue => 0x3383ff,
+                .cyan => 0x35f5ff,
+                .yellow => 0xd9f956,
+                .red => 0xf95656,
+            },
+            null,
+            allocator,
+        );
+    }
+
+    // Combine the condition strings into a single string
+    const condition_status_string = try std.mem.join(
+        allocator,
+        " ",
+        condition_strings,
+    );
+    // After we're done with the condition strings, clean them up
+    defer {
+        for (condition_strings) |condition_string| {
+            allocator.free(condition_string);
+        }
+    }
+
+    return condition_status_string;
 }
 
 const FindHaloChromaticAberrationTextTestCase = struct {
@@ -403,6 +419,8 @@ test "findHaloChromaticAberrationText" {
             }
         }
 
+        // Return an error if no chromatic aberration was found and print out useful
+        // debugging information
         if (!found_chromatic_aberration) {
             // Print a nice image to give some better context on what failed
             try printLabeledImage(
@@ -411,45 +429,12 @@ test "findHaloChromaticAberrationText" {
                 allocator,
             );
 
+            // Print a list of pixels in the image and which conditions each pixel meets
             for (hsv_image.pixels, 0..) |pixel, pixel_index| {
-                // Go over each pixel and make a little map showing which conditions are met
-                const fields = @typeInfo(ChromaticAberrationCondition).Enum.fields;
-                const condition_strings = try allocator.alloc([]const u8, fields.len);
-                defer allocator.free(condition_strings);
-                inline for (fields, 0..) |field, field_index| {
-                    const passes_condition = checkForChromaticAberrationConditionInHsvPixel(
-                        pixel,
-                        @field(ChromaticAberrationCondition, field.name),
-                    );
-                    condition_strings[field_index] = try decorateStringWithAnsiColor(
-                        if (passes_condition) "\u{29BF}" else " ",
-                        switch (@field(ChromaticAberrationCondition, field.name)) {
-                            .blue => 0x3383ff,
-                            .cyan => 0x35f5ff,
-                            .yellow => 0xd9f956,
-                            .red => 0xf95656,
-                        },
-                        null,
-                        allocator,
-                    );
-                }
-
-                // Combine the condition strings into a single string
-                const condition_status_string = try std.mem.join(
-                    allocator,
-                    " ",
-                    condition_strings,
-                );
+                const condition_status_string = try debugStringConditionsForPixel(pixel, allocator);
                 defer allocator.free(condition_status_string);
-                // After we're done with the pixel strings, clean them up
-                defer {
-                    for (condition_strings) |condition_string| {
-                        allocator.free(condition_string);
-                    }
-                }
 
-                // Print a list of pixels in the image and which conditions each pixel meets
-                std.debug.print("\n\t{}: HSV({}, {}, {}) {s}", .{
+                std.debug.print("\n\t{d: >3}: HSV({d:.6}, {d:.6}, {d:.6}) {s}", .{
                     pixel_index,
                     pixel.h,
                     pixel.s,
@@ -483,25 +468,19 @@ test "asdf" {
     defer rgb_image.deinit(allocator);
 
     const half_width = @divFloor(rgb_image.width, 2);
-    _ = half_width;
     const half_height = @divFloor(rgb_image.height, 2);
-    _ = half_height;
     const cropped_rgb_image = try cropImage(
         rgb_image,
         // Bottom-right corner (where the ammo count is)
-        // half_width,
-        // half_height,
-        // rgb_image.width - half_width,
-        // rgb_image.height - half_height,
+        half_width,
+        half_height,
+        rgb_image.width - half_width,
+        rgb_image.height - half_height,
         // Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
         // 1410,
         // 877,
         // 40,
         // 26,
-        1437,
-        897,
-        7,
-        6,
         allocator,
     );
     defer cropped_rgb_image.deinit(allocator);
