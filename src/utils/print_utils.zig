@@ -221,13 +221,12 @@ pub fn allocPrintImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]con
         }
 
         const pixel_row_string = try std.mem.concat(allocator, u8, pixel_strings);
+        defer allocator.free(pixel_row_string);
         defer {
             // After we're done with the pixel strings, clean them up
             for (pixel_strings) |pixel_string| {
                 allocator.free(pixel_string);
             }
-
-            defer allocator.free(pixel_row_string);
         }
 
         row_strings[row_index] = try std.fmt.allocPrint(
@@ -285,7 +284,7 @@ pub fn allocPrintLabeledImage(label_string: []const u8, rgb_image: RGBImage, all
 pub fn printImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
     const image_string = try allocPrintImage(rgb_image, allocator);
     defer allocator.free(image_string);
-    std.debug.print("{s}", .{image_string});
+    std.debug.print("\n{s}", .{image_string});
 }
 
 /// Print an labeled image to the terminal using unicode block characters to visualize
@@ -293,5 +292,5 @@ pub fn printImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
 pub fn printLabeledImage(label_string: []const u8, rgb_image: RGBImage, allocator: std.mem.Allocator) !void {
     const image_string = try allocPrintLabeledImage(label_string, rgb_image, allocator);
     defer allocator.free(image_string);
-    std.debug.print("{s}", .{image_string});
+    std.debug.print("\n{s}", .{image_string});
 }
