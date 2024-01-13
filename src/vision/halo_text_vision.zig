@@ -3,9 +3,12 @@ const image_conversion = @import("image_conversion.zig");
 const HSVPixel = image_conversion.HSVPixel;
 const HSVImage = image_conversion.HSVImage;
 const RGBImage = image_conversion.RGBImage;
+const cropImage = image_conversion.cropImage;
 const rgbToHsvImage = image_conversion.rgbToHsvImage;
 const hsvToRgbImage = image_conversion.hsvToRgbImage;
+const hsvToBinaryImage = image_conversion.hsvToBinaryImage;
 const hsvPixelInRange = image_conversion.hsvPixelInRange;
+const printLabeledImage = @import("../utils/print_utils.zig").printLabeledImage;
 
 pub const ChromaticAberrationCondition = enum {
     blue,
@@ -52,6 +55,8 @@ pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPix
         return false;
     }
 
+    std.debug.print("\ncheckForChromaticAberrationInPixelBuffer", .{});
+
     for (hsv_pixel_buffer, 0..) |hsv_pixel, pixel_index| {
         const possible_condition = _findNextUnmetCondition(conditions);
         const optional_next_unmet_condition = possible_condition.next_unmet_condition;
@@ -62,9 +67,22 @@ pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPix
             return true;
         }
 
+        std.debug.print("\n\tconditions {any}, next condition {s}, checking hsv pixel ({}, {}, {})", .{
+            conditions.values,
+            if (optional_next_unmet_condition) |next_unmet_condition| @tagName(next_unmet_condition) else "none",
+            hsv_pixel.h,
+            hsv_pixel.s,
+            hsv_pixel.v,
+        });
+
         // There aren't enough pixel values left to meet all of the conditions so we can
         // stop early
         if (hsv_pixel_buffer.len - pixel_index < num_conditions_left) {
+            std.debug.print("\n\tNot enough pixels left to meet all conditions ({}/{}) and {} conditions are left", .{
+                pixel_index,
+                hsv_pixel_buffer.len,
+                num_conditions_left,
+            });
             return false;
         }
 
@@ -77,8 +95,8 @@ pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPix
                     //  - s: [0, 255]
                     //  - v: [0, 255]
                     //
-                    // OpenCV: (90, 34, 214)
-                    HSVPixel.init(0.5, 0.133333, 0.839215),
+                    // OpenCV: (90, 34, 190)
+                    HSVPixel.init(0.5, 0.133333, 0.745098),
                     // OpenCV: (152, 255, 255)
                     HSVPixel.init(0.844444, 1.0, 1.0),
                 )),
@@ -98,14 +116,14 @@ pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPix
                 )),
                 .red => conditions.set(.red, hsvPixelInRange(
                     hsv_pixel,
-                    // OpenCV: (0, 50, 146)
-                    HSVPixel.init(0.0, 0.196078, 0.572549),
+                    // OpenCV: (0, 50, 130)
+                    HSVPixel.init(0.0, 0.196078, 0.509803),
                     // OpenCV: (14, 185, 255)
                     HSVPixel.init(0.077777, 0.725490, 1.0),
                 ) or hsvPixelInRange(
                     hsv_pixel,
-                    // OpenCV: (155, 56, 138)
-                    HSVPixel.init(0.861111, 0.219607, 0.541176),
+                    // OpenCV: (155, 51, 138)
+                    HSVPixel.init(0.861111, 0.2, 0.541176),
                     // OpenCV: (180, 202, 255)
                     HSVPixel.init(1.0, 0.792156, 1.0),
                 )),
@@ -157,41 +175,65 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
         }
     }
 
-    // Look for Chromatic Aberration in the columns
-    var column_pixel_buffer = try allocator.alloc(HSVPixel, buffer_size);
-    defer allocator.free(column_pixel_buffer);
-    for (0..hsv_image.width) |x| {
-        const last_pixel_in_column_index = (hsv_image.width * hsv_image.height) - (hsv_image.width - x);
-        for (0..hsv_image.height) |y| {
-            // Look at the next X pixels in the column
-            var buffer_end_index: usize = 0;
-            for (0..buffer_size) |i| {
-                const current_pixel_index = (y + i) * hsv_image.width + x;
-                // Make sure to not over-run the end of the column
-                if (current_pixel_index >= last_pixel_in_column_index) {
-                    break;
-                }
-                column_pixel_buffer[i] = hsv_image.pixels[current_pixel_index];
-                buffer_end_index = i;
-            }
+    const total_pixels_in_image = hsv_image.width * hsv_image.height;
+    _ = total_pixels_in_image;
 
-            // Check if the pixels in the buffer match the chromatic aberration pattern
-            const has_chromatic_aberration = checkForChromaticAberrationInPixelBuffer(column_pixel_buffer[0..buffer_end_index]);
-            if (has_chromatic_aberration) {
-                // Copy the pixels that match the chromatic aberration pattern from the buffer into the output
-                for (0..buffer_end_index) |i| {
-                    const current_pixel_index = (y + i) * hsv_image.width + x;
-                    output_hsv_pixels[current_pixel_index] = hsv_image.pixels[current_pixel_index];
-                }
-            }
-        }
-    }
+    // Look for Chromatic Aberration in the columns
+    // var column_pixel_buffer = try allocator.alloc(HSVPixel, buffer_size);
+    // defer allocator.free(column_pixel_buffer);
+    // for (0..hsv_image.width) |x| {
+    //     for (0..hsv_image.height) |y| {
+    //         // Look at the next X pixels in the column
+    //         var buffer_end_index: usize = 0;
+    //         for (0..buffer_size) |i| {
+    //             const current_pixel_index = ((y + i) * hsv_image.width) + x;
+    //             // Make sure to not over-run the end of the column
+    //             if (current_pixel_index >= total_pixels_in_image) {
+    //                 buffer_end_index = i;
+    //                 break;
+    //             }
+    //             column_pixel_buffer[i] = hsv_image.pixels[current_pixel_index];
+    //         }
+
+    //         // Check if the pixels in the buffer match the chromatic aberration pattern
+    //         const has_chromatic_aberration = checkForChromaticAberrationInPixelBuffer(column_pixel_buffer[0..buffer_end_index]);
+    //         if (has_chromatic_aberration) {
+    //             // Copy the pixels that match the chromatic aberration pattern from the buffer into the output
+    //             for (0..buffer_end_index) |i| {
+    //                 const current_pixel_index = (y + i) * hsv_image.width + x;
+    //                 output_hsv_pixels[current_pixel_index] = hsv_image.pixels[current_pixel_index];
+    //             }
+    //         }
+    //     }
+    // }
 
     return .{
         .width = hsv_image.width,
         .height = hsv_image.height,
         .pixels = output_hsv_pixels,
     };
+}
+
+test "findHaloChromaticAberrationText" {
+    const allocator = std.testing.allocator;
+    const rgb_image = try RGBImage.loadImageFromFilePath("screenshot-data/halo-infinite/1080/default/36.png", allocator);
+    defer rgb_image.deinit(allocator);
+
+    try printLabeledImage(
+        "rgb_image",
+        try cropImage(rgb_image, 500, 500, 12, 6, allocator),
+        allocator,
+    );
+
+    const hsv_image = try rgbToHsvImage(rgb_image, allocator);
+    defer hsv_image.deinit(allocator);
+
+    // const chromatic_pattern_hsv_img = try findHaloChromaticAberrationText(hsv_image, allocator);
+    // defer chromatic_pattern_hsv_img.deinit(allocator);
+    // const chromatic_pattern_binary_mask = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
+    // defer chromatic_pattern_binary_mask.deinit(allocator);
+
+    // cropImage(chromatic_pattern_binary_mask,)
 }
 
 test "asdf" {
@@ -214,18 +256,25 @@ test "asdf" {
     defer rgb_image.deinit(allocator);
 
     const half_width = @divFloor(rgb_image.width, 2);
+    _ = half_width;
     const half_height = @divFloor(rgb_image.height, 2);
-    const cropped_rgb_image = try rgb_image.crop(
+    _ = half_height;
+    const cropped_rgb_image = try cropImage(
+        rgb_image,
         // Bottom-right corner (where the ammo count is)
-        half_width,
-        half_height,
-        rgb_image.width - half_width,
-        rgb_image.height - half_height,
+        // half_width,
+        // half_height,
+        // rgb_image.width - half_width,
+        // rgb_image.height - half_height,
         // Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
         // 1410,
         // 877,
         // 40,
         // 26,
+        1437,
+        897,
+        7,
+        6,
         allocator,
     );
     defer cropped_rgb_image.deinit(allocator);

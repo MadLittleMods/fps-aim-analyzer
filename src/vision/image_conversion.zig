@@ -57,18 +57,6 @@ pub const RGBPixel = struct {
     }
 };
 
-fn testRgbApproxEqAbs(expected: RGBPixel, actual: RGBPixel, tolerance: f32) !void {
-    try std.testing.expectApproxEqAbs(expected.r, actual.r, tolerance);
-    try std.testing.expectApproxEqAbs(expected.g, actual.g, tolerance);
-    try std.testing.expectApproxEqAbs(expected.b, actual.b, tolerance);
-}
-
-fn testHsvApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !void {
-    try std.testing.expectApproxEqAbs(expected.h, actual.h, tolerance);
-    try std.testing.expectApproxEqAbs(expected.s, actual.s, tolerance);
-    try std.testing.expectApproxEqAbs(expected.v, actual.v, tolerance);
-}
-
 test "RGBPixel.fromHexNumber" {
     // White
     try testRgbApproxEqAbs(
@@ -145,6 +133,26 @@ pub const HSVPixel = struct {
     }
 };
 
+pub const GrayscalePixel = struct {
+    value: f32,
+};
+
+pub const BinaryPixel = struct {
+    value: bool,
+};
+
+fn testRgbApproxEqAbs(expected: RGBPixel, actual: RGBPixel, tolerance: f32) !void {
+    try std.testing.expectApproxEqAbs(expected.r, actual.r, tolerance);
+    try std.testing.expectApproxEqAbs(expected.g, actual.g, tolerance);
+    try std.testing.expectApproxEqAbs(expected.b, actual.b, tolerance);
+}
+
+fn testHsvApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !void {
+    try std.testing.expectApproxEqAbs(expected.h, actual.h, tolerance);
+    try std.testing.expectApproxEqAbs(expected.s, actual.s, tolerance);
+    try std.testing.expectApproxEqAbs(expected.v, actual.v, tolerance);
+}
+
 pub const RGBImage = struct {
     width: usize,
     height: usize,
@@ -171,7 +179,28 @@ pub const RGBImage = struct {
                     };
                 }
             },
-            else => {
+            .rgba32 => |rgb_pixels| {
+                for (rgb_pixels, output_rgb_pixels, 0..) |pixel, *output_rgb_pixel, pixel_index| {
+                    const zigimg_color_f32 = pixel.toColorf32();
+                    // As long as the image isn't transparent, we can just ignore the
+                    // alpha and carry on like normal.
+                    if (zigimg_color_f32.a != 1.0) {
+                        std.log.err("Image contains transparent pixel at {} which we don't support {}", .{
+                            pixel_index,
+                            zigimg_color_f32,
+                        });
+                        return error.UnsupportedPixelTransparency;
+                    }
+                    output_rgb_pixel.* = RGBPixel{
+                        .r = zigimg_color_f32.r,
+                        .g = zigimg_color_f32.g,
+                        .b = zigimg_color_f32.b,
+                    };
+                }
+            },
+            inline else => |pixels, tag| {
+                _ = pixels;
+                std.log.err("Unsupported pixel format: {s}", .{@tagName(tag)});
                 return error.UnsupportedPixelFormat;
             },
         }
@@ -205,30 +234,6 @@ pub const RGBImage = struct {
 
         try img.writeToFilePath(image_file_path, .{ .png = .{} });
     }
-
-    pub fn crop(
-        self: *const @This(),
-        x: usize,
-        y: usize,
-        width: usize,
-        height: usize,
-        allocator: std.mem.Allocator,
-    ) !@This() {
-        var output_rgb_pixels = try allocator.alloc(RGBPixel, width * height);
-        for (0..height) |crop_y| {
-            for (0..width) |crop_x| {
-                const src_x = x + crop_x;
-                const src_y = y + crop_y;
-                output_rgb_pixels[crop_y * width + crop_x] = self.pixels[src_y * self.width + src_x];
-            }
-        }
-
-        return .{
-            .width = width,
-            .height = height,
-            .pixels = output_rgb_pixels,
-        };
-    }
 };
 
 pub const HSVImage = struct {
@@ -250,31 +255,54 @@ pub const HSVImage = struct {
             allocator,
         );
     }
+};
 
-    pub fn crop(
-        self: *const @This(),
-        x: usize,
-        y: usize,
-        width: usize,
-        height: usize,
-        allocator: std.mem.Allocator,
-    ) !@This() {
-        var output_hsv_pixels = try allocator.alloc(HSVPixel, width * height);
-        for (0..height) |crop_y| {
-            for (0..width) |crop_x| {
-                const src_x = x + crop_x;
-                const src_y = y + crop_y;
-                output_hsv_pixels[crop_y * width + crop_x] = self.pixels[src_y * self.width + src_x];
-            }
-        }
+pub const GrayscaleImage = struct {
+    width: usize,
+    height: usize,
+    /// Row-major order (line by line)
+    pixels: []const GrayscalePixel,
 
-        return .{
-            .width = width,
-            .height = height,
-            .pixels = output_hsv_pixels,
-        };
+    pub fn deinit(self: *const @This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.pixels);
     }
 };
+
+pub const BinaryImage = struct {
+    width: usize,
+    height: usize,
+    /// Row-major order (line by line)
+    pixels: []const BinaryPixel,
+
+    pub fn deinit(self: *const @This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.pixels);
+    }
+};
+
+pub fn cropImage(
+    image: anytype,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    allocator: std.mem.Allocator,
+) !@TypeOf(image) {
+    const PixelType = @TypeOf(image.pixels[0]);
+    var output_pixels = try allocator.alloc(PixelType, width * height);
+    for (0..height) |crop_y| {
+        for (0..width) |crop_x| {
+            const src_x = x + crop_x;
+            const src_y = y + crop_y;
+            output_pixels[crop_y * width + crop_x] = image.pixels[src_y * image.width + src_x];
+        }
+    }
+
+    return .{
+        .width = width,
+        .height = height,
+        .pixels = output_pixels,
+    };
+}
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
 // [0, 360) if we want degrees or [0, 1) if we want it normalized.
@@ -486,6 +514,21 @@ pub fn hsvToRgbImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !RGBImag
         .width = hsv_image.width,
         .height = hsv_image.height,
         .pixels = output_rgb_pixels,
+    };
+}
+
+pub fn hsvToBinaryImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !BinaryImage {
+    const output_binary_pixels = try allocator.alloc(BinaryPixel, hsv_image.pixels.len);
+    for (output_binary_pixels, hsv_image.pixels) |*output_binary_pixel, hsv_pixel| {
+        output_binary_pixel.* = BinaryPixel{
+            .value = hsv_pixel.v > 0.0,
+        };
+    }
+
+    return .{
+        .width = hsv_image.width,
+        .height = hsv_image.height,
+        .pixels = output_binary_pixels,
     };
 }
 
