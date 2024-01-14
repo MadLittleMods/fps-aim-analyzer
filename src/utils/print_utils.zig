@@ -266,11 +266,11 @@ pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !
 
 /// Turn an image into a string of unicode half-block characters and ANSI escape codes
 /// to visualize the pixel values in a terminal. This takes up half the
-/// horizontal/vertical realestate since we're able to pack in 1x2 pixels per character.
+/// horizontal/vertical real estate since we're able to pack in 1x2 pixels per character.
 ///
 /// If you're looking for a plain-text copy/pasteable version, use `allocPrintImage`
 /// which uses full-block/shade characeters but at the cost of taking up more
-/// horizontal/vertical realestate.
+/// horizontal/vertical real estate.
 pub fn allocPrintHalfBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
     var width: usize = rgb_image.width;
     var height: usize = rgb_image.height;
@@ -364,14 +364,15 @@ pub fn allocPrintHalfBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocato
 
 pub const PrintType = enum {
     /// Print using full block/shade characters. This gives nice plain-text
-    /// copy/pasteable output but takes up a lot of horizontal/vertical realestate since
-    /// we use 2 characers per pixel to maintain a decent aspect ratio.
+    /// copy/pasteable output but takes up a lot of horizontal/vertical real estate since
+    /// we use 2 characters per pixel to maintain a decent aspect ratio.
     full_block,
-    /// Print using half block/shade characters. This takes up half the
-    /// horizontal/vertical realestate since we're able to pack in 1x2 pixels per
-    /// character.
+    /// Print using half block characters. This takes up half the horizontal/vertical
+    /// real estate since we're able to pack in 1x2 pixels per character.
     half_block,
-    // TODO: Print using the kitty graphics protocol instead of unicode block characters
+    // TODO: Print using the kitty graphics protocol (seems the most widely supported)
+    // TODO: Print using the iTerm2 graphics protocol, https://iterm2.com/documentation-images.html
+    // TODO: Print using Sixel graphic data
 };
 
 pub fn allocPrintImage(rgb_image: RGBImage, print_type: PrintType, allocator: std.mem.Allocator) ![]const u8 {
