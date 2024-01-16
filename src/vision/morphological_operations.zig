@@ -62,12 +62,7 @@ pub fn getStructuringElement(
             // Based on https://stackoverflow.com/questions/59971407/how-can-i-test-if-a-point-is-in-an-ellipse/65601453#65601453
             const radius_x = center_x;
             const radius_y = center_y;
-            // FIXME: This doesn't work well because this ratio is integer rounded (even to 0 in some cases)
-            const y_axis_ratio = radius_x / radius_y;
             const squared_radius = radius_x * radius_x;
-            std.debug.print("\nellipse center ({}, {}), radius_x={}, radius_y={}", .{
-                center_x, center_y, radius_x, radius_y,
-            });
 
             for (0..height) |y| {
                 const row_start_index = y * width;
@@ -76,21 +71,17 @@ pub fn getStructuringElement(
 
                     // Absolute difference between the pixel and the center of the ellipse
                     const dx = if (x > center_x) x - center_x else center_x - x;
-                    // We also scale the y-axis to change the ellipse into a circle which
-                    // simplifes the problem.
-                    const dy = (if (y > center_y) y - center_y else center_y - y) * y_axis_ratio;
+                    const raw_dy = if (y > center_y) y - center_y else center_y - y;
+                    // We also scale the y-axis by the ratio of `radius_x/radius_y` to
+                    // stretch the ellipse into a circle which simplifes the problem to
+                    // point-in-circle.
+                    //
+                    // We do the multiplication first followed by division to play nice
+                    // with integer math.
+                    const dy = (raw_dy * radius_x) / radius_y;
 
                     // Check if the pixel is inside the circle
                     const squared_distance = dx * dx + dy * dy;
-                    std.debug.print("\n({}, {}) -> dx={}, dy={}: {} <= {} is {}", .{
-                        x,
-                        y,
-                        dx,
-                        dy,
-                        squared_distance,
-                        squared_radius,
-                        squared_distance <= squared_radius,
-                    });
                     if (squared_distance <= squared_radius) {
                         output_pixels[pixel_index] = BinaryPixel{ .value = true };
                     }
@@ -104,32 +95,6 @@ pub fn getStructuringElement(
         .height = height,
         .pixels = output_pixels,
     };
-}
-
-/// Compare the actual output from `getStructuringElement` to a map of expected pixels.
-fn testStructuringElement(structure_type: StructuringElementType, width: usize, height: usize, comptime expected_int_pixels: []const u1) !void {
-    const allocator = std.testing.allocator;
-
-    const actual_structuring_element = try getStructuringElement(
-        structure_type,
-        width,
-        height,
-        allocator,
-    );
-    defer actual_structuring_element.deinit(allocator);
-
-    const expected_pixels = binaryPixelsfromIntArray(expected_int_pixels);
-    const expected_image = BinaryImage{
-        .width = width,
-        .height = height,
-        .pixels = &expected_pixels,
-    };
-
-    try expectBinaryImageEqual(
-        actual_structuring_element,
-        expected_image,
-        allocator,
-    );
 }
 
 test "getStructuringElement rectangle" {
@@ -217,7 +182,6 @@ test "getStructuringElement ellipse" {
     // 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
 
     // 3x5 ellipse
-    // FIXME: This one seems a bit weird due to the integer rounding here
     try testStructuringElement(.ellipse, 3, 5, &[_]u1{
         0, 1, 0,
         1, 1, 1,
@@ -225,12 +189,7 @@ test "getStructuringElement ellipse" {
         1, 1, 1,
         0, 1, 0,
     });
-    // OpenCV
-    // 0, 1, 0,
-    // 1, 1, 1,
-    // 1, 1, 1,
-    // 1, 1, 1,
-    // 0, 1, 0,
+    // (OpenCV matches)
 
     // 9x5 ellipse
     try testStructuringElement(.ellipse, 9, 5, &[_]u1{
@@ -243,19 +202,19 @@ test "getStructuringElement ellipse" {
     // (OpenCV matches)
 
     // 17x11 ellipse
-    // try testStructuringElement(.ellipse, 17, 11, &[_]u1{
-    //     0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-    //     0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
-    //     0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
-    //     0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
-    //     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    //     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    //     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    //     0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
-    //     0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
-    //     0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
-    //     0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-    // });
+    try testStructuringElement(.ellipse, 17, 11, &[_]u1{
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+        0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    });
     // OpenCV
     // 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
     // 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
@@ -268,22 +227,35 @@ test "getStructuringElement ellipse" {
     // 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
     // 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
     // 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-
-    try testStructuringElement(.ellipse, 55, 33, &[_]u1{
-        0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
-        0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
-        0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
-        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-    });
 }
 
+/// Compare the actual output from `getStructuringElement` to a map of expected pixels.
+fn testStructuringElement(structure_type: StructuringElementType, width: usize, height: usize, comptime expected_int_pixels: []const u1) !void {
+    const allocator = std.testing.allocator;
+
+    const actual_structuring_element = try getStructuringElement(
+        structure_type,
+        width,
+        height,
+        allocator,
+    );
+    defer actual_structuring_element.deinit(allocator);
+
+    const expected_pixels = binaryPixelsfromIntArray(expected_int_pixels);
+    const expected_image = BinaryImage{
+        .width = width,
+        .height = height,
+        .pixels = &expected_pixels,
+    };
+
+    try expectBinaryImageEqual(
+        actual_structuring_element,
+        expected_image,
+        allocator,
+    );
+}
+
+/// Quick helper to convert a bunch of 0/1 into BinaryPixel's
 fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len]BinaryPixel {
     var binary_pixels = [_]BinaryPixel{BinaryPixel{ .value = false }} ** int_pixels.len;
     for (int_pixels, 0..) |int_pixel, index| {
