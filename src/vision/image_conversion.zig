@@ -532,6 +532,23 @@ pub fn hsvToBinaryImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !Bina
     };
 }
 
+pub fn binaryToRgbImage(binary_image: BinaryImage, allocator: std.mem.Allocator) !RGBImage {
+    const output_rgb_pixels = try allocator.alloc(RGBPixel, binary_image.pixels.len);
+    for (output_rgb_pixels, binary_image.pixels) |*output_rgb_pixel, binary_pixel| {
+        output_rgb_pixel.* = RGBPixel{
+            .r = if (binary_pixel.value) 1.0 else 0.0,
+            .g = if (binary_pixel.value) 1.0 else 0.0,
+            .b = if (binary_pixel.value) 1.0 else 0.0,
+        };
+    }
+
+    return .{
+        .width = binary_image.width,
+        .height = binary_image.height,
+        .pixels = output_rgb_pixels,
+    };
+}
+
 pub fn hsvPixelInRange(pixel: HSVPixel, lower_bound: HSVPixel, upper_bound: HSVPixel) bool {
     return pixel.h >= lower_bound.h and pixel.h <= upper_bound.h and
         pixel.s >= lower_bound.s and pixel.s <= upper_bound.s and

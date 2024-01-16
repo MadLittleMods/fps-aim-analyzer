@@ -68,7 +68,7 @@ pub fn build(b: *std.Build) void {
         // This creates a build step. It will be visible in the `zig build --help` menu,
         // and can be selected like this: `zig build test`
         // This will evaluate the `test` step rather than the default, which is "install".
-        const test_step = b.step("test", "Run library tests");
+        const test_step = b.step("test", "Run tests");
         const test_filter = b.option([]const u8, "test-filter", "Filter for test");
 
         // Creates a step for unit testing. This only builds the test executable

@@ -13,11 +13,10 @@ pub fn comptime_assert(
 }
 
 /// Test assertion with custom message
-pub fn assert(ok: bool, msg: []const u8, args: anytype) void {
+pub fn assert(ok: bool, comptime msg: []const u8, args: anytype) void {
     if (!ok) {
-        std.debug.print(msg, args);
-        // assertion failure
-        unreachable;
+        // std.debug.print(msg, args);
+        std.debug.panic(msg, args);
     }
 }
 

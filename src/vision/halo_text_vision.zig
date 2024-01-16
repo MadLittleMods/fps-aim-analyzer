@@ -449,7 +449,7 @@ test "findHaloChromaticAberrationText" {
     }
 }
 
-test "asdf" {
+test "Find Halo ammo counter region" {
     // std.debug.assert(std.fs.path.isAbsolute(abs_dir_path));
     // var iterable_dir = try fs.openDirAbsolute(abs_dir_path, .{ .iterate = true });
     // defer iterable_dir.close();
