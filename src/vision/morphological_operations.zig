@@ -29,6 +29,9 @@ pub fn getStructuringElement(
 
     const output_pixels = try allocator.alloc(BinaryPixel, width * height);
 
+    const center_x = width / 2;
+    const center_y = height / 2;
+
     switch (structure_type) {
         .rectangle => {
             @memset(output_pixels, BinaryPixel{ .value = true });
@@ -37,7 +40,6 @@ pub fn getStructuringElement(
             @memset(output_pixels, BinaryPixel{ .value = false });
 
             // Set the center row
-            const center_y = height / 2;
             const row_start_index = center_y * width;
             for (0..width) |x| {
                 const pixel_index = row_start_index + x;
@@ -45,14 +47,55 @@ pub fn getStructuringElement(
             }
 
             // Set the center column
-            const center_x = width / 2;
             for (0..height) |y| {
                 const pixel_index = y * width + center_x;
                 output_pixels[pixel_index] = BinaryPixel{ .value = true };
             }
         },
         .ellipse => {
-            // TODO
+            @memset(output_pixels, BinaryPixel{ .value = false });
+
+            // The following implementation gives different results than OpenCV's
+            // `cv.getStructuringElement(cv.MORPH_ELLIPSE, ...)` (OpenCV implementation:
+            // https://github.com/opencv/opencv/blob/84bb1cda4ea6135d9eb915e9ae2e348e858cc1f2/modules/imgproc/src/morph.dispatch.cpp#L135-L186)
+            //
+            // Based on https://stackoverflow.com/questions/59971407/how-can-i-test-if-a-point-is-in-an-ellipse/65601453#65601453
+            const radius_x = center_x;
+            const radius_y = center_y;
+            // FIXME: This doesn't work well because this ratio is integer rounded (even to 0 in some cases)
+            const y_axis_ratio = radius_x / radius_y;
+            const squared_radius = radius_x * radius_x;
+            std.debug.print("\nellipse center ({}, {}), radius_x={}, radius_y={}", .{
+                center_x, center_y, radius_x, radius_y,
+            });
+
+            for (0..height) |y| {
+                const row_start_index = y * width;
+                for (0..width) |x| {
+                    const pixel_index = row_start_index + x;
+
+                    // Absolute difference between the pixel and the center of the ellipse
+                    const dx = if (x > center_x) x - center_x else center_x - x;
+                    // We also scale the y-axis to change the ellipse into a circle which
+                    // simplifes the problem.
+                    const dy = (if (y > center_y) y - center_y else center_y - y) * y_axis_ratio;
+
+                    // Check if the pixel is inside the circle
+                    const squared_distance = dx * dx + dy * dy;
+                    std.debug.print("\n({}, {}) -> dx={}, dy={}: {} <= {} is {}", .{
+                        x,
+                        y,
+                        dx,
+                        dy,
+                        squared_distance,
+                        squared_radius,
+                        squared_distance <= squared_radius,
+                    });
+                    if (squared_distance <= squared_radius) {
+                        output_pixels[pixel_index] = BinaryPixel{ .value = true };
+                    }
+                }
+            }
         },
     }
 
@@ -63,68 +106,186 @@ pub fn getStructuringElement(
     };
 }
 
-test "getStructuringElement rectangle" {
+/// Compare the actual output from `getStructuringElement` to a map of expected pixels.
+fn testStructuringElement(structure_type: StructuringElementType, width: usize, height: usize, comptime expected_int_pixels: []const u1) !void {
     const allocator = std.testing.allocator;
-    const actual_rect_image = try getStructuringElement(
-        .rectangle,
-        3,
-        3,
+
+    const actual_structuring_element = try getStructuringElement(
+        structure_type,
+        width,
+        height,
         allocator,
     );
-    defer actual_rect_image.deinit(allocator);
+    defer actual_structuring_element.deinit(allocator);
 
-    const expected_rect_pixels = binaryPixelsfromIntArray(9, [_]u1{
+    const expected_pixels = binaryPixelsfromIntArray(expected_int_pixels);
+    const expected_image = BinaryImage{
+        .width = width,
+        .height = height,
+        .pixels = &expected_pixels,
+    };
+
+    try expectBinaryImageEqual(
+        actual_structuring_element,
+        expected_image,
+        allocator,
+    );
+}
+
+test "getStructuringElement rectangle" {
+    try testStructuringElement(.rectangle, 3, 3, &[_]u1{
         1, 1, 1,
         1, 1, 1,
         1, 1, 1,
     });
-    const expected_rect_image = BinaryImage{
-        .width = 3,
-        .height = 3,
-        .pixels = &expected_rect_pixels,
-    };
-
-    try expectBinaryImageEqual(
-        actual_rect_image,
-        expected_rect_image,
-        allocator,
-    );
 }
 
 test "getStructuringElement cross" {
-    const allocator = std.testing.allocator;
-    const actual_cross_image = try getStructuringElement(
-        .cross,
-        3,
-        3,
-        allocator,
-    );
-    defer actual_cross_image.deinit(allocator);
-
-    const expected_cross_pixels = binaryPixelsfromIntArray(9, [_]u1{
+    try testStructuringElement(.cross, 3, 3, &[_]u1{
         0, 1, 0,
         1, 1, 1,
         0, 1, 0,
     });
-    const expected_cross_image = BinaryImage{
-        .width = 3,
-        .height = 3,
-        .pixels = &expected_cross_pixels,
-    };
 
-    try expectBinaryImageEqual(
-        actual_cross_image,
-        expected_cross_image,
-        allocator,
-    );
+    try testStructuringElement(.cross, 7, 7, &[_]u1{
+        0, 0, 0, 1, 0, 0, 0,
+        0, 0, 0, 1, 0, 0, 0,
+        0, 0, 0, 1, 0, 0, 0,
+        1, 1, 1, 1, 1, 1, 1,
+        0, 0, 0, 1, 0, 0, 0,
+        0, 0, 0, 1, 0, 0, 0,
+        0, 0, 0, 1, 0, 0, 0,
+    });
 }
 
 test "getStructuringElement ellipse" {
-    // TODO
+    // 3x3 circle/ellipse
+    try testStructuringElement(.ellipse, 3, 3, &[_]u1{
+        0, 1, 0,
+        1, 1, 1,
+        0, 1, 0,
+    });
+
+    // 5x5 circle/ellipse
+    try testStructuringElement(.ellipse, 5, 5, &[_]u1{
+        0, 0, 1, 0, 0,
+        0, 1, 1, 1, 0,
+        1, 1, 1, 1, 1,
+        0, 1, 1, 1, 0,
+        0, 0, 1, 0, 0,
+    });
+    // OpenCV
+    // 0, 0, 1, 0, 0,
+    // 1, 1, 1, 1, 1,
+    // 1, 1, 1, 1, 1,
+    // 1, 1, 1, 1, 1,
+    // 0, 0, 1, 0, 0,
+
+    // 15x15 circle/ellipse
+    try testStructuringElement(.ellipse, 15, 15, &[_]u1{
+        0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
+        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+        0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+        0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+    });
+    // OpenCV
+    // 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+    // 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+    // 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+    // 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+    // 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+    // 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+    // 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+    // 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+    // 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+    // 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+
+    // 3x5 ellipse
+    // FIXME: This one seems a bit weird due to the integer rounding here
+    try testStructuringElement(.ellipse, 3, 5, &[_]u1{
+        0, 1, 0,
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1,
+        0, 1, 0,
+    });
+    // OpenCV
+    // 0, 1, 0,
+    // 1, 1, 1,
+    // 1, 1, 1,
+    // 1, 1, 1,
+    // 0, 1, 0,
+
+    // 9x5 ellipse
+    try testStructuringElement(.ellipse, 9, 5, &[_]u1{
+        0, 0, 0, 0, 1, 0, 0, 0, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 0,
+        1, 1, 1, 1, 1, 1, 1, 1, 1,
+        0, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 0, 0, 0, 1, 0, 0, 0, 0,
+    });
+    // (OpenCV matches)
+
+    // 17x11 ellipse
+    // try testStructuringElement(.ellipse, 17, 11, &[_]u1{
+    //     0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    //     0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+    //     0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+    //     0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+    //     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    //     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    //     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    //     0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+    //     0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+    //     0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+    //     0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    // });
+    // OpenCV
+    // 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    // 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+    // 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+    // 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+    // 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+    // 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+    // 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+    // 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+
+    try testStructuringElement(.ellipse, 55, 33, &[_]u1{
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+        0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
+        0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+        0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    });
 }
 
-fn binaryPixelsfromIntArray(comptime len: usize, comptime int_pixels: [len]u1) [len]BinaryPixel {
-    var binary_pixels = [_]BinaryPixel{BinaryPixel{ .value = false }} ** len;
+fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len]BinaryPixel {
+    var binary_pixels = [_]BinaryPixel{BinaryPixel{ .value = false }} ** int_pixels.len;
     for (int_pixels, 0..) |int_pixel, index| {
         binary_pixels[index] = BinaryPixel{ .value = if (int_pixel == 1) true else false };
     }
@@ -156,13 +317,6 @@ fn expectBinaryImageEqual(
         return err;
     };
 }
-
-//  - Fit: When all the pixels in the structuring element cover the pixels of the
-//    object, we call it Fit.
-//  - Hit: When at least one of the pixels in the structuring element cover the pixels
-//    of the object, we call it Hit.
-//  - Miss: When no pixel in the structuring element cover the pixels of the object, we
-//    call it miss.
 
 pub fn erode(
     binary_image: BinaryImage,
@@ -232,6 +386,13 @@ pub fn close() !BinaryImage {}
 
 /// Check if all the active pixels in the kernel/structuring element cover the pixels in
 /// the image (fit).
+///
+//  - Fit: When all the pixels in the structuring element cover the pixels of the
+//    object, we call it Fit.
+//  - Hit: When at least one of the pixels in the structuring element cover the pixels
+//    of the object, we call it Hit.
+//  - Miss: When no pixel in the structuring element cover the pixels of the object, we
+//    call it miss.
 pub fn checkPixelfit(image_x: usize, image_y: usize, binary_image: BinaryImage, kernel: BinaryImage) bool {
     assert(kernel.width % 2 == 1, "Kernel width must be odd so we can perfectly center it {}", .{kernel.width});
     assert(kernel.height % 2 == 1, "Kernel height must be odd so we can perfectly center it {}", .{kernel.height});
@@ -289,6 +450,13 @@ pub fn checkPixelfit(image_x: usize, image_y: usize, binary_image: BinaryImage, 
 
 /// Check if at least one of the active pixels in the kernel/structuring element cover
 /// the pixel of the image (hit).
+///
+//  - Fit: When all the pixels in the structuring element cover the pixels of the
+//    object, we call it Fit.
+//  - Hit: When at least one of the pixels in the structuring element cover the pixels
+//    of the object, we call it Hit.
+//  - Miss: When no pixel in the structuring element cover the pixels of the object, we
+//    call it miss.
 pub fn checkPixelHit(image_x: usize, image_y: usize, binary_image: BinaryImage, kernel: BinaryImage) bool {
     assert(kernel.width % 2 == 1, "Kernel width must be odd so we can perfectly center it {}", .{kernel.width});
     assert(kernel.height % 2 == 1, "Kernel height must be odd so we can perfectly center it {}", .{kernel.height});
@@ -344,25 +512,25 @@ pub fn checkPixelHit(image_x: usize, image_y: usize, binary_image: BinaryImage, 
     return false;
 }
 
+// via https://towardsdatascience.com/understanding-morphological-image-processing-and-its-operations-7bcf1ed11756
+const test_binary_image_pixels = binaryPixelsfromIntArray(&[_]u1{
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 1, 1, 1, 0, 0,
+    0, 0, 1, 1, 1, 1, 0, 0,
+    0, 1, 1, 1, 1, 0, 0, 0,
+    0, 1, 1, 1, 0, 0, 0, 0,
+    0, 1, 1, 1, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+});
+const test_binary_image = BinaryImage{
+    .width = 8,
+    .height = 8,
+    .pixels = &test_binary_image_pixels,
+};
+
 test "erode" {
     const allocator = std.testing.allocator;
-
-    // via https://towardsdatascience.com/understanding-morphological-image-processing-and-its-operations-7bcf1ed11756
-    const test_binary_image_pixels = binaryPixelsfromIntArray(64, [_]u1{
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 1, 1, 1, 0, 0,
-        0, 0, 1, 1, 1, 1, 0, 0,
-        0, 1, 1, 1, 1, 0, 0, 0,
-        0, 1, 1, 1, 0, 0, 0, 0,
-        0, 1, 1, 1, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-    });
-    const test_binary_image = BinaryImage{
-        .width = 8,
-        .height = 8,
-        .pixels = &test_binary_image_pixels,
-    };
 
     // Erode with a cross structuring element
     const cross_structuring_element = try getStructuringElement(
@@ -379,7 +547,7 @@ test "erode" {
     );
     defer eroded_binary_image.deinit(allocator);
 
-    const expected_eroded_image_pixels = binaryPixelsfromIntArray(64, [_]u1{
+    const expected_eroded_image_pixels = binaryPixelsfromIntArray(&[_]u1{
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 1, 1, 0, 0, 0,
@@ -405,23 +573,6 @@ test "erode" {
 test "dilate" {
     const allocator = std.testing.allocator;
 
-    // via https://towardsdatascience.com/understanding-morphological-image-processing-and-its-operations-7bcf1ed11756
-    const test_binary_image_pixels = binaryPixelsfromIntArray(64, [_]u1{
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 1, 1, 1, 0, 0,
-        0, 0, 1, 1, 1, 1, 0, 0,
-        0, 1, 1, 1, 1, 0, 0, 0,
-        0, 1, 1, 1, 0, 0, 0, 0,
-        0, 1, 1, 1, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-    });
-    const test_binary_image = BinaryImage{
-        .width = 8,
-        .height = 8,
-        .pixels = &test_binary_image_pixels,
-    };
-
     // Dilate with a cross structuring element
     const cross_structuring_element = try getStructuringElement(
         .cross,
@@ -437,7 +588,7 @@ test "dilate" {
     );
     defer dilated_binary_image.deinit(allocator);
 
-    const expected_dilated_image_pixels = binaryPixelsfromIntArray(64, [_]u1{
+    const expected_dilated_image_pixels = binaryPixelsfromIntArray(&[_]u1{
         0, 0, 0, 1, 1, 1, 0, 0,
         0, 0, 1, 1, 1, 1, 1, 0,
         0, 1, 1, 1, 1, 1, 1, 0,
