@@ -219,7 +219,7 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
 }
 
 /// Assemble a string showing which chromatic aberration conditions are met for a given pixel
-fn debugStringConditionsForPixel(hsv_pixel: HSVPixel, allocator: std.mem.Allocator) ![]const u8 {
+fn _debugStringConditionsForPixel(hsv_pixel: HSVPixel, allocator: std.mem.Allocator) ![]const u8 {
     // Go over each pixel and make a little map showing which conditions are met
     const fields = @typeInfo(ChromaticAberrationCondition).Enum.fields;
     const condition_strings = try allocator.alloc([]const u8, fields.len);
@@ -432,7 +432,7 @@ test "findHaloChromaticAberrationText" {
 
             // Print a list of pixels in the image and which conditions each pixel meets
             for (hsv_image.pixels, 0..) |pixel, pixel_index| {
-                const condition_status_string = try debugStringConditionsForPixel(pixel, allocator);
+                const condition_status_string = try _debugStringConditionsForPixel(pixel, allocator);
                 defer allocator.free(condition_status_string);
 
                 std.debug.print("\n\t{d: >3}: HSV({d:.6}, {d:.6}, {d:.6}) {s}", .{

@@ -18,6 +18,8 @@ const StructuringElementType = enum {
     ellipse,
 };
 
+/// Create a small-sized template/structuring element (kernel) that can be used with
+/// morphological operations like `erode` and `dilate`.
 pub fn getStructuringElement(
     structure_type: StructuringElementType,
     width: usize,
@@ -72,9 +74,9 @@ pub fn getStructuringElement(
                     // Absolute difference between the pixel and the center of the ellipse
                     const dx = if (x > center_x) x - center_x else center_x - x;
                     const raw_dy = if (y > center_y) y - center_y else center_y - y;
-                    // We also scale the y-axis by the ratio of `radius_x/radius_y` to
-                    // stretch the ellipse into a circle which simplifes the problem to
-                    // point-in-circle.
+                    // We also scale the y-axis by the ratio the axis
+                    // (`radius_x/radius_y`) to stretch the ellipse into a circle. This
+                    // simplifes the problem into a point-in-circle problem.
                     //
                     // We do the multiplication first followed by division to play nice
                     // with integer math.
@@ -98,7 +100,7 @@ pub fn getStructuringElement(
 }
 
 test "getStructuringElement rectangle" {
-    try testStructuringElement(.rectangle, 3, 3, &[_]u1{
+    try _testStructuringElement(.rectangle, 3, 3, &[_]u1{
         1, 1, 1,
         1, 1, 1,
         1, 1, 1,
@@ -106,13 +108,13 @@ test "getStructuringElement rectangle" {
 }
 
 test "getStructuringElement cross" {
-    try testStructuringElement(.cross, 3, 3, &[_]u1{
+    try _testStructuringElement(.cross, 3, 3, &[_]u1{
         0, 1, 0,
         1, 1, 1,
         0, 1, 0,
     });
 
-    try testStructuringElement(.cross, 7, 7, &[_]u1{
+    try _testStructuringElement(.cross, 7, 7, &[_]u1{
         0, 0, 0, 1, 0, 0, 0,
         0, 0, 0, 1, 0, 0, 0,
         0, 0, 0, 1, 0, 0, 0,
@@ -125,14 +127,14 @@ test "getStructuringElement cross" {
 
 test "getStructuringElement ellipse" {
     // 3x3 circle/ellipse
-    try testStructuringElement(.ellipse, 3, 3, &[_]u1{
+    try _testStructuringElement(.ellipse, 3, 3, &[_]u1{
         0, 1, 0,
         1, 1, 1,
         0, 1, 0,
     });
 
     // 5x5 circle/ellipse
-    try testStructuringElement(.ellipse, 5, 5, &[_]u1{
+    try _testStructuringElement(.ellipse, 5, 5, &[_]u1{
         0, 0, 1, 0, 0,
         0, 1, 1, 1, 0,
         1, 1, 1, 1, 1,
@@ -147,7 +149,7 @@ test "getStructuringElement ellipse" {
     // 0, 0, 1, 0, 0,
 
     // 15x15 circle/ellipse
-    try testStructuringElement(.ellipse, 15, 15, &[_]u1{
+    try _testStructuringElement(.ellipse, 15, 15, &[_]u1{
         0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
         0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
@@ -182,7 +184,7 @@ test "getStructuringElement ellipse" {
     // 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
 
     // 3x5 ellipse
-    try testStructuringElement(.ellipse, 3, 5, &[_]u1{
+    try _testStructuringElement(.ellipse, 3, 5, &[_]u1{
         0, 1, 0,
         1, 1, 1,
         1, 1, 1,
@@ -192,7 +194,7 @@ test "getStructuringElement ellipse" {
     // (OpenCV matches)
 
     // 9x5 ellipse
-    try testStructuringElement(.ellipse, 9, 5, &[_]u1{
+    try _testStructuringElement(.ellipse, 9, 5, &[_]u1{
         0, 0, 0, 0, 1, 0, 0, 0, 0,
         0, 1, 1, 1, 1, 1, 1, 1, 0,
         1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -202,7 +204,7 @@ test "getStructuringElement ellipse" {
     // (OpenCV matches)
 
     // 17x11 ellipse
-    try testStructuringElement(.ellipse, 17, 11, &[_]u1{
+    try _testStructuringElement(.ellipse, 17, 11, &[_]u1{
         0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
         0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
@@ -230,7 +232,7 @@ test "getStructuringElement ellipse" {
 }
 
 /// Compare the actual output from `getStructuringElement` to a map of expected pixels.
-fn testStructuringElement(structure_type: StructuringElementType, width: usize, height: usize, comptime expected_int_pixels: []const u1) !void {
+fn _testStructuringElement(structure_type: StructuringElementType, width: usize, height: usize, comptime expected_int_pixels: []const u1) !void {
     const allocator = std.testing.allocator;
 
     const actual_structuring_element = try getStructuringElement(
@@ -241,14 +243,14 @@ fn testStructuringElement(structure_type: StructuringElementType, width: usize, 
     );
     defer actual_structuring_element.deinit(allocator);
 
-    const expected_pixels = binaryPixelsfromIntArray(expected_int_pixels);
+    const expected_pixels = _binaryPixelsfromIntArray(expected_int_pixels);
     const expected_image = BinaryImage{
         .width = width,
         .height = height,
         .pixels = &expected_pixels,
     };
 
-    try expectBinaryImageEqual(
+    try _expectBinaryImageEqual(
         actual_structuring_element,
         expected_image,
         allocator,
@@ -256,7 +258,7 @@ fn testStructuringElement(structure_type: StructuringElementType, width: usize, 
 }
 
 /// Quick helper to convert a bunch of 0/1 into BinaryPixel's
-fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len]BinaryPixel {
+fn _binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len]BinaryPixel {
     var binary_pixels = [_]BinaryPixel{BinaryPixel{ .value = false }} ** int_pixels.len;
     for (int_pixels, 0..) |int_pixel, index| {
         binary_pixels[index] = BinaryPixel{ .value = if (int_pixel == 1) true else false };
@@ -265,7 +267,7 @@ fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len]Bin
     return binary_pixels;
 }
 
-fn expectBinaryImageEqual(
+fn _expectBinaryImageEqual(
     actual_binary_image: BinaryImage,
     expected_binary_image: BinaryImage,
     allocator: std.mem.Allocator,
@@ -290,6 +292,8 @@ fn expectBinaryImageEqual(
     };
 }
 
+/// The kernel slides through the image and only pixels that have neighbors matching the
+/// kernel are copied to the output/result.
 pub fn erode(
     binary_image: BinaryImage,
     /// Small-sized template/structuring element that is used to traverse an image. The
@@ -352,9 +356,64 @@ pub fn dilate(
     };
 }
 
-pub fn open() !BinaryImage {}
+/// Opening is just another name for erosion followed by dilation. It is useful in
+/// removing noise.
+pub fn opening(
+    binary_image: BinaryImage,
+    /// Small-sized template/structuring element that is used to traverse an image. The
+    /// structuring element is positioned at all possible locations in the image, and it
+    /// is compared with the connected pixels. It can be of any shape.
+    ///
+    ///  The kernel must have odd length sides and we assume the origin is at the
+    ///  center.
+    kernel: BinaryImage,
+    allocator: std.mem.Allocator,
+) !BinaryImage {
+    const eroded_binary_image = try erode(
+        binary_image,
+        kernel,
+        allocator,
+    );
+    defer eroded_binary_image.deinit(allocator);
 
-pub fn close() !BinaryImage {}
+    const dilated_binary_image = try dilate(
+        eroded_binary_image,
+        kernel,
+        allocator,
+    );
+
+    return dilated_binary_image;
+}
+
+/// Closing is just another name for dilation followed by erosion (reverse of
+/// "opening"). It is useful in closing small holes inside the foreground objects, or
+/// small black points on the object.
+pub fn closing(
+    binary_image: BinaryImage,
+    /// Small-sized template/structuring element that is used to traverse an image. The
+    /// structuring element is positioned at all possible locations in the image, and it
+    /// is compared with the connected pixels. It can be of any shape.
+    ///
+    ///  The kernel must have odd length sides and we assume the origin is at the
+    ///  center.
+    kernel: BinaryImage,
+    allocator: std.mem.Allocator,
+) !BinaryImage {
+    const dilated_binary_image = try dilate(
+        binary_image,
+        kernel,
+        allocator,
+    );
+    defer dilated_binary_image.deinit(allocator);
+
+    const eroded_binary_image = try erode(
+        dilated_binary_image,
+        kernel,
+        allocator,
+    );
+
+    return eroded_binary_image;
+}
 
 /// Check if all the active pixels in the kernel/structuring element cover the pixels in
 /// the image (fit).
@@ -485,7 +544,7 @@ pub fn checkPixelHit(image_x: usize, image_y: usize, binary_image: BinaryImage, 
 }
 
 // via https://towardsdatascience.com/understanding-morphological-image-processing-and-its-operations-7bcf1ed11756
-const test_binary_image_pixels = binaryPixelsfromIntArray(&[_]u1{
+const test_binary_image_pixels = _binaryPixelsfromIntArray(&[_]u1{
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 1, 1, 1, 0, 0,
     0, 0, 1, 1, 1, 1, 0, 0,
@@ -519,7 +578,7 @@ test "erode" {
     );
     defer eroded_binary_image.deinit(allocator);
 
-    const expected_eroded_image_pixels = binaryPixelsfromIntArray(&[_]u1{
+    const expected_eroded_image_pixels = _binaryPixelsfromIntArray(&[_]u1{
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 1, 1, 0, 0, 0,
@@ -535,7 +594,7 @@ test "erode" {
         .pixels = &expected_eroded_image_pixels,
     };
 
-    try expectBinaryImageEqual(
+    try _expectBinaryImageEqual(
         eroded_binary_image,
         expected_eroded_image,
         allocator,
@@ -560,7 +619,7 @@ test "dilate" {
     );
     defer dilated_binary_image.deinit(allocator);
 
-    const expected_dilated_image_pixels = binaryPixelsfromIntArray(&[_]u1{
+    const expected_dilated_image_pixels = _binaryPixelsfromIntArray(&[_]u1{
         0, 0, 0, 1, 1, 1, 0, 0,
         0, 0, 1, 1, 1, 1, 1, 0,
         0, 1, 1, 1, 1, 1, 1, 0,
@@ -576,7 +635,7 @@ test "dilate" {
         .pixels = &expected_dilated_image_pixels,
     };
 
-    try expectBinaryImageEqual(
+    try _expectBinaryImageEqual(
         dilated_binary_image,
         expected_dilated_image,
         allocator,

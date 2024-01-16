@@ -59,44 +59,44 @@ pub const RGBPixel = struct {
 
 test "RGBPixel.fromHexNumber" {
     // White
-    try testRgbApproxEqAbs(
+    try _testRgbApproxEqAbs(
         RGBPixel{ .r = 1.0, .g = 1.0, .b = 1.0 },
         RGBPixel.fromHexNumber(0xffffff),
         1e-4,
     );
     // Black
-    try testRgbApproxEqAbs(
+    try _testRgbApproxEqAbs(
         RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 },
         RGBPixel.fromHexNumber(0x000000),
         1e-4,
     );
     // Red
-    try testRgbApproxEqAbs(
+    try _testRgbApproxEqAbs(
         RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 },
         RGBPixel.fromHexNumber(0xff0000),
         1e-4,
     );
     // Green
-    try testRgbApproxEqAbs(
+    try _testRgbApproxEqAbs(
         RGBPixel{ .r = 0.0, .g = 1.0, .b = 0.0 },
         RGBPixel.fromHexNumber(0x00ff00),
         1e-4,
     );
     // Blue
-    try testRgbApproxEqAbs(
+    try _testRgbApproxEqAbs(
         RGBPixel{ .r = 0.0, .g = 0.0, .b = 1.0 },
         RGBPixel.fromHexNumber(0x0000ff),
         1e-4,
     );
 
     // Green-ish
-    try testRgbApproxEqAbs(
+    try _testRgbApproxEqAbs(
         RGBPixel{ .r = 0.290196, .g = 0.905882, .b = 0.156862 },
         RGBPixel.fromHexNumber(0x4ae728),
         1e-4,
     );
     // Blue-ish
-    try testRgbApproxEqAbs(
+    try _testRgbApproxEqAbs(
         RGBPixel{ .r = 0.239215, .g = 0.431372, .b = 0.647058 },
         RGBPixel.fromHexNumber(0x3d6ea5),
         1e-4,
@@ -141,13 +141,13 @@ pub const BinaryPixel = struct {
     value: bool,
 };
 
-fn testRgbApproxEqAbs(expected: RGBPixel, actual: RGBPixel, tolerance: f32) !void {
+fn _testRgbApproxEqAbs(expected: RGBPixel, actual: RGBPixel, tolerance: f32) !void {
     try std.testing.expectApproxEqAbs(expected.r, actual.r, tolerance);
     try std.testing.expectApproxEqAbs(expected.g, actual.g, tolerance);
     try std.testing.expectApproxEqAbs(expected.b, actual.b, tolerance);
 }
 
-fn testHsvApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !void {
+fn _testHsvApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !void {
     try std.testing.expectApproxEqAbs(expected.h, actual.h, tolerance);
     try std.testing.expectApproxEqAbs(expected.s, actual.s, tolerance);
     try std.testing.expectApproxEqAbs(expected.v, actual.v, tolerance);
@@ -425,13 +425,13 @@ pub fn hsvToRgbPixel(hsv_pixel: HSVPixel) RGBPixel {
 
 /// Test that `rgbToHsvPixel` and `hsvToRgbPixel` are inverses of each other.
 fn _testRgbAndHsvConversion(rgb_pixel: RGBPixel, hsv_pixel: HSVPixel) !void {
-    try testHsvApproxEqAbs(
+    try _testHsvApproxEqAbs(
         hsv_pixel,
         rgbToHsvPixel(rgb_pixel),
         1e-4,
     );
 
-    try testRgbApproxEqAbs(
+    try _testRgbApproxEqAbs(
         rgb_pixel,
         hsvToRgbPixel(hsv_pixel),
         1e-4,
