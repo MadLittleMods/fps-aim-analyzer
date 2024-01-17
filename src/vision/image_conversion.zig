@@ -1,6 +1,7 @@
 const std = @import("std");
 const zigimg = @import("zigimg");
 const assertions = @import("../utils/assertions.zig");
+const assert = assertions.assert;
 const comptime_assert = assertions.comptime_assert;
 const approxEqAbs = assertions.approxEqAbs;
 
@@ -300,6 +301,50 @@ pub fn cropImage(
     return .{
         .width = width,
         .height = height,
+        .pixels = output_pixels,
+    };
+}
+
+pub fn maskImage(
+    image: anytype,
+    mask: BinaryImage,
+    allocator: std.mem.Allocator,
+) !@TypeOf(image) {
+    assert(image.width == mask.width, "maskImage: Image and mask width should match but saw {} != {}", .{
+        image.width,
+        mask.width,
+    });
+    assert(image.height == mask.height, "maskImage: Image and mask height should match but saw {} != {}", .{
+        image.height,
+        mask.height,
+    });
+
+    const PixelType = @TypeOf(image.pixels[0]);
+    const output_pixels = try allocator.alloc(PixelType, image.pixels.len);
+    switch (PixelType) {
+        RGBPixel => @memset(output_pixels, RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 }),
+        HSVPixel => @memset(output_pixels, RGBPixel{ .h = 0.0, .s = 0.0, .v = 0.0 }),
+        GrayscalePixel => @memset(output_pixels, RGBPixel{ .value = 0.0 }),
+        BinaryPixel => @memset(output_pixels, RGBPixel{ .value = false }),
+        else => {
+            @compileLog("PixelType=", @typeName(PixelType));
+            @compileError("maskImage: Unsupported pixel type");
+        },
+    }
+
+    for (0..mask.height) |y| {
+        const row_start_pixel_index = y * mask.width;
+        for (0..mask.width) |x| {
+            const current_pixel_index = row_start_pixel_index + x;
+            if (mask.pixels[current_pixel_index].value) {
+                output_pixels[current_pixel_index] = image.pixels[current_pixel_index];
+            }
+        }
+    }
+
+    return .{
+        .width = image.width,
+        .height = image.height,
         .pixels = output_pixels,
     };
 }
