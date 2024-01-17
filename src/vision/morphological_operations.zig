@@ -305,6 +305,7 @@ pub fn erode(
     kernel: BinaryImage,
     allocator: std.mem.Allocator,
 ) !BinaryImage {
+    std.debug.print("\nerode {}x{}", .{ kernel.width, kernel.height });
     const output_pixels = try allocator.alloc(BinaryPixel, binary_image.pixels.len);
     @memset(output_pixels, BinaryPixel{ .value = false });
 
@@ -336,6 +337,7 @@ pub fn dilate(
     kernel: BinaryImage,
     allocator: std.mem.Allocator,
 ) !BinaryImage {
+    std.debug.print("\ndilate {}x{}", .{ kernel.width, kernel.height });
     const output_pixels = try allocator.alloc(BinaryPixel, binary_image.pixels.len);
     @memset(output_pixels, BinaryPixel{ .value = false });
 

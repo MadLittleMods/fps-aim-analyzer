@@ -508,9 +508,9 @@ test "Find Halo ammo counter region" {
     const chromatic_pattern_binary_mask = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
     defer chromatic_pattern_binary_mask.deinit(allocator);
     const erode_kernel = try getStructuringElement(
-        .rectangle,
-        1,
-        1,
+        .cross,
+        3,
+        3,
         allocator,
     );
     defer erode_kernel.deinit(allocator);
@@ -523,10 +523,21 @@ test "Find Halo ammo counter region" {
     // Create horizontal kernel and dilate to connect text characters
     const dilate_kernel = try getStructuringElement(
         .rectangle,
-        5,
-        3,
+        9,
+        13,
         allocator,
     );
+    const eroded_chromatic_pattern_rgb_image = try maskImage(
+        cropped_rgb_image,
+        chromatic_pattern_eroded_mask, // chromatic_pattern_dilated_mask,
+        allocator,
+    );
+    defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
+    try eroded_chromatic_pattern_rgb_image.saveImageToFilePath(
+        "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result2.png",
+        allocator,
+    );
+
     defer dilate_kernel.deinit(allocator);
     const chromatic_pattern_dilated_mask = try dilate(
         chromatic_pattern_eroded_mask,
@@ -542,7 +553,7 @@ test "Find Halo ammo counter region" {
     );
     defer opened_chromatic_pattern_rgb_image.deinit(allocator);
     try opened_chromatic_pattern_rgb_image.saveImageToFilePath(
-        "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result2.png",
+        "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result3.png",
         allocator,
     );
 }
