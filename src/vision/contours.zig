@@ -121,13 +121,13 @@ pub fn squareContourTracing(binary_image: BinaryImage, allocator: std.mem.Alloca
     // the same direction you entered it initially
     while (!(std.meta.eql(current_point, start_point) and std.meta.eql(current_direction, start_direction))) {
         const optional_current_pixel_index: ?usize = blk: {
-            const current_image_point = ImagePoint.fromCanvasPoint(current_point);
-            const is_current_point_in_image_bounds = current_point.x >= 0 or
-                current_point.x < binary_image.width or
-                current_point.y >= 0 or
+            const is_current_point_in_image_bounds = current_point.x >= 0 and
+                current_point.x < binary_image.width and
+                current_point.y >= 0 and
                 current_point.y < binary_image.height;
 
             if (is_current_point_in_image_bounds) {
+                const current_image_point = ImagePoint.fromCanvasPoint(current_point);
                 break :blk (current_image_point.y * binary_image.width) + current_image_point.x;
             }
 
@@ -198,6 +198,35 @@ test "squareContourTracing" {
             .{ .x = 4, .y = 3 },
             .{ .x = 4, .y = 4 },
             .{ .x = 3, .y = 4 },
+        },
+        allocator,
+    );
+
+    // Test to make sure we can detect contours on the outer edges of the image
+    try _testSquareContourTracing(
+        BinaryImage{
+            .width = 4,
+            .height = 4,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                1, 1, 1, 1,
+                1, 0, 1, 1,
+                1, 0, 1, 1,
+                1, 1, 1, 1,
+            }),
+        },
+        &[_]ImagePoint{
+            .{ .x = 0, .y = 3 },
+            .{ .x = 0, .y = 2 },
+            .{ .x = 0, .y = 1 },
+            .{ .x = 0, .y = 0 },
+            .{ .x = 1, .y = 0 },
+            .{ .x = 2, .y = 0 },
+            .{ .x = 3, .y = 0 },
+            .{ .x = 3, .y = 1 },
+            .{ .x = 3, .y = 2 },
+            .{ .x = 3, .y = 3 },
+            .{ .x = 2, .y = 3 },
+            .{ .x = 1, .y = 3 },
         },
         allocator,
     );
