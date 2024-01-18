@@ -1,22 +1,20 @@
 const std = @import("std");
 
-pub fn comptime_assert(
-    /// Condition to assert
-    ok: bool,
-    /// Whatever would make the assertion failure easier to understand
-    diagnostic_value: anytype,
-) void {
+/// Comptime assert with custom message
+pub fn comptime_assert(comptime ok: bool, comptime msg: []const u8, args: anytype) void {
     if (!ok) {
-        @compileLog(diagnostic_value);
+        @compileLog(std.fmt.comptimePrint(msg, args));
         @compileError("comptime_assert failed");
     }
 }
 
-/// Test assertion with custom message
+/// Assert with custom message
 pub fn assert(ok: bool, comptime msg: []const u8, args: anytype) void {
     if (!ok) {
-        // std.debug.print(msg, args);
         std.debug.panic(msg, args);
+        // This alternative doesn't work right (seems like UB given this branch is unreachable)
+        // std.debug.print(msg, args);
+        // unreachable;
     }
 }
 

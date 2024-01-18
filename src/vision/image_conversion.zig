@@ -280,6 +280,16 @@ pub const BinaryImage = struct {
     }
 };
 
+/// Quick helper to convert a bunch of 0/1 into BinaryPixel's
+pub fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len]BinaryPixel {
+    var binary_pixels = [_]BinaryPixel{BinaryPixel{ .value = false }} ** int_pixels.len;
+    for (int_pixels, 0..) |int_pixel, index| {
+        binary_pixels[index] = BinaryPixel{ .value = if (int_pixel == 1) true else false };
+    }
+
+    return binary_pixels;
+}
+
 pub fn cropImage(
     image: anytype,
     x: usize,
@@ -363,11 +373,17 @@ const h_normalized_scaler = h_normalized_upper_bound / h_raw_range;
 
 comptime {
     // Just sanity check that comptime math worked out
-    comptime_assert(h_degree_scaler == 60, h_degree_scaler);
+    comptime_assert(h_degree_scaler == 60, "h_degree_scaler is a magic number " ++
+        "and should be 360/6=60 (see how it's derived above) but saw {}", .{
+        h_degree_scaler,
+    });
 
     comptime_assert(
         approxEqAbs(comptime_float, h_normalized_scaler, 0.1666666, 1e-4),
-        h_normalized_scaler,
+        "h_normalized_scaler is a magic number and should be 1/6 (see how it's derived above) but saw {}",
+        .{
+            h_normalized_scaler,
+        },
     );
 }
 

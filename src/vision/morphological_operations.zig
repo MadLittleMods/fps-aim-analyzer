@@ -4,6 +4,7 @@ const assert = assertions.assert;
 const image_conversion = @import("image_conversion.zig");
 const BinaryImage = image_conversion.BinaryImage;
 const BinaryPixel = image_conversion.BinaryPixel;
+const binaryPixelsfromIntArray = image_conversion.binaryPixelsfromIntArray;
 const binaryToRgbImage = image_conversion.binaryToRgbImage;
 const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
@@ -232,7 +233,12 @@ test "getStructuringElement ellipse" {
 }
 
 /// Compare the actual output from `getStructuringElement` to a map of expected pixels.
-fn _testStructuringElement(structure_type: StructuringElementType, width: usize, height: usize, comptime expected_int_pixels: []const u1) !void {
+fn _testStructuringElement(
+    structure_type: StructuringElementType,
+    width: usize,
+    height: usize,
+    comptime expected_int_pixels: []const u1,
+) !void {
     const allocator = std.testing.allocator;
 
     const actual_structuring_element = try getStructuringElement(
@@ -243,7 +249,7 @@ fn _testStructuringElement(structure_type: StructuringElementType, width: usize,
     );
     defer actual_structuring_element.deinit(allocator);
 
-    const expected_pixels = _binaryPixelsfromIntArray(expected_int_pixels);
+    const expected_pixels = binaryPixelsfromIntArray(expected_int_pixels);
     const expected_image = BinaryImage{
         .width = width,
         .height = height,
@@ -255,16 +261,6 @@ fn _testStructuringElement(structure_type: StructuringElementType, width: usize,
         expected_image,
         allocator,
     );
-}
-
-/// Quick helper to convert a bunch of 0/1 into BinaryPixel's
-fn _binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len]BinaryPixel {
-    var binary_pixels = [_]BinaryPixel{BinaryPixel{ .value = false }} ** int_pixels.len;
-    for (int_pixels, 0..) |int_pixel, index| {
-        binary_pixels[index] = BinaryPixel{ .value = if (int_pixel == 1) true else false };
-    }
-
-    return binary_pixels;
 }
 
 fn _expectBinaryImageEqual(
@@ -546,7 +542,7 @@ pub fn checkPixelHit(image_x: usize, image_y: usize, binary_image: BinaryImage, 
 }
 
 // via https://towardsdatascience.com/understanding-morphological-image-processing-and-its-operations-7bcf1ed11756
-const test_binary_image_pixels = _binaryPixelsfromIntArray(&[_]u1{
+const test_binary_pixels = binaryPixelsfromIntArray(&[_]u1{
     0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 1, 1, 1, 0, 0,
     0, 0, 1, 1, 1, 1, 0, 0,
@@ -559,7 +555,7 @@ const test_binary_image_pixels = _binaryPixelsfromIntArray(&[_]u1{
 const test_binary_image = BinaryImage{
     .width = 8,
     .height = 8,
-    .pixels = &test_binary_image_pixels,
+    .pixels = &test_binary_pixels,
 };
 
 test "erode" {
@@ -580,7 +576,7 @@ test "erode" {
     );
     defer eroded_binary_image.deinit(allocator);
 
-    const expected_eroded_image_pixels = _binaryPixelsfromIntArray(&[_]u1{
+    const expected_eroded_pixels = binaryPixelsfromIntArray(&[_]u1{
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 1, 1, 0, 0, 0,
@@ -593,7 +589,7 @@ test "erode" {
     const expected_eroded_image = BinaryImage{
         .width = 8,
         .height = 8,
-        .pixels = &expected_eroded_image_pixels,
+        .pixels = &expected_eroded_pixels,
     };
 
     try _expectBinaryImageEqual(
@@ -621,7 +617,7 @@ test "dilate" {
     );
     defer dilated_binary_image.deinit(allocator);
 
-    const expected_dilated_image_pixels = _binaryPixelsfromIntArray(&[_]u1{
+    const expected_dilated_pixels = binaryPixelsfromIntArray(&[_]u1{
         0, 0, 0, 1, 1, 1, 0, 0,
         0, 0, 1, 1, 1, 1, 1, 0,
         0, 1, 1, 1, 1, 1, 1, 0,
@@ -634,7 +630,7 @@ test "dilate" {
     const expected_dilated_image = BinaryImage{
         .width = 8,
         .height = 8,
-        .pixels = &expected_dilated_image_pixels,
+        .pixels = &expected_dilated_pixels,
     };
 
     try _expectBinaryImageEqual(
