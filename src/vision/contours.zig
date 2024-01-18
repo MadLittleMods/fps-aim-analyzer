@@ -88,7 +88,7 @@ pub fn squareContourTracing(binary_image: BinaryImage, allocator: std.mem.Alloca
     var start_point: CanvasPoint = undefined;
     var start_direction: StepDirection = undefined;
     // Start from the left-most column
-    for (0..binary_image.width) |x| {
+    outer: for (0..binary_image.width) |x| {
         // Scan bottom-up
         var y = binary_image.height - 1;
         while (y > 0) : (y -%= 1) {
@@ -99,15 +99,16 @@ pub fn squareContourTracing(binary_image: BinaryImage, allocator: std.mem.Alloca
                 // We're scanning from the bottom going upwards, so the initial
                 // direction is up
                 start_direction = StepDirection.Up;
-                break;
+                break :outer;
             }
         }
     }
 
-    var boundary_points = std.ArrayList(ImagePoint).init(allocator);
-    errdefer boundary_points.deinit();
+    // We use a hash map to avoid duplicates
+    var boundary_points = std.AutoArrayHashMap(ImagePoint, void).init(allocator);
+    defer boundary_points.deinit();
     // We found at least one active pixel
-    try boundary_points.append(ImagePoint.fromCanvasPoint(start_point));
+    try boundary_points.put(ImagePoint.fromCanvasPoint(start_point), {});
 
     // The first pixel you encounter is a white one by definition, so we go left
     var current_direction = _turnLeft(start_direction);
@@ -134,7 +135,8 @@ pub fn squareContourTracing(binary_image: BinaryImage, allocator: std.mem.Alloca
         };
 
         if (optional_current_pixel_index != null and binary_image.pixels[optional_current_pixel_index.?].value) {
-            try boundary_points.append(ImagePoint.fromCanvasPoint(current_point));
+            // We found another active boundary pixel
+            try boundary_points.put(ImagePoint.fromCanvasPoint(current_point), {});
             // The current pixel is active, so we go left
             current_direction = _turnLeft(current_direction);
             current_point = CanvasPoint.stepInDirection(
@@ -151,7 +153,9 @@ pub fn squareContourTracing(binary_image: BinaryImage, allocator: std.mem.Alloca
         }
     }
 
-    return try boundary_points.toOwnedSlice();
+    const owned_boundary_points = try allocator.alloc(ImagePoint, boundary_points.keys().len);
+    @memcpy(owned_boundary_points, boundary_points.keys());
+    return owned_boundary_points;
 }
 
 /// Note: This function assumes the image coordinate system where the top-left is (0,
@@ -168,6 +172,38 @@ fn _turnRight(step_direction: StepDirection) StepDirection {
 test "squareContourTracing" {
     const allocator = std.testing.allocator;
 
+    // Simple rectangle
+    try _testSquareContourTracing(
+        BinaryImage{
+            .width = 6,
+            .height = 7,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 0, 0, 0,
+                0, 0, 1, 1, 1, 0,
+                0, 0, 1, 1, 1, 0,
+                0, 0, 1, 1, 1, 0,
+                0, 0, 1, 1, 1, 0,
+                0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0,
+            }),
+        },
+        &[_]ImagePoint{
+            .{ .x = 2, .y = 4 },
+            .{ .x = 2, .y = 3 },
+            .{ .x = 2, .y = 2 },
+            .{ .x = 2, .y = 1 },
+            .{ .x = 3, .y = 1 },
+            .{ .x = 4, .y = 1 },
+            .{ .x = 4, .y = 2 },
+            .{ .x = 4, .y = 3 },
+            .{ .x = 4, .y = 4 },
+            .{ .x = 3, .y = 4 },
+        },
+        allocator,
+    );
+
+    // Complex shape from the "Demonstration" section on
+    // https://www.imageprocessingplace.com/downloads_V3/root_downloads/tutorials/contour_tracing_Abeer_George_Ghuneim/square.html
     try _testSquareContourTracing(
         BinaryImage{
             .width = 6,
@@ -183,24 +219,52 @@ test "squareContourTracing" {
             }),
         },
         &[_]ImagePoint{
-            .{ .x = 4, .y = 3 },
-            .{ .x = 3, .y = 3 },
-            .{ .x = 3, .y = 4 },
-            .{ .x = 3, .y = 4 },
-            .{ .x = 2, .y = 4 },
-            .{ .x = 2, .y = 5 },
             .{ .x = 2, .y = 5 },
             .{ .x = 2, .y = 4 },
             .{ .x = 3, .y = 3 },
+            // TODO: Not sure if this point should be included
             .{ .x = 3, .y = 2 },
             .{ .x = 2, .y = 2 },
-            .{ .x = 2, .y = 2 },
             .{ .x = 3, .y = 1 },
-            .{ .x = 3, .y = 1 },
-            .{ .x = 3, .y = 2 },
-            .{ .x = 4, .y = 2 },
             .{ .x = 4, .y = 2 },
             .{ .x = 4, .y = 3 },
+            .{ .x = 3, .y = 4 },
+        },
+        allocator,
+    );
+
+    // Test Jacob's stopping criterion.
+    // Example is from the "The Stopping Criterion" section on
+    // https://www.imageprocessingplace.com/downloads_V3/root_downloads/tutorials/contour_tracing_Abeer_George_Ghuneim/square.html
+    try _testSquareContourTracing(
+        BinaryImage{
+            .width = 8,
+            .height = 7,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 1, 0, 1, 0, 0,
+                0, 0, 0, 1, 1, 1, 0, 0,
+                0, 0, 0, 0, 1, 0, 1, 0,
+                0, 0, 1, 0, 1, 1, 0, 0,
+                0, 0, 1, 1, 1, 0, 1, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+            }),
+        },
+        &[_]ImagePoint{
+            .{ .x = 2, .y = 5 },
+            .{ .x = 2, .y = 4 },
+            .{ .x = 3, .y = 5 },
+            .{ .x = 4, .y = 4 },
+            .{ .x = 4, .y = 3 },
+            .{ .x = 3, .y = 2 },
+            .{ .x = 3, .y = 1 },
+            .{ .x = 4, .y = 2 },
+            .{ .x = 5, .y = 1 },
+            .{ .x = 5, .y = 2 },
+            .{ .x = 6, .y = 3 },
+            .{ .x = 5, .y = 4 },
+            .{ .x = 6, .y = 5 },
+            .{ .x = 4, .y = 5 },
         },
         allocator,
     );
