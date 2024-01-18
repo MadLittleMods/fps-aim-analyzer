@@ -149,6 +149,7 @@ pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPix
 
 pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.Allocator) !HSVImage {
     const output_hsv_pixels = try allocator.alloc(HSVPixel, hsv_image.pixels.len);
+    errdefer allocator.free(output_hsv_pixels);
     @memset(output_hsv_pixels, HSVPixel{ .h = 0, .s = 0, .v = 0 });
 
     const total_pixels_in_image = hsv_image.width * hsv_image.height;

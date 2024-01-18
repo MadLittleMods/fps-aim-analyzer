@@ -6,6 +6,7 @@ const BinaryImage = image_conversion.BinaryImage;
 const BinaryPixel = image_conversion.BinaryPixel;
 const binaryPixelsfromIntArray = image_conversion.binaryPixelsfromIntArray;
 const binaryToRgbImage = image_conversion.binaryToRgbImage;
+const expectBinaryImageEqual = image_conversion.expectBinaryImageEqual;
 const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
 
@@ -31,6 +32,7 @@ pub fn getStructuringElement(
     assert(height % 2 == 1, "Structuring element height must be odd so we can perfectly center it {}", .{height});
 
     const output_pixels = try allocator.alloc(BinaryPixel, width * height);
+    errdefer output_pixels.deinit(allocator);
 
     const center_x = width / 2;
     const center_y = height / 2;
@@ -256,36 +258,11 @@ fn _testStructuringElement(
         .pixels = &expected_pixels,
     };
 
-    try _expectBinaryImageEqual(
+    try expectBinaryImageEqual(
         actual_structuring_element,
         expected_image,
         allocator,
     );
-}
-
-fn _expectBinaryImageEqual(
-    actual_binary_image: BinaryImage,
-    expected_binary_image: BinaryImage,
-    allocator: std.mem.Allocator,
-) !void {
-    try std.testing.expectEqual(expected_binary_image.width, actual_binary_image.width);
-    try std.testing.expectEqual(expected_binary_image.height, actual_binary_image.height);
-
-    std.testing.expectEqualSlices(
-        BinaryPixel,
-        actual_binary_image.pixels,
-        expected_binary_image.pixels,
-    ) catch |err| {
-        const actual_rgb_image = try binaryToRgbImage(actual_binary_image, allocator);
-        defer actual_rgb_image.deinit(allocator);
-        try printLabeledImage("Actual image", actual_rgb_image, .full_block, allocator);
-
-        const expected_rgb_image = try binaryToRgbImage(expected_binary_image, allocator);
-        defer expected_rgb_image.deinit(allocator);
-        try printLabeledImage("Expected image", expected_rgb_image, .full_block, allocator);
-
-        return err;
-    };
 }
 
 /// The kernel slides through the image and only pixels that have neighbors matching the
@@ -303,6 +280,7 @@ pub fn erode(
 ) !BinaryImage {
     std.debug.print("\nerode {}x{}", .{ kernel.width, kernel.height });
     const output_pixels = try allocator.alloc(BinaryPixel, binary_image.pixels.len);
+    errdefer output_pixels.deinit(allocator);
     @memset(output_pixels, BinaryPixel{ .value = false });
 
     for (0..binary_image.height) |y| {
@@ -335,6 +313,7 @@ pub fn dilate(
 ) !BinaryImage {
     std.debug.print("\ndilate {}x{}", .{ kernel.width, kernel.height });
     const output_pixels = try allocator.alloc(BinaryPixel, binary_image.pixels.len);
+    errdefer output_pixels.deinit(allocator);
     @memset(output_pixels, BinaryPixel{ .value = false });
 
     for (0..binary_image.height) |y| {
@@ -592,7 +571,7 @@ test "erode" {
         .pixels = &expected_eroded_pixels,
     };
 
-    try _expectBinaryImageEqual(
+    try expectBinaryImageEqual(
         eroded_binary_image,
         expected_eroded_image,
         allocator,
@@ -633,7 +612,7 @@ test "dilate" {
         .pixels = &expected_dilated_pixels,
     };
 
-    try _expectBinaryImageEqual(
+    try expectBinaryImageEqual(
         dilated_binary_image,
         expected_dilated_image,
         allocator,

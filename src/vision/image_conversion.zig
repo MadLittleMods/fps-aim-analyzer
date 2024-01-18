@@ -4,6 +4,8 @@ const assertions = @import("../utils/assertions.zig");
 const assert = assertions.assert;
 const comptime_assert = assertions.comptime_assert;
 const approxEqAbs = assertions.approxEqAbs;
+const print_utils = @import("../utils/print_utils.zig");
+const printLabeledImage = print_utils.printLabeledImage;
 
 /// All values are in the range [0, 1]
 pub const RGBPixel = struct {
@@ -169,6 +171,7 @@ pub const RGBImage = struct {
         defer img.deinit();
 
         const output_rgb_pixels = try allocator.alloc(RGBPixel, img.pixels.len());
+        errdefer allocator.free(output_rgb_pixels);
         switch (img.pixels) {
             .rgb24 => |rgb_pixels| {
                 for (rgb_pixels, output_rgb_pixels) |pixel, *output_rgb_pixel| {
@@ -290,6 +293,31 @@ pub fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len
     return binary_pixels;
 }
 
+pub fn expectBinaryImageEqual(
+    actual_binary_image: BinaryImage,
+    expected_binary_image: BinaryImage,
+    allocator: std.mem.Allocator,
+) !void {
+    try std.testing.expectEqual(expected_binary_image.width, actual_binary_image.width);
+    try std.testing.expectEqual(expected_binary_image.height, actual_binary_image.height);
+
+    std.testing.expectEqualSlices(
+        BinaryPixel,
+        actual_binary_image.pixels,
+        expected_binary_image.pixels,
+    ) catch |err| {
+        const actual_rgb_image = try binaryToRgbImage(actual_binary_image, allocator);
+        defer actual_rgb_image.deinit(allocator);
+        try printLabeledImage("Actual image", actual_rgb_image, .full_block, allocator);
+
+        const expected_rgb_image = try binaryToRgbImage(expected_binary_image, allocator);
+        defer expected_rgb_image.deinit(allocator);
+        try printLabeledImage("Expected image", expected_rgb_image, .full_block, allocator);
+
+        return err;
+    };
+}
+
 pub fn cropImage(
     image: anytype,
     x: usize,
@@ -331,6 +359,7 @@ pub fn maskImage(
 
     const PixelType = @TypeOf(image.pixels[0]);
     const output_pixels = try allocator.alloc(PixelType, image.pixels.len);
+    errdefer allocator.free(output_pixels);
     switch (PixelType) {
         RGBPixel => @memset(output_pixels, RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 }),
         HSVPixel => @memset(output_pixels, RGBPixel{ .h = 0.0, .s = 0.0, .v = 0.0 }),
@@ -554,6 +583,7 @@ test "rgbToHsvPixel and hsvToRgbPixel" {
 
 pub fn rgbToHsvImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !HSVImage {
     const output_hsv_pixels = try allocator.alloc(HSVPixel, rgb_image.pixels.len);
+    errdefer allocator.free(output_hsv_pixels);
     for (output_hsv_pixels, rgb_image.pixels) |*output_hsv_pixel, rgb_pixel| {
         output_hsv_pixel.* = rgbToHsvPixel(rgb_pixel);
     }
@@ -567,6 +597,7 @@ pub fn rgbToHsvImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !HSVImag
 
 pub fn hsvToRgbImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !RGBImage {
     const output_rgb_pixels = try allocator.alloc(RGBPixel, hsv_image.pixels.len);
+    errdefer allocator.free(output_rgb_pixels);
     for (output_rgb_pixels, hsv_image.pixels) |*output_rgb_pixel, hsv_pixel| {
         output_rgb_pixel.* = hsvToRgbPixel(hsv_pixel);
     }
@@ -580,6 +611,7 @@ pub fn hsvToRgbImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !RGBImag
 
 pub fn hsvToBinaryImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !BinaryImage {
     const output_binary_pixels = try allocator.alloc(BinaryPixel, hsv_image.pixels.len);
+    errdefer allocator.free(output_binary_pixels);
     for (output_binary_pixels, hsv_image.pixels) |*output_binary_pixel, hsv_pixel| {
         output_binary_pixel.* = BinaryPixel{
             .value = hsv_pixel.v > 0.0,
@@ -595,6 +627,7 @@ pub fn hsvToBinaryImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !Bina
 
 pub fn binaryToRgbImage(binary_image: BinaryImage, allocator: std.mem.Allocator) !RGBImage {
     const output_rgb_pixels = try allocator.alloc(RGBPixel, binary_image.pixels.len);
+    errdefer allocator.free(output_rgb_pixels);
     for (output_rgb_pixels, binary_image.pixels) |*output_rgb_pixel, binary_pixel| {
         output_rgb_pixel.* = RGBPixel{
             .r = if (binary_pixel.value) 1.0 else 0.0,
