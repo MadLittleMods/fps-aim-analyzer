@@ -23,6 +23,10 @@ const printLabeledImage = print_utils.printLabeledImage;
 //  - Suzuki’s Algorithm (OpenCV)
 //  - Fast contour tracing algorithm, https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4813928/
 
+const ContourMethod = enum {
+    square,
+};
+
 /// Image coordinate system that allows out of bounds coordinates.
 /// Top-left is (0, 0),bottom-right is (width, height).
 const CanvasPoint = struct {
@@ -196,6 +200,7 @@ test "findContours (single) (squareContourTracing)" {
                 0, 0, 0, 0, 0, 0,
             }),
         },
+        .square,
         &.{
             &.{
                 .{ .x = 2, .y = 4 }, .{ .x = 2, .y = 3 },
@@ -220,6 +225,7 @@ test "findContours (single) (squareContourTracing)" {
                 1, 1, 1, 1,
             }),
         },
+        .square,
         &.{
             &.{
                 .{ .x = 0, .y = 3 }, .{ .x = 0, .y = 2 },
@@ -249,6 +255,7 @@ test "findContours (single) (squareContourTracing)" {
                 0, 0, 0, 0, 0, 0,
             }),
         },
+        .square,
         &.{
             &.{
                 .{ .x = 2, .y = 5 }, .{ .x = 2, .y = 4 },
@@ -280,6 +287,7 @@ test "findContours (single) (squareContourTracing)" {
                 0, 0, 0, 0, 0, 0, 0, 0,
             }),
         },
+        .square,
         &.{
             &.{
                 .{ .x = 2, .y = 5 }, .{ .x = 2, .y = 4 },
@@ -309,6 +317,7 @@ test "findContours (single) (squareContourTracing)" {
                 0, 0, 0, 0, 0, 0,
             }),
         },
+        .square,
         &.{
             &.{
                 .{ .x = 1, .y = 5 }, .{ .x = 1, .y = 4 },
@@ -344,6 +353,7 @@ test "findContours (multiple) (squareContourTracing)" {
                 0, 0, 0, 0, 0, 0, 0, 0, 0,
             }),
         },
+        .square,
         &.{
             &.{
                 .{ .x = 0, .y = 4 }, .{ .x = 0, .y = 3 },
@@ -362,15 +372,106 @@ test "findContours (multiple) (squareContourTracing)" {
         },
         allocator,
     );
+
+    // // Does not find holes
+    // try _testFindContours(
+    //     BinaryImage{
+    //         .width = 9,
+    //         .height = 8,
+    //         .pixels = &binaryPixelsfromIntArray(&[_]u1{
+    //             0, 0, 0, 0, 0, 0, 0, 0, 0,
+    //             0, 1, 1, 1, 1, 1, 1, 1, 0,
+    //             0, 1, 1, 1, 1, 1, 1, 1, 0,
+    //             0, 1, 1, 0, 1, 1, 1, 1, 0,
+    //             0, 1, 1, 0, 1, 1, 1, 1, 0,
+    //             0, 1, 1, 1, 1, 1, 1, 0, 0,
+    //             0, 1, 1, 1, 1, 1, 0, 0, 0,
+    //             0, 0, 0, 0, 0, 0, 0, 0, 0,
+    //         }),
+    //     },
+    //     .square,
+    //     &.{
+    //         &.{
+    //             .{ .x = 1, .y = 6 }, .{ .x = 1, .y = 5 },
+    //             .{ .x = 1, .y = 4 }, .{ .x = 1, .y = 3 },
+    //             .{ .x = 1, .y = 2 }, .{ .x = 1, .y = 1 },
+    //             .{ .x = 2, .y = 1 }, .{ .x = 3, .y = 1 },
+    //             .{ .x = 4, .y = 1 }, .{ .x = 5, .y = 1 },
+    //             .{ .x = 6, .y = 1 }, .{ .x = 7, .y = 1 },
+    //             .{ .x = 7, .y = 2 }, .{ .x = 7, .y = 3 },
+    //             .{ .x = 7, .y = 4 }, .{ .x = 6, .y = 4 },
+    //             .{ .x = 6, .y = 5 }, .{ .x = 5, .y = 5 },
+    //             .{ .x = 5, .y = 6 }, .{ .x = 4, .y = 6 },
+    //             .{ .x = 3, .y = 6 }, .{ .x = 2, .y = 6 },
+    //         },
+    //     },
+    //     allocator,
+    // );
+
+    // K/wedge shape with fitting triangle
+    try _testFindContours(
+        BinaryImage{
+            .width = 9,
+            .height = 13,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 1, 1, 1, 1, 1, 1, 1, 0,
+                0, 1, 1, 1, 1, 1, 1, 0, 0,
+                0, 1, 1, 1, 1, 1, 0, 0, 0,
+                0, 1, 1, 1, 1, 0, 0, 1, 0,
+                0, 1, 1, 1, 0, 0, 1, 1, 0,
+                0, 1, 1, 0, 0, 1, 1, 1, 0,
+                0, 1, 1, 1, 0, 0, 1, 1, 0,
+                0, 1, 1, 1, 1, 0, 0, 1, 0,
+                0, 1, 1, 1, 1, 1, 0, 0, 0,
+                0, 1, 1, 1, 1, 1, 1, 0, 0,
+                0, 1, 1, 1, 1, 1, 1, 1, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+            }),
+        },
+        .square,
+        &.{
+            &.{
+                .{ .x = 1, .y = 11 }, .{ .x = 1, .y = 10 },
+                .{ .x = 1, .y = 9 },  .{ .x = 1, .y = 8 },
+                .{ .x = 1, .y = 7 },  .{ .x = 1, .y = 6 },
+                .{ .x = 1, .y = 5 },  .{ .x = 1, .y = 4 },
+                .{ .x = 1, .y = 3 },  .{ .x = 1, .y = 2 },
+                .{ .x = 1, .y = 1 },  .{ .x = 2, .y = 1 },
+                .{ .x = 3, .y = 1 },  .{ .x = 4, .y = 1 },
+                .{ .x = 5, .y = 1 },  .{ .x = 6, .y = 1 },
+                .{ .x = 7, .y = 1 },  .{ .x = 6, .y = 2 },
+                .{ .x = 5, .y = 2 },  .{ .x = 5, .y = 3 },
+                .{ .x = 4, .y = 3 },  .{ .x = 4, .y = 4 },
+                .{ .x = 3, .y = 4 },  .{ .x = 3, .y = 5 },
+                .{ .x = 2, .y = 5 },  .{ .x = 2, .y = 6 },
+                .{ .x = 3, .y = 7 },  .{ .x = 4, .y = 8 },
+                .{ .x = 5, .y = 9 },  .{ .x = 6, .y = 10 },
+                .{ .x = 7, .y = 11 }, .{ .x = 6, .y = 11 },
+                .{ .x = 5, .y = 11 }, .{ .x = 4, .y = 11 },
+                .{ .x = 3, .y = 11 }, .{ .x = 2, .y = 11 },
+            },
+            &.{
+                .{ .x = 5, .y = 6 }, .{ .x = 6, .y = 6 },
+                .{ .x = 6, .y = 5 }, .{ .x = 7, .y = 5 },
+                .{ .x = 7, .y = 4 }, .{ .x = 7, .y = 6 },
+                .{ .x = 7, .y = 7 }, .{ .x = 7, .y = 8 },
+                .{ .x = 6, .y = 7 },
+            },
+        },
+        allocator,
+    );
 }
 
 fn _testFindContours(
     binary_image: BinaryImage,
+    contour_method: ContourMethod,
     expected_contours: []const []const ImagePoint,
     allocator: std.mem.Allocator,
 ) !void {
     const contours = try findContours(
         binary_image,
+        contour_method,
         allocator,
     );
     defer {
@@ -383,13 +484,20 @@ fn _testFindContours(
     std.testing.expectEqual(expected_contours.len, contours.len) catch |err| {
         var rgb_image = try binaryToRgbImage(binary_image, allocator);
         defer rgb_image.deinit(allocator);
-        for (contours) |contour| {
+        for (contours, 0..) |contour, contour_index| {
             const previous_rgb_image = rgb_image;
             defer previous_rgb_image.deinit(allocator);
 
             rgb_image = try _traceContourOnRgbImage(
                 rgb_image,
                 contour,
+                switch (contour_index % 4) {
+                    0 => RGBPixel.fromHexNumber(0xff0000),
+                    1 => RGBPixel.fromHexNumber(0x00ff00),
+                    2 => RGBPixel.fromHexNumber(0xff00ff),
+                    3 => RGBPixel.fromHexNumber(0xffff00),
+                    else => unreachable,
+                },
                 allocator,
             );
         }
@@ -424,6 +532,7 @@ fn _testFindContours(
 fn _traceContourOnRgbImage(
     rgb_image: RGBImage,
     contour_boundary: []const ImagePoint,
+    tracing_color: RGBPixel,
     allocator: std.mem.Allocator,
 ) !RGBImage {
     var mutable_pixels = try allocator.alloc(RGBPixel, rgb_image.pixels.len);
@@ -432,7 +541,11 @@ fn _traceContourOnRgbImage(
     for (contour_boundary) |contour_point| {
         const pixel_index = (contour_point.y * rgb_image.width) + contour_point.x;
         const modifier: f32 = if (mutable_pixels[pixel_index].r == 1.0) 1.0 else 0.5;
-        mutable_pixels[pixel_index] = .{ .r = 1.0 * modifier, .g = 0, .b = 0 };
+        mutable_pixels[pixel_index] = .{
+            .r = tracing_color.r * modifier,
+            .g = tracing_color.g * modifier,
+            .b = tracing_color.b * modifier,
+        };
     }
 
     return .{
@@ -442,6 +555,8 @@ fn _traceContourOnRgbImage(
     };
 }
 
+/// Compare two contours and print some useful debugging information/context if they're
+/// not equal
 fn _expectContourEqual(
     binary_image: BinaryImage,
     actual_contour_boundary: []const ImagePoint,
@@ -461,6 +576,7 @@ fn _expectContourEqual(
         const actual_rgb_image = try _traceContourOnRgbImage(
             rgb_image,
             actual_contour_boundary,
+            RGBPixel.fromHexNumber(0xff0000),
             allocator,
         );
         defer actual_rgb_image.deinit(allocator);
@@ -482,6 +598,7 @@ fn _expectContourEqual(
         const expected_rgb_image = try _traceContourOnRgbImage(
             rgb_image,
             expected_contour_boundary,
+            RGBPixel.fromHexNumber(0xff0000),
             allocator,
         );
         defer expected_rgb_image.deinit(allocator);
@@ -512,9 +629,11 @@ pub fn mooreContourTracing(binary_image: BinaryImage, allocator: std.mem.Allocat
     _ = allocator;
     _ = binary_image;
     // TODO
+    @compileError("Not implemented");
 }
 
-pub fn findContours(binary_image: BinaryImage, allocator: std.mem.Allocator) ![]const []const ImagePoint {
+/// Find all contours in a binary image.
+pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, allocator: std.mem.Allocator) ![]const []const ImagePoint {
     var contours = std.ArrayList([]const ImagePoint).init(allocator);
     errdefer contours.deinit();
 
@@ -566,12 +685,15 @@ pub fn findContours(binary_image: BinaryImage, allocator: std.mem.Allocator) ![]
                 // direction is up
                 start_direction = StepDirection.Up;
 
-                const contour_boundary_points = try squareContourTracing(
-                    binary_image,
-                    start_point,
-                    start_direction,
-                    allocator,
-                );
+                const contour_boundary_points = switch (contour_method) {
+                    .square => try squareContourTracing(
+                        binary_image,
+                        start_point,
+                        start_direction,
+                        allocator,
+                    ),
+                };
+
                 try contours.append(contour_boundary_points);
                 // Mark all of the boundary points as seen
                 for (contour_boundary_points) |contour_boundary_point| {
