@@ -29,6 +29,13 @@ const CanvasPoint = struct {
     x: isize,
     y: isize,
 
+    pub fn fromImagePoint(image_point: ImagePoint) CanvasPoint {
+        return CanvasPoint{
+            .x = @intCast(image_point.x),
+            .y = @intCast(image_point.y),
+        };
+    }
+
     pub fn stepInDirection(current_point: @This(), step_direction: StepDirection) @This() {
         return CanvasPoint{
             .x = current_point.x + step_direction.x,
@@ -87,46 +94,40 @@ const StepDirection = struct {
 /// References:
 ///  - https://www.imageprocessingplace.com/downloads_V3/root_downloads/tutorials/contour_tracing_Abeer_George_Ghuneim/square.html
 ///  - https://en.wikipedia.org/wiki/Boundary_tracing#Square_tracing_algorithm
-pub fn squareContourTracing(binary_image: BinaryImage, allocator: std.mem.Allocator) ![]const ImagePoint {
-    // Find the starting point
-    //
-    // Starting from the left-most column, scan bottom-up until we find the first active
-    // pixel
-    var start_point: CanvasPoint = undefined;
-    var start_direction: StepDirection = undefined;
-    // Start from the left-most column
-    outer: for (0..binary_image.width) |x| {
-        // Scan bottom-up
-        var y = binary_image.height - 1;
-        while (y > 0) : (y -%= 1) {
-            const current_pixel_index = (y * binary_image.width) + x;
-
-            if (binary_image.pixels[current_pixel_index].value) {
-                start_point = CanvasPoint{ .x = @intCast(x), .y = @intCast(y) };
-                // We're scanning from the bottom going upwards, so the initial
-                // direction is up
-                start_direction = StepDirection.Up;
-                break :outer;
-            }
-        }
+pub fn squareContourTracing(
+    binary_image: BinaryImage,
+    start_point: ImagePoint,
+    start_direction: StepDirection,
+    allocator: std.mem.Allocator,
+) ![]const ImagePoint {
+    const start_canvas_point = CanvasPoint.fromImagePoint(start_point);
+    // Sanity check that someone passed an active pixel as the start point
+    if (!binary_image.pixels[(start_point.y * binary_image.width) + start_point.x].value) {
+        std.log.err("squareContourTracing: start_point {}x{} must be active but was inactive", .{
+            start_point.x,
+            start_point.y,
+        });
+        return error.StartPointNotActive;
     }
 
     // We use a hash map to avoid duplicates
     var boundary_points = std.AutoArrayHashMap(ImagePoint, void).init(allocator);
     defer boundary_points.deinit();
     // We found at least one active pixel
-    try boundary_points.put(ImagePoint.fromCanvasPoint(start_point), {});
+    try boundary_points.put(start_point, {});
 
     // The first pixel you encounter is a white one by definition, so we go left
     var current_direction = _turnLeft(start_direction);
     var current_point: CanvasPoint = CanvasPoint.stepInDirection(
-        start_point,
+        start_canvas_point,
         current_direction,
     );
 
     // Jacob's stopping criterion: Stop after entering the start pixel a second time in
     // the same direction you entered it initially
-    while (!(std.meta.eql(current_point, start_point) and std.meta.eql(current_direction, start_direction))) {
+    while (!(std.meta.eql(current_point, start_canvas_point) and
+        std.meta.eql(current_direction, start_direction)))
+    {
         // Be careful to not go out of bounds while getting the current pixel index
         const optional_current_pixel_index: ?usize = blk: {
             const is_current_point_in_image_bounds = current_point.x >= 0 and
@@ -181,7 +182,7 @@ test "squareContourTracing" {
     const allocator = std.testing.allocator;
 
     // Simple rectangle
-    try _testSquareContourTracing(
+    try _testFindContours(
         BinaryImage{
             .width = 6,
             .height = 7,
@@ -195,18 +196,20 @@ test "squareContourTracing" {
                 0, 0, 0, 0, 0, 0,
             }),
         },
-        &[_]ImagePoint{
-            .{ .x = 2, .y = 4 }, .{ .x = 2, .y = 3 },
-            .{ .x = 2, .y = 2 }, .{ .x = 2, .y = 1 },
-            .{ .x = 3, .y = 1 }, .{ .x = 4, .y = 1 },
-            .{ .x = 4, .y = 2 }, .{ .x = 4, .y = 3 },
-            .{ .x = 4, .y = 4 }, .{ .x = 3, .y = 4 },
+        &.{
+            &.{
+                .{ .x = 2, .y = 4 }, .{ .x = 2, .y = 3 },
+                .{ .x = 2, .y = 2 }, .{ .x = 2, .y = 1 },
+                .{ .x = 3, .y = 1 }, .{ .x = 4, .y = 1 },
+                .{ .x = 4, .y = 2 }, .{ .x = 4, .y = 3 },
+                .{ .x = 4, .y = 4 }, .{ .x = 3, .y = 4 },
+            },
         },
         allocator,
     );
 
     // Test to make sure we can detect contours on the outer edges of the image
-    try _testSquareContourTracing(
+    try _testFindContours(
         BinaryImage{
             .width = 4,
             .height = 4,
@@ -217,20 +220,22 @@ test "squareContourTracing" {
                 1, 1, 1, 1,
             }),
         },
-        &[_]ImagePoint{
-            .{ .x = 0, .y = 3 }, .{ .x = 0, .y = 2 },
-            .{ .x = 0, .y = 1 }, .{ .x = 0, .y = 0 },
-            .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 0 },
-            .{ .x = 3, .y = 0 }, .{ .x = 3, .y = 1 },
-            .{ .x = 3, .y = 2 }, .{ .x = 3, .y = 3 },
-            .{ .x = 2, .y = 3 }, .{ .x = 1, .y = 3 },
+        &.{
+            &.{
+                .{ .x = 0, .y = 3 }, .{ .x = 0, .y = 2 },
+                .{ .x = 0, .y = 1 }, .{ .x = 0, .y = 0 },
+                .{ .x = 1, .y = 0 }, .{ .x = 2, .y = 0 },
+                .{ .x = 3, .y = 0 }, .{ .x = 3, .y = 1 },
+                .{ .x = 3, .y = 2 }, .{ .x = 3, .y = 3 },
+                .{ .x = 2, .y = 3 }, .{ .x = 1, .y = 3 },
+            },
         },
         allocator,
     );
 
     // Complex shape from the "Demonstration" section on
     // https://www.imageprocessingplace.com/downloads_V3/root_downloads/tutorials/contour_tracing_Abeer_George_Ghuneim/square.html
-    try _testSquareContourTracing(
+    try _testFindContours(
         BinaryImage{
             .width = 6,
             .height = 7,
@@ -244,14 +249,16 @@ test "squareContourTracing" {
                 0, 0, 0, 0, 0, 0,
             }),
         },
-        &[_]ImagePoint{
-            .{ .x = 2, .y = 5 }, .{ .x = 2, .y = 4 },
-            .{ .x = 3, .y = 3 },
-            // TODO: Not sure this point should be included
-            .{ .x = 3, .y = 2 },
-            .{ .x = 2, .y = 2 }, .{ .x = 3, .y = 1 },
-            .{ .x = 4, .y = 2 }, .{ .x = 4, .y = 3 },
-            .{ .x = 3, .y = 4 },
+        &.{
+            &.{
+                .{ .x = 2, .y = 5 }, .{ .x = 2, .y = 4 },
+                .{ .x = 3, .y = 3 },
+                // TODO: Not sure this point should be included
+                .{ .x = 3, .y = 2 },
+                .{ .x = 2, .y = 2 }, .{ .x = 3, .y = 1 },
+                .{ .x = 4, .y = 2 }, .{ .x = 4, .y = 3 },
+                .{ .x = 3, .y = 4 },
+            },
         },
         allocator,
     );
@@ -259,7 +266,7 @@ test "squareContourTracing" {
     // Test Jacob's stopping criterion.
     // Example is from the "The Stopping Criterion" section on
     // https://www.imageprocessingplace.com/downloads_V3/root_downloads/tutorials/contour_tracing_Abeer_George_Ghuneim/square.html
-    try _testSquareContourTracing(
+    try _testFindContours(
         BinaryImage{
             .width = 8,
             .height = 7,
@@ -273,20 +280,22 @@ test "squareContourTracing" {
                 0, 0, 0, 0, 0, 0, 0, 0,
             }),
         },
-        &[_]ImagePoint{
-            .{ .x = 2, .y = 5 }, .{ .x = 2, .y = 4 },
-            .{ .x = 3, .y = 5 }, .{ .x = 4, .y = 4 },
-            .{ .x = 4, .y = 3 }, .{ .x = 3, .y = 2 },
-            .{ .x = 3, .y = 1 }, .{ .x = 4, .y = 2 },
-            .{ .x = 5, .y = 1 }, .{ .x = 5, .y = 2 },
-            .{ .x = 6, .y = 3 }, .{ .x = 5, .y = 4 },
-            .{ .x = 6, .y = 5 }, .{ .x = 4, .y = 5 },
+        &.{
+            &.{
+                .{ .x = 2, .y = 5 }, .{ .x = 2, .y = 4 },
+                .{ .x = 3, .y = 5 }, .{ .x = 4, .y = 4 },
+                .{ .x = 4, .y = 3 }, .{ .x = 3, .y = 2 },
+                .{ .x = 3, .y = 1 }, .{ .x = 4, .y = 2 },
+                .{ .x = 5, .y = 1 }, .{ .x = 5, .y = 2 },
+                .{ .x = 6, .y = 3 }, .{ .x = 5, .y = 4 },
+                .{ .x = 6, .y = 5 }, .{ .x = 4, .y = 5 },
+            },
         },
         allocator,
     );
 
     // K/wedge shape
-    try _testSquareContourTracing(
+    try _testFindContours(
         BinaryImage{
             .width = 6,
             .height = 7,
@@ -300,50 +309,85 @@ test "squareContourTracing" {
                 0, 0, 0, 0, 0, 0,
             }),
         },
-        &[_]ImagePoint{
-            .{ .x = 1, .y = 5 }, .{ .x = 1, .y = 4 },
-            .{ .x = 1, .y = 3 }, .{ .x = 1, .y = 2 },
-            .{ .x = 1, .y = 1 }, .{ .x = 2, .y = 1 },
-            .{ .x = 3, .y = 1 }, .{ .x = 4, .y = 1 },
-            .{ .x = 3, .y = 2 }, .{ .x = 2, .y = 3 },
-            // TODO: Not sure this point should be included
-            .{ .x = 2, .y = 4 }, .{ .x = 3, .y = 4 },
-            .{ .x = 3, .y = 5 }, .{ .x = 4, .y = 5 },
-            .{ .x = 2, .y = 5 },
+        &.{
+            &.{
+                .{ .x = 1, .y = 5 }, .{ .x = 1, .y = 4 },
+                .{ .x = 1, .y = 3 }, .{ .x = 1, .y = 2 },
+                .{ .x = 1, .y = 1 }, .{ .x = 2, .y = 1 },
+                .{ .x = 3, .y = 1 }, .{ .x = 4, .y = 1 },
+                .{ .x = 3, .y = 2 }, .{ .x = 2, .y = 3 },
+                // TODO: Not sure this point should be included
+                .{ .x = 2, .y = 4 }, .{ .x = 3, .y = 4 },
+                .{ .x = 3, .y = 5 }, .{ .x = 4, .y = 5 },
+                .{ .x = 2, .y = 5 },
+            },
         },
         allocator,
     );
 }
 
-fn _testSquareContourTracing(
+fn _testFindContours(
     binary_image: BinaryImage,
-    expected_contour_boundary: []const ImagePoint,
+    expected_contours: []const []const ImagePoint,
     allocator: std.mem.Allocator,
 ) !void {
-    const actual_contour_boundary = try squareContourTracing(binary_image, allocator);
-    defer allocator.free(actual_contour_boundary);
-    try _expectContourEqual(
+    const contours = try findContours(
         binary_image,
-        actual_contour_boundary,
-        expected_contour_boundary,
         allocator,
     );
+    defer {
+        for (contours) |contour| {
+            allocator.free(contour);
+        }
+        allocator.free(contours);
+    }
+
+    std.testing.expectEqual(expected_contours.len, contours.len) catch |err| {
+        var rgb_image = try binaryToRgbImage(binary_image, allocator);
+        defer rgb_image.deinit(allocator);
+        for (contours) |contour| {
+            const previous_rgb_image = rgb_image;
+            defer previous_rgb_image.deinit(allocator);
+
+            rgb_image = try _traceContourOnRgbImage(
+                rgb_image,
+                contour,
+                allocator,
+            );
+        }
+        try printLabeledImage(
+            "Contour traced image",
+            rgb_image,
+            .full_block,
+            allocator,
+        );
+
+        return err;
+    };
+
+    for (contours, expected_contours) |contour, expected_contour| {
+        try _expectContourEqual(
+            binary_image,
+            contour,
+            expected_contour,
+            allocator,
+        );
+    }
 }
 
 /// Trace the contour on the image with red pixels
 fn _traceContourOnRgbImage(
-    binary_image: BinaryImage,
+    rgb_image: RGBImage,
     contour_boundary: []const ImagePoint,
     allocator: std.mem.Allocator,
 ) !RGBImage {
-    const rgb_image = try binaryToRgbImage(binary_image, allocator);
-    defer rgb_image.deinit(allocator);
     var mutable_pixels = try allocator.alloc(RGBPixel, rgb_image.pixels.len);
     std.mem.copyForwards(RGBPixel, mutable_pixels, rgb_image.pixels);
 
     for (contour_boundary) |contour_point| {
         const pixel_index = (contour_point.y * rgb_image.width) + contour_point.x;
-        mutable_pixels[pixel_index] = .{ .r = 1.0, .g = 0, .b = 0 };
+        const modifier: f32 = if (mutable_pixels[pixel_index].r == 1.0) 1.0 else 0.5;
+        mutable_pixels[pixel_index] = .{ .r = 1.0 * modifier, .g = 0, .b = 0 };
     }
 
     return .{
@@ -364,8 +408,10 @@ fn _expectContourEqual(
         expected_contour_boundary,
         actual_contour_boundary,
     ) catch |err| {
+        const rgb_image = try binaryToRgbImage(binary_image, allocator);
+        defer rgb_image.deinit(allocator);
         const actual_rgb_image = try _traceContourOnRgbImage(
-            binary_image,
+            rgb_image,
             actual_contour_boundary,
             allocator,
         );
@@ -378,7 +424,7 @@ fn _expectContourEqual(
         );
 
         const expected_rgb_image = try _traceContourOnRgbImage(
-            binary_image,
+            rgb_image,
             expected_contour_boundary,
             allocator,
         );
@@ -405,13 +451,74 @@ pub fn mooreContourTracing(binary_image: BinaryImage, allocator: std.mem.Allocat
     // TODO
 }
 
-pub fn findContours(binary_image: BinaryImage, allocator: std.mem.Allocator) void {
-    _ = allocator;
-    _ = binary_image;
-    // TODO
+pub fn findContours(binary_image: BinaryImage, allocator: std.mem.Allocator) ![]const []const ImagePoint {
+    var contours = std.ArrayList([]const ImagePoint).init(allocator);
+    errdefer contours.deinit();
 
-    // TODO: If there are multiple objects trace the boundary of first object then mask
-    // the object using the boundary
+    var seen_boundary_points = std.AutoArrayHashMap(ImagePoint, void).init(allocator);
+    defer seen_boundary_points.deinit();
+
+    // Find the starting point
+    //
+    // Starting from the left-most column, scan bottom-up until we find the first active
+    // pixel
+    var start_point: ImagePoint = undefined;
+    var start_direction: StepDirection = undefined;
+    // Start from the left-most column
+    for (0..binary_image.width) |x| {
+        // Scan bottom-up
+        var y = binary_image.height - 1;
+        while (y > 0) : (y -%= 1) {
+            const current_pixel_index = (y * binary_image.width) + x;
+            // Be careful to not go out of bounds while getting the pixel index
+            const optional_last_pixel_index: ?usize = blk: {
+                const is_point_in_image_bounds = x >= 0 and
+                    x < binary_image.width and
+                    (y + 1) >= 0 and
+                    (y + 1) < binary_image.height;
+
+                if (is_point_in_image_bounds) {
+                    const last_pixel_index = ((y + 1) * binary_image.width) + x;
+                    break :blk last_pixel_index;
+                }
+
+                break :blk null;
+            };
+
+            // This only looks for the outside of shapes (not the holes inside)
+            const has_contour_begun = // Look for an active pixel where...
+                binary_image.pixels[current_pixel_index].value and
+                // the previous pixel was inactive which indicates we're entering a shape
+                (optional_last_pixel_index == null or !binary_image.pixels[optional_last_pixel_index.?].value);
+
+            const already_seen_pixel_in_boundary = seen_boundary_points.get(ImagePoint{ .x = x, .y = y }) != null;
+
+            // Whenever we enter an active shape, start tracing a contour
+            if (has_contour_begun and
+                // Skip if we've already seen this boundary point
+                !already_seen_pixel_in_boundary)
+            {
+                start_point = ImagePoint{ .x = @intCast(x), .y = @intCast(y) };
+                // We're scanning from the bottom going upwards, so the initial
+                // direction is up
+                start_direction = StepDirection.Up;
+
+                const contour_boundary_points = try squareContourTracing(
+                    binary_image,
+                    start_point,
+                    start_direction,
+                    allocator,
+                );
+                try contours.append(contour_boundary_points);
+                // Mark all of the boundary points as seen
+                for (contour_boundary_points) |contour_boundary_point| {
+                    try seen_boundary_points.put(contour_boundary_point, {});
+                }
+            }
+        }
+    }
+
+    return contours.toOwnedSlice();
 }
 
 pub fn boundingRect() void {
