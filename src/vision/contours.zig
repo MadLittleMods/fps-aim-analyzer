@@ -178,7 +178,7 @@ fn _turnRight(step_direction: StepDirection) StepDirection {
     return .{ .x = -step_direction.y, .y = step_direction.x };
 }
 
-test "squareContourTracing" {
+test "findContours (single) (squareContourTracing)" {
     const allocator = std.testing.allocator;
 
     // Simple rectangle
@@ -326,6 +326,44 @@ test "squareContourTracing" {
     );
 }
 
+test "findContours (multiple) (squareContourTracing)" {
+    const allocator = std.testing.allocator;
+
+    // Simple rectangles
+    try _testFindContours(
+        BinaryImage{
+            .width = 9,
+            .height = 7,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+                1, 1, 1, 0, 1, 1, 1, 1, 0,
+                1, 1, 1, 0, 1, 1, 1, 1, 0,
+                1, 1, 1, 0, 1, 1, 1, 1, 0,
+                1, 1, 1, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+            }),
+        },
+        &.{
+            &.{
+                .{ .x = 0, .y = 4 }, .{ .x = 0, .y = 3 },
+                .{ .x = 0, .y = 2 }, .{ .x = 0, .y = 1 },
+                .{ .x = 1, .y = 1 }, .{ .x = 2, .y = 1 },
+                .{ .x = 2, .y = 2 }, .{ .x = 2, .y = 3 },
+                .{ .x = 2, .y = 4 }, .{ .x = 1, .y = 4 },
+            },
+            &.{
+                .{ .x = 4, .y = 3 }, .{ .x = 4, .y = 2 },
+                .{ .x = 4, .y = 1 }, .{ .x = 5, .y = 1 },
+                .{ .x = 6, .y = 1 }, .{ .x = 7, .y = 1 },
+                .{ .x = 7, .y = 2 }, .{ .x = 7, .y = 3 },
+                .{ .x = 6, .y = 3 }, .{ .x = 5, .y = 3 },
+            },
+        },
+        allocator,
+    );
+}
+
 fn _testFindContours(
     binary_image: BinaryImage,
     expected_contours: []const []const ImagePoint,
@@ -365,11 +403,18 @@ fn _testFindContours(
         return err;
     };
 
-    for (contours, expected_contours) |contour, expected_contour| {
+    for (contours, expected_contours, 0..) |contour, expected_contour, contour_index| {
+        const extra_label_string = try std.fmt.allocPrint(
+            allocator,
+            "index {}",
+            .{contour_index},
+        );
+        defer allocator.free(extra_label_string);
         try _expectContourEqual(
             binary_image,
             contour,
             expected_contour,
+            extra_label_string,
             allocator,
         );
     }
@@ -401,6 +446,7 @@ fn _expectContourEqual(
     binary_image: BinaryImage,
     actual_contour_boundary: []const ImagePoint,
     expected_contour_boundary: []const ImagePoint,
+    extra_label: []const u8,
     allocator: std.mem.Allocator,
 ) !void {
     std.testing.expectEqualSlices(
@@ -410,27 +456,44 @@ fn _expectContourEqual(
     ) catch |err| {
         const rgb_image = try binaryToRgbImage(binary_image, allocator);
         defer rgb_image.deinit(allocator);
+
+        // Print the actual contour
         const actual_rgb_image = try _traceContourOnRgbImage(
             rgb_image,
             actual_contour_boundary,
             allocator,
         );
         defer actual_rgb_image.deinit(allocator);
+        // Construct a label
+        const actual_label_string = try std.fmt.allocPrint(
+            allocator,
+            "Actual contour ({s})",
+            .{extra_label},
+        );
+        defer allocator.free(actual_label_string);
         try printLabeledImage(
-            "Actual contour",
+            actual_label_string,
             actual_rgb_image,
             .full_block,
             allocator,
         );
 
+        // Print the expected contour
         const expected_rgb_image = try _traceContourOnRgbImage(
             rgb_image,
             expected_contour_boundary,
             allocator,
         );
         defer expected_rgb_image.deinit(allocator);
+        // Construct a label
+        const expected_label_string = try std.fmt.allocPrint(
+            allocator,
+            "Expected contour ({s})",
+            .{extra_label},
+        );
+        defer allocator.free(expected_label_string);
         try printLabeledImage(
-            "Expected contour",
+            expected_label_string,
             expected_rgb_image,
             .full_block,
             allocator,
