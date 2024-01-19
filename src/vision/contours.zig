@@ -25,13 +25,13 @@ const printLabeledImage = print_utils.printLabeledImage;
 //  - Suzuki’s Algorithm (OpenCV)
 //  - Fast contour tracing algorithm, https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4813928/
 
-const ContourMethod = enum {
+pub const ContourMethod = enum {
     square,
 };
 
 /// Image coordinate system that allows out of bounds coordinates.
 /// Top-left is (0, 0),bottom-right is (width, height).
-const CanvasPoint = struct {
+pub const CanvasPoint = struct {
     x: isize,
     y: isize,
 
@@ -52,7 +52,7 @@ const CanvasPoint = struct {
 
 /// A coordinate that exists within an image.
 /// Top-left is (0, 0),bottom-right is (width, height).
-const ImagePoint = struct {
+pub const ImagePoint = struct {
     x: usize,
     y: usize,
 
@@ -73,7 +73,7 @@ const ImagePoint = struct {
 
 /// Assumes image coordinate system where the top-left is (0, 0), / bottom-right is
 /// (width, height)
-const StepDirection = struct {
+pub const StepDirection = struct {
     x: isize,
     y: isize,
 
@@ -498,26 +498,15 @@ fn _testFindContours(
         // picture of what's going on
         var rgb_image = try binaryToRgbImage(binary_image, allocator);
         defer rgb_image.deinit(allocator);
-        for (contours, 0..) |contour, contour_index| {
-            const previous_rgb_image = rgb_image;
-            defer previous_rgb_image.deinit(allocator);
-
-            rgb_image = try _traceContourOnRgbImage(
-                rgb_image,
-                contour,
-                switch (contour_index % 4) {
-                    0 => RGBPixel.fromHexNumber(0xff0000),
-                    1 => RGBPixel.fromHexNumber(0x00ff00),
-                    2 => RGBPixel.fromHexNumber(0xff00ff),
-                    3 => RGBPixel.fromHexNumber(0xffff00),
-                    else => unreachable,
-                },
-                allocator,
-            );
-        }
+        const traced_rgb_image = try traceContoursOnRgbImage(
+            rgb_image,
+            contours,
+            allocator,
+        );
+        defer traced_rgb_image.deinit(allocator);
         try printLabeledImage(
             "Contour traced image",
-            rgb_image,
+            traced_rgb_image,
             .full_block,
             allocator,
         );
@@ -543,8 +532,43 @@ fn _testFindContours(
     }
 }
 
+/// Trace multiple contours on the image with different colors
+pub fn traceContoursOnRgbImage(
+    rgb_image: RGBImage,
+    contours: []const []const ImagePoint,
+    allocator: std.mem.Allocator,
+) !RGBImage {
+    var output_rgb_image = rgb_image;
+    // Trace all of the contours onto the image and print it to give a holistic
+    // picture of what's going on
+    for (contours, 0..) |contour, contour_index| {
+        const previous_rgb_image = output_rgb_image;
+        // Avoid freeing the image that was passed in
+        defer {
+            if (contour_index > 0) {
+                previous_rgb_image.deinit(allocator);
+            }
+        }
+
+        output_rgb_image = try traceContourOnRgbImage(
+            output_rgb_image,
+            contour,
+            switch (contour_index % 4) {
+                0 => RGBPixel.fromHexNumber(0xff0000),
+                1 => RGBPixel.fromHexNumber(0x00ff00),
+                2 => RGBPixel.fromHexNumber(0xff00ff),
+                3 => RGBPixel.fromHexNumber(0xffff00),
+                else => unreachable,
+            },
+            allocator,
+        );
+    }
+
+    return output_rgb_image;
+}
+
 /// Trace the contour on the image with red pixels
-fn _traceContourOnRgbImage(
+pub fn traceContourOnRgbImage(
     rgb_image: RGBImage,
     contour_boundary: []const ImagePoint,
     tracing_color: RGBPixel,
@@ -588,7 +612,7 @@ fn _expectContourEqual(
         defer rgb_image.deinit(allocator);
 
         // Print the actual contour
-        const actual_rgb_image = try _traceContourOnRgbImage(
+        const actual_rgb_image = try traceContourOnRgbImage(
             rgb_image,
             actual_contour_boundary,
             RGBPixel.fromHexNumber(0xff0000),
@@ -610,7 +634,7 @@ fn _expectContourEqual(
         );
 
         // Print the expected contour
-        const expected_rgb_image = try _traceContourOnRgbImage(
+        const expected_rgb_image = try traceContourOnRgbImage(
             rgb_image,
             expected_contour_boundary,
             RGBPixel.fromHexNumber(0xff0000),

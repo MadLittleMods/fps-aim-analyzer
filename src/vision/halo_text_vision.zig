@@ -1,4 +1,6 @@
 const std = @import("std");
+const render_utils = @import("../utils/render_utils.zig");
+const BoundingClientRect = render_utils.BoundingClientRect;
 const image_conversion = @import("image_conversion.zig");
 const HSVPixel = image_conversion.HSVPixel;
 const HSVImage = image_conversion.HSVImage;
@@ -13,6 +15,10 @@ const morphological_operations = @import("morphological_operations.zig");
 const getStructuringElement = morphological_operations.getStructuringElement;
 const erode = morphological_operations.erode;
 const dilate = morphological_operations.dilate;
+const contours = @import("contours.zig");
+const findContours = contours.findContours;
+const traceContoursOnRgbImage = contours.traceContoursOnRgbImage;
+const boundingRect = contours.boundingRect;
 const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
 const decorateStringWithAnsiColor = print_utils.decorateStringWithAnsiColor;
@@ -500,61 +506,138 @@ test "Find Halo ammo counter region" {
     // Find the chromatic aberration text
     const chromatic_pattern_hsv_img = try findHaloChromaticAberrationText(hsv_image, allocator);
     defer chromatic_pattern_hsv_img.deinit(allocator);
+    // Debug: After finding the chromatic aberration pattern
     try chromatic_pattern_hsv_img.saveImageToFilePath(
         "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result1.png",
         allocator,
     );
 
-    // Erode and dilate the mask to TODO
-    const chromatic_pattern_binary_mask = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
-    defer chromatic_pattern_binary_mask.deinit(allocator);
-    const erode_kernel = try getStructuringElement(
-        .cross,
-        3,
-        3,
-        allocator,
-    );
-    defer erode_kernel.deinit(allocator);
-    const chromatic_pattern_eroded_mask = try erode(
-        chromatic_pattern_binary_mask,
-        erode_kernel,
-        allocator,
-    );
-    defer chromatic_pattern_eroded_mask.deinit(allocator);
-    // Create horizontal kernel and dilate to connect text characters
-    const dilate_kernel = try getStructuringElement(
-        .rectangle,
-        9,
-        13,
-        allocator,
-    );
-    const eroded_chromatic_pattern_rgb_image = try maskImage(
-        cropped_rgb_image,
-        chromatic_pattern_eroded_mask, // chromatic_pattern_dilated_mask,
-        allocator,
-    );
-    defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
-    try eroded_chromatic_pattern_rgb_image.saveImageToFilePath(
-        "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result2.png",
-        allocator,
-    );
+    // Erode and dilate (open) the mask to get rid of
+    const chromatic_pattern_opened_mask = opened_mask: {
+        const chromatic_pattern_binary_mask = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
+        defer chromatic_pattern_binary_mask.deinit(allocator);
 
-    defer dilate_kernel.deinit(allocator);
-    const chromatic_pattern_dilated_mask = try dilate(
-        chromatic_pattern_eroded_mask,
-        dilate_kernel,
-        allocator,
-    );
-    defer chromatic_pattern_dilated_mask.deinit(allocator);
+        // Erode the mask to get rid of some of the smaller chromatic aberration captures
+        const erode_kernel = try getStructuringElement(
+            .cross,
+            3,
+            3,
+            allocator,
+        );
+        defer erode_kernel.deinit(allocator);
+        const chromatic_pattern_eroded_mask = try erode(
+            chromatic_pattern_binary_mask,
+            erode_kernel,
+            allocator,
+        );
+        defer chromatic_pattern_eroded_mask.deinit(allocator);
+        // Debug: After eroding
+        {
+            const eroded_chromatic_pattern_rgb_image = try maskImage(
+                cropped_rgb_image,
+                chromatic_pattern_eroded_mask,
+                allocator,
+            );
+            defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
+            try eroded_chromatic_pattern_rgb_image.saveImageToFilePath(
+                "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result2.png",
+                allocator,
+            );
+        }
 
-    const opened_chromatic_pattern_rgb_image = try maskImage(
-        cropped_rgb_image,
-        chromatic_pattern_dilated_mask,
+        // Create a horizontal kernel and dilate to connect text characters
+        const dilate_kernel = try getStructuringElement(
+            .rectangle,
+            9,
+            13,
+            allocator,
+        );
+        defer dilate_kernel.deinit(allocator);
+        const chromatic_pattern_dilated_mask = try dilate(
+            chromatic_pattern_eroded_mask,
+            dilate_kernel,
+            allocator,
+        );
+        // defer chromatic_pattern_dilated_mask.deinit(allocator);
+
+        break :opened_mask chromatic_pattern_dilated_mask;
+    };
+    defer chromatic_pattern_opened_mask.deinit(allocator);
+
+    // Debug: Pixels after opening (erode/dilate)
+    {
+        const opened_chromatic_pattern_rgb_image = try maskImage(
+            cropped_rgb_image,
+            chromatic_pattern_opened_mask,
+            allocator,
+        );
+        defer opened_chromatic_pattern_rgb_image.deinit(allocator);
+        try opened_chromatic_pattern_rgb_image.saveImageToFilePath(
+            "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result3.png",
+            allocator,
+        );
+    }
+
+    // Find the contours in the opened mask
+    const chromatic_contours = try findContours(
+        chromatic_pattern_opened_mask,
+        .square,
         allocator,
     );
-    defer opened_chromatic_pattern_rgb_image.deinit(allocator);
-    try opened_chromatic_pattern_rgb_image.saveImageToFilePath(
-        "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result3.png",
-        allocator,
-    );
+    defer {
+        for (chromatic_contours) |contour| {
+            allocator.free(contour);
+        }
+        allocator.free(chromatic_contours);
+    }
+    // Debug: Trace contours
+    {
+        const opened_chromatic_pattern_rgb_image = try maskImage(
+            cropped_rgb_image,
+            chromatic_pattern_opened_mask,
+            allocator,
+        );
+        defer opened_chromatic_pattern_rgb_image.deinit(allocator);
+
+        const traced_rgb_image = try traceContoursOnRgbImage(
+            opened_chromatic_pattern_rgb_image,
+            chromatic_contours,
+            allocator,
+        );
+        defer traced_rgb_image.deinit(allocator);
+
+        try traced_rgb_image.saveImageToFilePath(
+            "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result4.png",
+            allocator,
+        );
+    }
+
+    const optional_ammo_bounding_box: ?BoundingClientRect(usize) = bounding_box: {
+        const character_min_width = 14;
+        const character_min_height = 21;
+        for (chromatic_contours) |contour| {
+            const bounding_box = boundingRect(contour);
+            if (bounding_box.width > character_min_width and bounding_box.height > character_min_height) {
+                break :bounding_box bounding_box;
+            }
+        }
+        break :bounding_box null;
+    };
+
+    if (optional_ammo_bounding_box) |ammo_bounding_box| {
+        std.debug.print("\nammo_bounding_box: {}\n", .{ammo_bounding_box});
+        const ammo_cropped_rgb_image = try cropImage(
+            cropped_rgb_image,
+            ammo_bounding_box.x,
+            ammo_bounding_box.y,
+            ammo_bounding_box.width,
+            ammo_bounding_box.height,
+            allocator,
+        );
+        defer ammo_cropped_rgb_image.deinit(allocator);
+        try printLabeledImage("ammo_cropped_rgb_image", ammo_cropped_rgb_image, .half_block, allocator);
+        try ammo_cropped_rgb_image.saveImageToFilePath("/home/eric/Downloads/36-1080-export-from-gimp-ammo-counter-cropped-result.png", allocator);
+    } else {
+        return error.UnableToFindAmmoCounter;
+    }
 }

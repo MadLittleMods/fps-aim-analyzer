@@ -358,8 +358,9 @@ pub fn maskImage(
     });
 
     const PixelType = @TypeOf(image.pixels[0]);
-    const output_pixels = try allocator.alloc(PixelType, image.pixels.len);
+    var output_pixels = try allocator.alloc(PixelType, image.pixels.len);
     errdefer allocator.free(output_pixels);
+    // Black/blank out the image
     switch (PixelType) {
         RGBPixel => @memset(output_pixels, RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 }),
         HSVPixel => @memset(output_pixels, RGBPixel{ .h = 0.0, .s = 0.0, .v = 0.0 }),
@@ -371,6 +372,7 @@ pub fn maskImage(
         },
     }
 
+    // Copy over the pixels that are in the mask
     for (0..mask.height) |y| {
         const row_start_pixel_index = y * mask.width;
         for (0..mask.width) |x| {
