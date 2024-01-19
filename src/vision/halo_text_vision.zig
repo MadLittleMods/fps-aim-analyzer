@@ -1,4 +1,7 @@
 const std = @import("std");
+const render_utils = @import("../utils/render_utils.zig");
+const CanvasPoint = render_utils.CanvasPoint;
+const Dimensions = render_utils.Dimensions;
 const image_conversion = @import("image_conversion.zig");
 const HSVPixel = image_conversion.HSVPixel;
 const HSVImage = image_conversion.HSVImage;
@@ -152,74 +155,84 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
     errdefer allocator.free(output_hsv_pixels);
     @memset(output_hsv_pixels, HSVPixel{ .h = 0, .s = 0, .v = 0 });
 
-    const total_pixels_in_image = hsv_image.width * hsv_image.height;
+    const total_pixels_in_image = hsv_image.dimensions.width * hsv_image.dimensions.height;
 
     const buffer_size: usize = 6;
 
     // Look for Chromatic Aberration in the rows
-    for (0..hsv_image.height) |y| {
-        const row_start_pixel_index = y * hsv_image.width;
-        const row_end_pixel_index = row_start_pixel_index + hsv_image.width;
-        for (0..hsv_image.width) |x| {
-            // Look at the next X pixels in the row
-            const current_pixel_index = row_start_pixel_index + x;
-            // Make sure to not over-run the end of the row
-            const buffer_end_pixel_index = @min(current_pixel_index + buffer_size, row_end_pixel_index);
-            const pixel_buffer = hsv_image.pixels[current_pixel_index..buffer_end_pixel_index];
-
-            // Check if the pixels in the buffer match the chromatic aberration pattern
-            const has_chromatic_aberration = checkForChromaticAberrationInPixelBuffer(pixel_buffer);
-            if (has_chromatic_aberration) {
-                // Copy the pixels that match the chromatic aberration pattern from the buffer into the output
-                @memcpy(
-                    output_hsv_pixels[current_pixel_index..buffer_end_pixel_index],
-                    hsv_image.pixels[current_pixel_index..buffer_end_pixel_index],
+    {
+        var y: i16 = 0;
+        while (y < hsv_image.dimensions.height) : (y += 1) {
+            const row_start_pixel_index = y * hsv_image.dimensions.width;
+            const row_end_pixel_index = row_start_pixel_index + hsv_image.dimensions.width;
+            var x: i16 = 0;
+            while (x < hsv_image.dimensions.width) : (x += 1) {
+                // Look at the next X pixels in the row
+                const current_pixel_index = row_start_pixel_index + x;
+                // Make sure to not over-run the end of the row
+                const buffer_end_pixel_index = @min(
+                    current_pixel_index + @as(i16, @intCast(buffer_size)),
+                    row_end_pixel_index,
                 );
+                const pixel_buffer = hsv_image.pixels[@intCast(current_pixel_index)..@intCast(buffer_end_pixel_index)];
 
-                // TODO: There is a slight optimization we could additionally do by
-                //       skipping over the pixels that we know are part of the chromatic
-                //       aberration pattern. For example, if we find a match at index
-                //       10, we know that *at least* the next 4 pixels are exclusively
-                //       part of the this pattern. We could even skip to the pixel where
-                //       the last condition was met.
+                // Check if the pixels in the buffer match the chromatic aberration pattern
+                const has_chromatic_aberration = checkForChromaticAberrationInPixelBuffer(pixel_buffer);
+                if (has_chromatic_aberration) {
+                    // Copy the pixels that match the chromatic aberration pattern from the buffer into the output
+                    @memcpy(
+                        output_hsv_pixels[@intCast(current_pixel_index)..@intCast(buffer_end_pixel_index)],
+                        hsv_image.pixels[@intCast(current_pixel_index)..@intCast(buffer_end_pixel_index)],
+                    );
+
+                    // TODO: There is a slight optimization we could additionally do by
+                    //       skipping over the pixels that we know are part of the chromatic
+                    //       aberration pattern. For example, if we find a match at index
+                    //       10, we know that *at least* the next 4 pixels are exclusively
+                    //       part of the this pattern. We could even skip to the pixel where
+                    //       the last condition was met.
+                }
             }
         }
     }
 
     // Look for Chromatic Aberration in the columns
-    var column_pixel_buffer = try allocator.alloc(HSVPixel, buffer_size);
-    defer allocator.free(column_pixel_buffer);
-    for (0..hsv_image.width) |x| {
-        for (0..hsv_image.height) |y| {
-            // Look at the next X pixels in the column
-            var column_pixel_buffer_size: usize = 0;
-            for (0..buffer_size) |i| {
-                const current_pixel_index = ((y + i) * hsv_image.width) + x;
-                // Make sure to not over-run the end of the column
-                if (current_pixel_index >= total_pixels_in_image) {
-                    break;
+    {
+        var column_pixel_buffer = try allocator.alloc(HSVPixel, buffer_size);
+        defer allocator.free(column_pixel_buffer);
+        var x: i16 = 0;
+        while (x < hsv_image.dimensions.width) : (x += 1) {
+            var y: i16 = 0;
+            while (y < hsv_image.dimensions.height) : (y += 1) {
+                // Look at the next X pixels in the column
+                var column_pixel_buffer_size: usize = 0;
+                for (0..buffer_size) |i| {
+                    const current_pixel_index = ((y + @as(i16, @intCast(i))) * hsv_image.dimensions.width) + x;
+                    // Make sure not to over-run the end of the column
+                    if (current_pixel_index >= total_pixels_in_image) {
+                        break;
+                    }
+                    column_pixel_buffer[i] = hsv_image.pixels[@intCast(current_pixel_index)];
+                    column_pixel_buffer_size = i + 1;
                 }
-                column_pixel_buffer[i] = hsv_image.pixels[current_pixel_index];
-                column_pixel_buffer_size = i + 1;
-            }
 
-            const pixel_buffer = column_pixel_buffer[0..column_pixel_buffer_size];
+                const pixel_buffer = column_pixel_buffer[0..column_pixel_buffer_size];
 
-            // Check if the pixels in the buffer match the chromatic aberration pattern
-            const has_chromatic_aberration = checkForChromaticAberrationInPixelBuffer(pixel_buffer);
-            if (has_chromatic_aberration) {
-                // Copy the pixels that match the chromatic aberration pattern from the buffer into the output
-                for (0..column_pixel_buffer_size) |i| {
-                    const current_pixel_index = ((y + i) * hsv_image.width) + x;
-                    output_hsv_pixels[current_pixel_index] = hsv_image.pixels[current_pixel_index];
+                // Check if the pixels in the buffer match the chromatic aberration pattern
+                const has_chromatic_aberration = checkForChromaticAberrationInPixelBuffer(pixel_buffer);
+                if (has_chromatic_aberration) {
+                    // Copy the pixels that match the chromatic aberration pattern from the buffer into the output
+                    for (0..column_pixel_buffer_size) |i| {
+                        const current_pixel_index = ((y + @as(i16, @intCast(i))) * hsv_image.dimensions.width) + x;
+                        output_hsv_pixels[@intCast(current_pixel_index)] = hsv_image.pixels[@intCast(current_pixel_index)];
+                    }
                 }
             }
         }
     }
 
     return .{
-        .width = hsv_image.width,
-        .height = hsv_image.height,
+        .dimensions = hsv_image.dimensions,
         .pixels = output_hsv_pixels,
     };
 }
@@ -266,10 +279,8 @@ fn _debugStringConditionsForPixel(hsv_pixel: HSVPixel, allocator: std.mem.Alloca
 
 const FindHaloChromaticAberrationTextTestCase = struct {
     label: []const u8,
-    x: usize,
-    y: usize,
-    width: usize,
-    height: usize,
+    point: CanvasPoint,
+    dimensions: Dimensions,
 };
 
 test "findHaloChromaticAberrationText" {
@@ -282,120 +293,88 @@ test "findHaloChromaticAberrationText" {
         //
         .{
             .label = "Top terminal of the three (horizontal)",
-            .x = 1424,
-            .y = 829,
-            .width = 4,
-            .height = 1,
+            .point = .{ .x = 1424, .y = 829 },
+            .dimensions = .{ .width = 4, .height = 1 },
         },
         .{
             .label = "Top arm of the three (vertical)",
-            .x = 1428,
-            .y = 825,
-            .width = 1,
-            .height = 4,
+            .point = .{ .x = 1428, .y = 825 },
+            .dimensions = .{ .width = 1, .height = 4 },
         },
         .{
             .label = "Top arm of the three with margin above (vertical)",
-            .x = 1428,
-            .y = 823,
-            .width = 1,
-            .height = 6,
+            .point = .{ .x = 1428, .y = 823 },
+            .dimensions = .{ .width = 1, .height = 6 },
         },
         .{
             .label = "Top arm of the three with margin below (vertical)",
-            .x = 1428,
-            .y = 825,
-            .width = 1,
-            .height = 6,
+            .point = .{ .x = 1428, .y = 825 },
+            .dimensions = .{ .width = 1, .height = 6 },
         },
         .{
             .label = "Top stress of the three (horizonal)",
-            .x = 1433,
-            .y = 832,
-            .width = 8,
-            .height = 1,
+            .point = .{ .x = 1433, .y = 832 },
+            .dimensions = .{ .width = 8, .height = 1 },
         },
         .{
             .label = "Middle terminal of the three (vertical)",
-            .x = 1430,
-            .y = 831,
-            .width = 1,
-            .height = 8,
+            .point = .{ .x = 1430, .y = 831 },
+            .dimensions = .{ .width = 1, .height = 8 },
         },
         .{
             .label = "Bottom stress of the three (horizonal)",
-            .x = 1434,
-            .y = 840,
-            .width = 6,
-            .height = 1,
+            .point = .{ .x = 1434, .y = 840 },
+            .dimensions = .{ .width = 6, .height = 1 },
         },
         .{
             .label = "Bottom arm of the three (vertical)",
-            .x = 1430,
-            .y = 841,
-            .width = 1,
-            .height = 6,
+            .point = .{ .x = 1430, .y = 841 },
+            .dimensions = .{ .width = 1, .height = 6 },
         },
         // Six tests
         //
         .{
             .label = "Top terminal of the six (horizontal)",
-            .x = 1451,
-            .y = 829,
-            .width = 6,
-            .height = 1,
+            .point = .{ .x = 1451, .y = 829 },
+            .dimensions = .{ .width = 6, .height = 1 },
         },
         .{
             .label = "Top arm of the six (vertical)",
-            .x = 1448,
-            .y = 825,
-            .width = 1,
-            .height = 6,
+            .point = .{ .x = 1448, .y = 825 },
+            .dimensions = .{ .width = 1, .height = 6 },
         },
         .{
             .label = "Top stress of the six (horizontal)",
-            .x = 1441,
-            .y = 829,
-            .width = 6,
-            .height = 1,
+            .point = .{ .x = 1441, .y = 829 },
+            .dimensions = .{ .width = 6, .height = 1 },
         },
         .{
             .label = "Left-side of the bowl of the six (horizontal)",
-            .x = 1442,
-            .y = 838,
-            .width = 6,
-            .height = 1,
+            .point = .{ .x = 1442, .y = 838 },
+            .dimensions = .{ .width = 6, .height = 1 },
         },
         .{
             .label = "Right-side of the bowl of the six (horizontal)",
-            .x = 1452,
-            .y = 841,
-            .width = 6,
-            .height = 1,
+            .point = .{ .x = 1452, .y = 841 },
+            .dimensions = .{ .width = 6, .height = 1 },
         },
         .{
             .label = "Top-side of the bowl of the six (vertical)",
-            .x = 1448,
-            .y = 832,
-            .width = 1,
-            .height = 6,
+            .point = .{ .x = 1448, .y = 832 },
+            .dimensions = .{ .width = 1, .height = 6 },
         },
         .{
             .label = "Bottom-side of the bowl of the six (vertical)",
-            .x = 1448,
-            .y = 842,
-            .width = 1,
-            .height = 6,
+            .point = .{ .x = 1448, .y = 842 },
+            .dimensions = .{ .width = 1, .height = 6 },
         },
     };
 
     for (test_cases) |test_case| {
         const cropped_image = try cropImage(
             rgb_image,
-            test_case.x,
-            test_case.y,
-            test_case.width,
-            test_case.height,
+            test_case.point,
+            test_case.dimensions,
             allocator,
         );
         defer cropped_image.deinit(allocator);
@@ -414,10 +393,12 @@ test "findHaloChromaticAberrationText" {
         defer chromatic_pattern_binary_mask.deinit(allocator);
         // Check if any chromatic aberration was found and copied over
         var found_chromatic_aberration = false;
-        outer: for (0..chromatic_pattern_binary_mask.height) |y| {
-            for (0..chromatic_pattern_binary_mask.width) |x| {
-                const pixel_index = (y * chromatic_pattern_binary_mask.width) + x;
-                const pixel = chromatic_pattern_binary_mask.pixels[pixel_index];
+        var y: i16 = 0;
+        outer: while (y < chromatic_pattern_binary_mask.dimensions.height) : (y += 1) {
+            var x: i16 = 0;
+            while (x < chromatic_pattern_binary_mask.dimensions.width) : (x += 1) {
+                const pixel_index = (y * chromatic_pattern_binary_mask.dimensions.width) + x;
+                const pixel = chromatic_pattern_binary_mask.pixels[@intCast(pixel_index)];
                 if (pixel.value) {
                     found_chromatic_aberration = true;
                     break :outer;
@@ -474,20 +455,23 @@ test "Find Halo ammo counter region" {
     const rgb_image = try RGBImage.loadImageFromFilePath("/home/eric/Downloads/36-1080-export-from-gimp.png", allocator);
     defer rgb_image.deinit(allocator);
 
-    const half_width = @divFloor(rgb_image.width, 2);
-    const half_height = @divFloor(rgb_image.height, 2);
+    const half_width = @divFloor(rgb_image.dimensions.width, 2);
+    const half_height = @divFloor(rgb_image.dimensions.height, 2);
     const cropped_rgb_image = try cropImage(
         rgb_image,
         // Bottom-right corner (where the ammo count is)
-        half_width,
-        half_height,
-        rgb_image.width - half_width,
-        rgb_image.height - half_height,
+        .{ .x = half_width, .y = half_height },
+        .{
+            .width = rgb_image.dimensions.width - half_width,
+            .height = rgb_image.dimensions.height - half_height,
+        },
         // Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
-        // 1410,
-        // 877,
-        // 40,
-        // 26,
+        // .{
+        //     .x = 1410, .y = 877
+        // },
+        // .{
+        //     .width = 40, .height = 26
+        // },
         allocator,
     );
     defer cropped_rgb_image.deinit(allocator);
@@ -510,8 +494,7 @@ test "Find Halo ammo counter region" {
     defer chromatic_pattern_binary_mask.deinit(allocator);
     const erode_kernel = try getStructuringElement(
         .cross,
-        3,
-        3,
+        .{ .width = 3, .height = 3 },
         allocator,
     );
     defer erode_kernel.deinit(allocator);
@@ -524,8 +507,7 @@ test "Find Halo ammo counter region" {
     // Create horizontal kernel and dilate to connect text characters
     const dilate_kernel = try getStructuringElement(
         .rectangle,
-        9,
-        13,
+        .{ .width = 9, .height = 13 },
         allocator,
     );
     const eroded_chromatic_pattern_rgb_image = try maskImage(

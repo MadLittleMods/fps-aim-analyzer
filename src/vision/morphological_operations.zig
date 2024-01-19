@@ -1,6 +1,9 @@
 const std = @import("std");
 const assertions = @import("../utils/assertions.zig");
 const assert = assertions.assert;
+const render_utils = @import("../utils/render_utils.zig");
+const Dimensions = render_utils.Dimensions;
+const CanvasPoint = render_utils.CanvasPoint;
 const image_conversion = @import("image_conversion.zig");
 const BinaryImage = image_conversion.BinaryImage;
 const BinaryPixel = image_conversion.BinaryPixel;
@@ -24,18 +27,19 @@ const StructuringElementType = enum {
 /// morphological operations like `erode` and `dilate`.
 pub fn getStructuringElement(
     structure_type: StructuringElementType,
-    width: usize,
-    height: usize,
+    dimensions: Dimensions,
     allocator: std.mem.Allocator,
 ) !BinaryImage {
-    assert(width % 2 == 1, "Structuring element width must be odd so we can perfectly center it {}", .{width});
-    assert(height % 2 == 1, "Structuring element height must be odd so we can perfectly center it {}", .{height});
+    const width = dimensions.width;
+    const height = dimensions.height;
+    assert(@mod(width, 2) == 1, "Structuring element width must be odd so we can perfectly center it {}", .{width});
+    assert(@mod(height, 2) == 1, "Structuring element height must be odd so we can perfectly center it {}", .{height});
 
-    const output_pixels = try allocator.alloc(BinaryPixel, width * height);
+    const output_pixels = try allocator.alloc(BinaryPixel, @intCast(width * height));
     errdefer output_pixels.deinit(allocator);
 
-    const center_x = width / 2;
-    const center_y = height / 2;
+    const center_x = @divFloor(width, 2);
+    const center_y = @divFloor(height, 2);
 
     switch (structure_type) {
         .rectangle => {
@@ -46,15 +50,17 @@ pub fn getStructuringElement(
 
             // Set the center row
             const row_start_index = center_y * width;
-            for (0..width) |x| {
+            var x: i16 = 0;
+            while (x < width) : (x += 1) {
                 const pixel_index = row_start_index + x;
-                output_pixels[pixel_index] = BinaryPixel{ .value = true };
+                output_pixels[@intCast(pixel_index)] = BinaryPixel{ .value = true };
             }
 
             // Set the center column
-            for (0..height) |y| {
+            var y: i16 = 0;
+            while (y < height) : (y += 1) {
                 const pixel_index = y * width + center_x;
-                output_pixels[pixel_index] = BinaryPixel{ .value = true };
+                output_pixels[@intCast(pixel_index)] = BinaryPixel{ .value = true };
             }
         },
         .ellipse => {
@@ -69,9 +75,11 @@ pub fn getStructuringElement(
             const radius_y = center_y;
             const squared_radius = radius_x * radius_x;
 
-            for (0..height) |y| {
+            var y: i16 = 0;
+            while (y < height) : (y += 1) {
                 const row_start_index = y * width;
-                for (0..width) |x| {
+                var x: i16 = 0;
+                while (x < width) : (x += 1) {
                     const pixel_index = row_start_index + x;
 
                     // Absolute difference between the pixel and the center of the ellipse
@@ -83,12 +91,12 @@ pub fn getStructuringElement(
                     //
                     // We do the multiplication first followed by division to play nice
                     // with integer math.
-                    const dy = (raw_dy * radius_x) / radius_y;
+                    const dy = @divFloor((raw_dy * radius_x), radius_y);
 
                     // Check if the pixel is inside the circle
                     const squared_distance = dx * dx + dy * dy;
                     if (squared_distance <= squared_radius) {
-                        output_pixels[pixel_index] = BinaryPixel{ .value = true };
+                        output_pixels[@intCast(pixel_index)] = BinaryPixel{ .value = true };
                     }
                 }
             }
@@ -96,14 +104,13 @@ pub fn getStructuringElement(
     }
 
     return BinaryImage{
-        .width = width,
-        .height = height,
+        .dimensions = dimensions,
         .pixels = output_pixels,
     };
 }
 
 test "getStructuringElement rectangle" {
-    try _testStructuringElement(.rectangle, 3, 3, &[_]u1{
+    try _testStructuringElement(.rectangle, .{ .width = 3, .height = 3 }, &[_]u1{
         1, 1, 1,
         1, 1, 1,
         1, 1, 1,
@@ -111,13 +118,13 @@ test "getStructuringElement rectangle" {
 }
 
 test "getStructuringElement cross" {
-    try _testStructuringElement(.cross, 3, 3, &[_]u1{
+    try _testStructuringElement(.cross, .{ .width = 3, .height = 3 }, &[_]u1{
         0, 1, 0,
         1, 1, 1,
         0, 1, 0,
     });
 
-    try _testStructuringElement(.cross, 7, 7, &[_]u1{
+    try _testStructuringElement(.cross, .{ .width = 7, .height = 7 }, &[_]u1{
         0, 0, 0, 1, 0, 0, 0,
         0, 0, 0, 1, 0, 0, 0,
         0, 0, 0, 1, 0, 0, 0,
@@ -130,14 +137,14 @@ test "getStructuringElement cross" {
 
 test "getStructuringElement ellipse" {
     // 3x3 circle/ellipse
-    try _testStructuringElement(.ellipse, 3, 3, &[_]u1{
+    try _testStructuringElement(.ellipse, .{ .width = 3, .height = 3 }, &[_]u1{
         0, 1, 0,
         1, 1, 1,
         0, 1, 0,
     });
 
     // 5x5 circle/ellipse
-    try _testStructuringElement(.ellipse, 5, 5, &[_]u1{
+    try _testStructuringElement(.ellipse, .{ .width = 5, .height = 5 }, &[_]u1{
         0, 0, 1, 0, 0,
         0, 1, 1, 1, 0,
         1, 1, 1, 1, 1,
@@ -152,7 +159,7 @@ test "getStructuringElement ellipse" {
     // 0, 0, 1, 0, 0,
 
     // 15x15 circle/ellipse
-    try _testStructuringElement(.ellipse, 15, 15, &[_]u1{
+    try _testStructuringElement(.ellipse, .{ .width = 15, .height = 15 }, &[_]u1{
         0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
         0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
@@ -187,7 +194,7 @@ test "getStructuringElement ellipse" {
     // 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
 
     // 3x5 ellipse
-    try _testStructuringElement(.ellipse, 3, 5, &[_]u1{
+    try _testStructuringElement(.ellipse, .{ .width = 3, .height = 5 }, &[_]u1{
         0, 1, 0,
         1, 1, 1,
         1, 1, 1,
@@ -197,7 +204,7 @@ test "getStructuringElement ellipse" {
     // (OpenCV matches)
 
     // 9x5 ellipse
-    try _testStructuringElement(.ellipse, 9, 5, &[_]u1{
+    try _testStructuringElement(.ellipse, .{ .width = 9, .height = 5 }, &[_]u1{
         0, 0, 0, 0, 1, 0, 0, 0, 0,
         0, 1, 1, 1, 1, 1, 1, 1, 0,
         1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -207,7 +214,7 @@ test "getStructuringElement ellipse" {
     // (OpenCV matches)
 
     // 17x11 ellipse
-    try _testStructuringElement(.ellipse, 17, 11, &[_]u1{
+    try _testStructuringElement(.ellipse, .{ .width = 17, .height = 11 }, &[_]u1{
         0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0,
         0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
@@ -237,24 +244,21 @@ test "getStructuringElement ellipse" {
 /// Compare the actual output from `getStructuringElement` to a map of expected pixels.
 fn _testStructuringElement(
     structure_type: StructuringElementType,
-    width: usize,
-    height: usize,
+    dimensions: Dimensions,
     comptime expected_int_pixels: []const u1,
 ) !void {
     const allocator = std.testing.allocator;
 
     const actual_structuring_element = try getStructuringElement(
         structure_type,
-        width,
-        height,
+        dimensions,
         allocator,
     );
     defer actual_structuring_element.deinit(allocator);
 
     const expected_pixels = binaryPixelsfromIntArray(expected_int_pixels);
     const expected_image = BinaryImage{
-        .width = width,
-        .height = height,
+        .dimensions = dimensions,
         .pixels = &expected_pixels,
     };
 
@@ -278,24 +282,25 @@ pub fn erode(
     kernel: BinaryImage,
     allocator: std.mem.Allocator,
 ) !BinaryImage {
-    std.debug.print("\nerode {}x{}", .{ kernel.width, kernel.height });
+    std.debug.print("\nerode {}x{}", .{ kernel.dimensions.width, kernel.dimensions.height });
     const output_pixels = try allocator.alloc(BinaryPixel, binary_image.pixels.len);
     errdefer output_pixels.deinit(allocator);
     @memset(output_pixels, BinaryPixel{ .value = false });
 
-    for (0..binary_image.height) |y| {
-        const row_start_pixel_index = y * binary_image.width;
-        for (0..binary_image.width) |x| {
+    var y: i16 = 0;
+    while (y < binary_image.dimensions.height) : (y += 1) {
+        const row_start_pixel_index = y * binary_image.dimensions.width;
+        var x: i16 = 0;
+        while (x < binary_image.dimensions.width) : (x += 1) {
             const current_pixel_index = row_start_pixel_index + x;
-            if (checkPixelfit(x, y, binary_image, kernel)) {
-                output_pixels[current_pixel_index] = BinaryPixel{ .value = true };
+            if (checkPixelFit(.{ .x = x, .y = y }, binary_image, kernel)) {
+                output_pixels[@intCast(current_pixel_index)] = BinaryPixel{ .value = true };
             }
         }
     }
 
     return BinaryImage{
-        .width = binary_image.width,
-        .height = binary_image.height,
+        .dimensions = binary_image.dimensions,
         .pixels = output_pixels,
     };
 }
@@ -311,24 +316,25 @@ pub fn dilate(
     kernel: BinaryImage,
     allocator: std.mem.Allocator,
 ) !BinaryImage {
-    std.debug.print("\ndilate {}x{}", .{ kernel.width, kernel.height });
+    std.debug.print("\ndilate {}x{}", .{ kernel.dimensions.width, kernel.dimensions.height });
     const output_pixels = try allocator.alloc(BinaryPixel, binary_image.pixels.len);
     errdefer output_pixels.deinit(allocator);
     @memset(output_pixels, BinaryPixel{ .value = false });
 
-    for (0..binary_image.height) |y| {
-        const row_start_pixel_index = y * binary_image.width;
-        for (0..binary_image.width) |x| {
+    var y: i16 = 0;
+    while (y < binary_image.dimensions.height) : (y += 1) {
+        const row_start_pixel_index = y * binary_image.dimensions.width;
+        var x: i16 = 0;
+        while (x < binary_image.dimensions.width) : (x += 1) {
             const current_pixel_index = row_start_pixel_index + x;
-            if (checkPixelHit(x, y, binary_image, kernel)) {
-                output_pixels[current_pixel_index] = BinaryPixel{ .value = true };
+            if (checkPixelHit(.{ .x = x, .y = y }, binary_image, kernel)) {
+                output_pixels[@intCast(current_pixel_index)] = BinaryPixel{ .value = true };
             }
         }
     }
 
     return BinaryImage{
-        .width = binary_image.width,
-        .height = binary_image.height,
+        .dimensions = binary_image.dimensions,
         .pixels = output_pixels,
     };
 }
@@ -401,51 +407,59 @@ pub fn closing(
 //    of the object, we call it Hit.
 //  - Miss: When no pixel in the structuring element cover the pixels of the object, we
 //    call it miss.
-pub fn checkPixelfit(image_x: usize, image_y: usize, binary_image: BinaryImage, kernel: BinaryImage) bool {
-    assert(kernel.width % 2 == 1, "Kernel width must be odd so we can perfectly center it {}", .{kernel.width});
-    assert(kernel.height % 2 == 1, "Kernel height must be odd so we can perfectly center it {}", .{kernel.height});
+pub fn checkPixelFit(image_point: CanvasPoint, binary_image: BinaryImage, kernel: BinaryImage) bool {
+    assert(@mod(kernel.dimensions.width, 2) == 1, "Kernel width must be odd so we can perfectly center it {}", .{
+        kernel.dimensions.width,
+    });
+    assert(@mod(kernel.dimensions.height, 2) == 1, "Kernel height must be odd so we can perfectly center it {}", .{
+        kernel.dimensions.height,
+    });
 
-    const kernel_half_width = kernel.width / 2;
-    const kernel_half_height = kernel.height / 2;
+    const kernel_half_width = @divFloor(kernel.dimensions.width, 2);
+    const kernel_half_height = @divFloor(kernel.dimensions.height, 2);
 
-    for (0..kernel.height) |kernel_y| {
-        const kernel_row_start_pixel_index = kernel_y * kernel.width;
+    var kernel_y: i16 = 0;
+    while (kernel_y < kernel.dimensions.height) : (kernel_y += 1) {
+        const kernel_row_start_pixel_index = kernel_y * kernel.dimensions.width;
 
         // Some of the kernel is outside of the image vertically
         if (
-        // Check above. We use `kernel_half_height > image_y + kernel_y` to avoid
+        // Check above. We use `kernel_half_height > image_point.y + kernel_y` to avoid
         // integer underflow/overflow since the result could be negative if we used the
-        // equivalent logic: `image_y + kernel_y - kernel_half_height < 0`
-        kernel_half_height > image_y + kernel_y or
+        // equivalent logic: `image_point.y + kernel_y - kernel_half_height < 0`
+        kernel_half_height > image_point.y + kernel_y or
             // Check below
-            image_y + kernel_y - kernel_half_height >= binary_image.height)
+            image_point.y + kernel_y - kernel_half_height >= binary_image.dimensions.height)
         {
             // Miss
             return false;
         }
-        const image_y_transposed = image_y + kernel_y - kernel_half_height;
-        const image_row_start_pixel_index = image_y_transposed * binary_image.width;
+        const image_y_transposed = image_point.y + kernel_y - kernel_half_height;
+        const image_row_start_pixel_index = image_y_transposed * binary_image.dimensions.width;
 
-        for (0..kernel.width) |kernel_x| {
+        var kernel_x: i16 = 0;
+        while (kernel_x < kernel.dimensions.width) : (kernel_x += 1) {
             const kernel_pixel_index = kernel_row_start_pixel_index + kernel_x;
 
             // Some of the kernel is outside of the image horizontally
             if (
-            // Check above. We use `kernel_half_width > image_x + kernel_x` to avoid
+            // Check above. We use `kernel_half_width > image_point.x + kernel_x` to avoid
             // integer underflow/overflow since the result could be negative if we used
-            // the equivalent logic: `image_x + kernel_x - kernel_half_width < 0`
-            kernel_half_width > image_x + kernel_x or
+            // the equivalent logic: `image_point.x + kernel_x - kernel_half_width < 0`
+            kernel_half_width > image_point.x + kernel_x or
                 // Check below
-                image_x + kernel_x - kernel_half_width >= binary_image.width)
+                image_point.x + kernel_x - kernel_half_width >= binary_image.dimensions.width)
             {
                 // Miss
                 return false;
             }
-            const image_x_transposed = image_x + kernel_x - kernel_half_width;
+            const image_x_transposed = image_point.x + kernel_x - kernel_half_width;
             const image_pixel_index = image_row_start_pixel_index + image_x_transposed;
 
             // If the kernel pixel is true, then the image pixel must also be true
-            if (kernel.pixels[kernel_pixel_index].value and !binary_image.pixels[image_pixel_index].value) {
+            if (kernel.pixels[@intCast(kernel_pixel_index)].value and
+                !binary_image.pixels[@intCast(image_pixel_index)].value)
+            {
                 // Miss
                 return false;
             }
@@ -465,51 +479,59 @@ pub fn checkPixelfit(image_x: usize, image_y: usize, binary_image: BinaryImage, 
 //    of the object, we call it Hit.
 //  - Miss: When no pixel in the structuring element cover the pixels of the object, we
 //    call it miss.
-pub fn checkPixelHit(image_x: usize, image_y: usize, binary_image: BinaryImage, kernel: BinaryImage) bool {
-    assert(kernel.width % 2 == 1, "Kernel width must be odd so we can perfectly center it {}", .{kernel.width});
-    assert(kernel.height % 2 == 1, "Kernel height must be odd so we can perfectly center it {}", .{kernel.height});
+pub fn checkPixelHit(image_point: CanvasPoint, binary_image: BinaryImage, kernel: BinaryImage) bool {
+    assert(@mod(kernel.dimensions.width, 2) == 1, "Kernel width must be odd so we can perfectly center it {}", .{
+        kernel.dimensions.width,
+    });
+    assert(@mod(kernel.dimensions.height, 2) == 1, "Kernel height must be odd so we can perfectly center it {}", .{
+        kernel.dimensions.height,
+    });
 
-    const kernel_half_width = kernel.width / 2;
-    const kernel_half_height = kernel.height / 2;
+    const kernel_half_width = @divFloor(kernel.dimensions.width, 2);
+    const kernel_half_height = @divFloor(kernel.dimensions.height, 2);
 
-    for (0..kernel.height) |kernel_y| {
-        const kernel_row_start_pixel_index = kernel_y * kernel.width;
+    var kernel_y: i16 = 0;
+    while (kernel_y < kernel.dimensions.height) : (kernel_y += 1) {
+        const kernel_row_start_pixel_index = kernel_y * kernel.dimensions.width;
 
         // Some of the kernel is outside of the image vertically
         if (
-        // Check above. We use `kernel_half_height > image_y + kernel_y` to avoid
+        // Check above. We use `kernel_half_height > image_point.y + kernel_y` to avoid
         // integer underflow/overflow since the result could be negative if we used the
-        // equivalent logic: `image_y + kernel_y - kernel_half_height < 0`
-        kernel_half_height > image_y + kernel_y or
+        // equivalent logic: `image_y + image_point.y - kernel_half_height < 0`
+        kernel_half_height > image_point.y + kernel_y or
             // Check below
-            image_y + kernel_y - kernel_half_height >= binary_image.height)
+            image_point.y + kernel_y - kernel_half_height >= binary_image.dimensions.height)
         {
             // Maybe the next kernel pixel is inside the image so continue
             continue;
         }
-        const image_y_transposed = image_y + kernel_y - kernel_half_height;
-        const image_row_start_pixel_index = image_y_transposed * binary_image.width;
+        const image_y_transposed = image_point.y + kernel_y - kernel_half_height;
+        const image_row_start_pixel_index = image_y_transposed * binary_image.dimensions.width;
 
-        for (0..kernel.width) |kernel_x| {
+        var kernel_x: i16 = 0;
+        while (kernel_x < kernel.dimensions.width) : (kernel_x += 1) {
             const kernel_pixel_index = kernel_row_start_pixel_index + kernel_x;
 
             // Some of the kernel is outside of the image horizontally
             if (
-            // Check above. We use `kernel_half_width > image_x + kernel_x` to avoid
+            // Check above. We use `kernel_half_width > image_point.x + kernel_x` to avoid
             // integer underflow/overflow since the result could be negative if we used
-            // the equivalent logic: `image_x + kernel_x - kernel_half_width < 0`
-            kernel_half_width > image_x + kernel_x or
+            // the equivalent logic: `image_point.x + kernel_x - kernel_half_width < 0`
+            kernel_half_width > image_point.x + kernel_x or
                 // Check below
-                image_x + kernel_x - kernel_half_width >= binary_image.width)
+                image_point.x + kernel_x - kernel_half_width >= binary_image.dimensions.width)
             {
                 // Maybe the next kernel pixel is inside the image so continue
                 continue;
             }
-            const image_x_transposed = image_x + kernel_x - kernel_half_width;
+            const image_x_transposed = image_point.x + kernel_x - kernel_half_width;
             const image_pixel_index = image_row_start_pixel_index + image_x_transposed;
 
             // If the kernel pixel is true, then the image pixel must also be true
-            if (kernel.pixels[kernel_pixel_index].value and binary_image.pixels[image_pixel_index].value) {
+            if (kernel.pixels[@intCast(kernel_pixel_index)].value and
+                binary_image.pixels[@intCast(image_pixel_index)].value)
+            {
                 // Hit
                 return true;
             }
@@ -532,8 +554,7 @@ const test_binary_pixels = binaryPixelsfromIntArray(&[_]u1{
     0, 0, 0, 0, 0, 0, 0, 0,
 });
 const test_binary_image = BinaryImage{
-    .width = 8,
-    .height = 8,
+    .dimensions = .{ .width = 8, .height = 8 },
     .pixels = &test_binary_pixels,
 };
 
@@ -543,8 +564,7 @@ test "erode" {
     // Erode with a cross structuring element
     const cross_structuring_element = try getStructuringElement(
         .cross,
-        3,
-        3,
+        .{ .width = 3, .height = 3 },
         allocator,
     );
     defer cross_structuring_element.deinit(allocator);
@@ -566,8 +586,7 @@ test "erode" {
         0, 0, 0, 0, 0, 0, 0, 0,
     });
     const expected_eroded_image = BinaryImage{
-        .width = 8,
-        .height = 8,
+        .dimensions = .{ .width = 8, .height = 8 },
         .pixels = &expected_eroded_pixels,
     };
 
@@ -584,8 +603,7 @@ test "dilate" {
     // Dilate with a cross structuring element
     const cross_structuring_element = try getStructuringElement(
         .cross,
-        3,
-        3,
+        .{ .width = 3, .height = 3 },
         allocator,
     );
     defer cross_structuring_element.deinit(allocator);
@@ -607,8 +625,7 @@ test "dilate" {
         0, 0, 0, 0, 0, 0, 0, 0,
     });
     const expected_dilated_image = BinaryImage{
-        .width = 8,
-        .height = 8,
+        .dimensions = .{ .width = 8, .height = 8 },
         .pixels = &expected_dilated_pixels,
     };
 

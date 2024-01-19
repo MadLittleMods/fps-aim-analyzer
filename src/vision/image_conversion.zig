@@ -6,6 +6,9 @@ const comptime_assert = assertions.comptime_assert;
 const approxEqAbs = assertions.approxEqAbs;
 const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
+const render_utils = @import("../utils/render_utils.zig");
+const Dimensions = render_utils.Dimensions;
+const CanvasPoint = render_utils.CanvasPoint;
 
 /// All values are in the range [0, 1]
 pub const RGBPixel = struct {
@@ -157,8 +160,7 @@ fn _testHsvApproxEqAbs(expected: HSVPixel, actual: HSVPixel, tolerance: f32) !vo
 }
 
 pub const RGBImage = struct {
-    width: usize,
-    height: usize,
+    dimensions: Dimensions,
     /// Row-major order (line by line)
     pixels: []const RGBPixel,
 
@@ -213,8 +215,10 @@ pub const RGBImage = struct {
         // img.pixels.asBytes()
 
         return .{
-            .width = img.width,
-            .height = img.height,
+            .dimensions = .{
+                .width = @intCast(img.width),
+                .height = @intCast(img.height),
+            },
             .pixels = output_rgb_pixels,
         };
     }
@@ -222,8 +226,8 @@ pub const RGBImage = struct {
     pub fn saveImageToFilePath(self: *const @This(), image_file_path: []const u8, allocator: std.mem.Allocator) !void {
         var img = try zigimg.Image.create(
             allocator,
-            self.width,
-            self.height,
+            @intCast(self.dimensions.width),
+            @intCast(self.dimensions.height),
             .rgb24,
         );
         defer img.deinit();
@@ -241,8 +245,7 @@ pub const RGBImage = struct {
 };
 
 pub const HSVImage = struct {
-    width: usize,
-    height: usize,
+    dimensions: Dimensions,
     /// Row-major order (line by line)
     pixels: []const HSVPixel,
 
@@ -262,8 +265,7 @@ pub const HSVImage = struct {
 };
 
 pub const GrayscaleImage = struct {
-    width: usize,
-    height: usize,
+    dimensions: Dimensions,
     /// Row-major order (line by line)
     pixels: []const GrayscalePixel,
 
@@ -273,8 +275,7 @@ pub const GrayscaleImage = struct {
 };
 
 pub const BinaryImage = struct {
-    width: usize,
-    height: usize,
+    dimensions: Dimensions,
     /// Row-major order (line by line)
     pixels: []const BinaryPixel,
 
@@ -298,8 +299,14 @@ pub fn expectBinaryImageEqual(
     expected_binary_image: BinaryImage,
     allocator: std.mem.Allocator,
 ) !void {
-    try std.testing.expectEqual(expected_binary_image.width, actual_binary_image.width);
-    try std.testing.expectEqual(expected_binary_image.height, actual_binary_image.height);
+    try std.testing.expectEqual(
+        expected_binary_image.dimensions.width,
+        actual_binary_image.dimensions.width,
+    );
+    try std.testing.expectEqual(
+        expected_binary_image.dimensions.height,
+        actual_binary_image.dimensions.height,
+    );
 
     std.testing.expectEqualSlices(
         BinaryPixel,
@@ -320,25 +327,32 @@ pub fn expectBinaryImageEqual(
 
 pub fn cropImage(
     image: anytype,
-    x: usize,
-    y: usize,
-    width: usize,
-    height: usize,
+    crop_point: CanvasPoint,
+    crop_dimensions: Dimensions,
     allocator: std.mem.Allocator,
 ) !@TypeOf(image) {
+    const x = crop_point.x;
+    const y = crop_point.y;
+    const width = crop_dimensions.width;
+    const height = crop_dimensions.height;
     const PixelType = @TypeOf(image.pixels[0]);
-    var output_pixels = try allocator.alloc(PixelType, width * height);
-    for (0..height) |crop_y| {
-        for (0..width) |crop_x| {
+    var output_pixels = try allocator.alloc(PixelType, @intCast(width * height));
+
+    var crop_y: i16 = 0;
+    while (crop_y < height) : (crop_y += 1) {
+        var crop_x: i16 = 0;
+        while (crop_x < width) : (crop_x += 1) {
             const src_x = x + crop_x;
             const src_y = y + crop_y;
-            output_pixels[crop_y * width + crop_x] = image.pixels[src_y * image.width + src_x];
+            std.debug.print("\n{} {} {}\n", .{
+                src_y, image.dimensions.width, src_x,
+            });
+            output_pixels[@intCast(crop_y * width + crop_x)] = image.pixels[@intCast(src_y * image.dimensions.width + src_x)];
         }
     }
 
     return .{
-        .width = width,
-        .height = height,
+        .dimensions = crop_dimensions,
         .pixels = output_pixels,
     };
 }
@@ -348,13 +362,13 @@ pub fn maskImage(
     mask: BinaryImage,
     allocator: std.mem.Allocator,
 ) !@TypeOf(image) {
-    assert(image.width == mask.width, "maskImage: Image and mask width should match but saw {} != {}", .{
-        image.width,
-        mask.width,
+    assert(image.dimensions.width == mask.dimensions.width, "maskImage: Image and mask width should match but saw {} != {}", .{
+        image.dimensions.width,
+        mask.dimensions.width,
     });
-    assert(image.height == mask.height, "maskImage: Image and mask height should match but saw {} != {}", .{
-        image.height,
-        mask.height,
+    assert(image.dimensions.height == mask.dimensions.height, "maskImage: Image and mask height should match but saw {} != {}", .{
+        image.dimensions.height,
+        mask.dimensions.height,
     });
 
     const PixelType = @TypeOf(image.pixels[0]);
@@ -371,19 +385,20 @@ pub fn maskImage(
         },
     }
 
-    for (0..mask.height) |y| {
-        const row_start_pixel_index = y * mask.width;
-        for (0..mask.width) |x| {
+    var y: i16 = 0;
+    while (y < mask.dimensions.height) : (y += 1) {
+        const row_start_pixel_index = y * mask.dimensions.width;
+        var x: i16 = 0;
+        while (x < mask.dimensions.width) : (x += 1) {
             const current_pixel_index = row_start_pixel_index + x;
-            if (mask.pixels[current_pixel_index].value) {
-                output_pixels[current_pixel_index] = image.pixels[current_pixel_index];
+            if (mask.pixels[@intCast(current_pixel_index)].value) {
+                output_pixels[@intCast(current_pixel_index)] = image.pixels[@intCast(current_pixel_index)];
             }
         }
     }
 
     return .{
-        .width = image.width,
-        .height = image.height,
+        .dimensions = image.dimensions,
         .pixels = output_pixels,
     };
 }
@@ -589,8 +604,7 @@ pub fn rgbToHsvImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !HSVImag
     }
 
     return .{
-        .width = rgb_image.width,
-        .height = rgb_image.height,
+        .dimensions = rgb_image.dimensions,
         .pixels = output_hsv_pixels,
     };
 }
@@ -603,8 +617,7 @@ pub fn hsvToRgbImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !RGBImag
     }
 
     return .{
-        .width = hsv_image.width,
-        .height = hsv_image.height,
+        .dimensions = hsv_image.dimensions,
         .pixels = output_rgb_pixels,
     };
 }
@@ -619,8 +632,7 @@ pub fn hsvToBinaryImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !Bina
     }
 
     return .{
-        .width = hsv_image.width,
-        .height = hsv_image.height,
+        .dimensions = hsv_image.dimensions,
         .pixels = output_binary_pixels,
     };
 }
@@ -637,8 +649,7 @@ pub fn binaryToRgbImage(binary_image: BinaryImage, allocator: std.mem.Allocator)
     }
 
     return .{
-        .width = binary_image.width,
-        .height = binary_image.height,
+        .dimensions = binary_image.dimensions,
         .pixels = output_rgb_pixels,
     };
 }

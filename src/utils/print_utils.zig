@@ -165,13 +165,13 @@ fn getCharacterForPixelValue(
 /// up a lot of space since we have to use 2 characers per pixel to maintain a decent
 /// aspect ratio.
 pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
-    var width: usize = rgb_image.width;
-    var height: usize = rgb_image.height;
+    const width = rgb_image.dimensions.width;
+    const height = rgb_image.dimensions.height;
 
     const hsv_image = try rgbToHsvImage(rgb_image, allocator);
     defer hsv_image.deinit(allocator);
 
-    const row_strings = try allocator.alloc([]const u8, height);
+    const row_strings = try allocator.alloc([]const u8, @intCast(height));
     defer {
         for (row_strings) |row_string| {
             allocator.free(row_string);
@@ -179,17 +179,19 @@ pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !
         allocator.free(row_strings);
     }
 
-    const pixel_strings = try allocator.alloc([]const u8, width);
+    const pixel_strings = try allocator.alloc([]const u8, @intCast(width));
     defer allocator.free(pixel_strings);
 
-    for (0..height) |row_index| {
+    var row_index: i16 = 0;
+    while (row_index < height) : (row_index += 1) {
         const row_start_index = row_index * width;
-        for (0..width) |column_index| {
+        var column_index: i16 = 0;
+        while (column_index < width) : (column_index += 1) {
             const pixel_index = row_start_index + column_index;
 
             // FIXME: Perhaps we should instead use a grayscale image for better human
             // perception instead of HSV
-            const pixel_character = getCharacterForPixelValue(hsv_image.pixels[pixel_index].v);
+            const pixel_character = getCharacterForPixelValue(hsv_image.pixels[@intCast(pixel_index)].v);
             const pixel_string = try std.fmt.allocPrint(
                 allocator,
                 // We use the same character twice to make it look more square and
@@ -202,13 +204,13 @@ pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !
             // Adjust the pixel value to compensate for the opacity of the block
             // character that we're using to represent it.
             const r: u8 = @intFromFloat(
-                255 * (rgb_image.pixels[pixel_index].r * pixel_character.opacity_compensation_factor),
+                255 * (rgb_image.pixels[@intCast(pixel_index)].r * pixel_character.opacity_compensation_factor),
             );
             const g: u8 = @intFromFloat(
-                255 * (rgb_image.pixels[pixel_index].g * pixel_character.opacity_compensation_factor),
+                255 * (rgb_image.pixels[@intCast(pixel_index)].g * pixel_character.opacity_compensation_factor),
             );
             const b: u8 = @intFromFloat(
-                255 * (rgb_image.pixels[pixel_index].b * pixel_character.opacity_compensation_factor),
+                255 * (rgb_image.pixels[@intCast(pixel_index)].b * pixel_character.opacity_compensation_factor),
             );
 
             const colored_pixel_string = try decorateStringWithAnsiColor(
@@ -220,7 +222,7 @@ pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !
                 0x000000,
                 allocator,
             );
-            pixel_strings[column_index] = colored_pixel_string;
+            pixel_strings[@intCast(column_index)] = colored_pixel_string;
         }
 
         const pixel_row_string = try std.mem.concat(allocator, u8, pixel_strings);
@@ -232,7 +234,7 @@ pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !
             }
         }
 
-        row_strings[row_index] = try std.fmt.allocPrint(
+        row_strings[@intCast(row_index)] = try std.fmt.allocPrint(
             allocator,
             "|{s}|\n",
             .{
@@ -241,7 +243,7 @@ pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !
         );
     }
 
-    const border_filler_string = try repeatString("─", width * 2, allocator);
+    const border_filler_string = try repeatString("─", @intCast(width * 2), allocator);
     defer allocator.free(border_filler_string);
     const border_top_string = try std.fmt.allocPrint(allocator, "┌{s}┐\n", .{
         border_filler_string,
@@ -272,8 +274,8 @@ pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !
 /// which uses full-block/shade characeters but at the cost of taking up more
 /// horizontal/vertical real estate.
 pub fn allocPrintHalfBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
-    var width: usize = rgb_image.width;
-    var height: usize = rgb_image.height;
+    const width = rgb_image.dimensions.width;
+    const height = rgb_image.dimensions.height;
 
     const half_height_rows: usize = @intFromFloat(@ceil(@as(f32, @floatFromInt(height)) / 2.0));
     const row_strings = try allocator.alloc([]const u8, half_height_rows);
@@ -284,28 +286,29 @@ pub fn allocPrintHalfBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocato
         allocator.free(row_strings);
     }
 
-    const pixel_strings = try allocator.alloc([]const u8, width);
+    const pixel_strings = try allocator.alloc([]const u8, @intCast(width));
     defer allocator.free(pixel_strings);
 
-    var row_index: usize = 0;
-    var pixel_row_index: usize = 0;
+    var row_index: i16 = 0;
+    var pixel_row_index: i16 = 0;
     while (pixel_row_index < height) : ({
         row_index += 1;
         pixel_row_index += 2;
     }) {
         const pixel_row_start_index1 = pixel_row_index * width;
         const pixel_row_start_index2 = (pixel_row_index + 1) * width;
-        for (0..width) |column_index| {
+        var column_index: i16 = 0;
+        while (column_index < width) : (column_index += 1) {
             const pixel_index1 = pixel_row_start_index1 + column_index;
             const pixel_index2 = pixel_row_start_index2 + column_index;
 
-            const r1: u8 = @intFromFloat(255 * rgb_image.pixels[pixel_index1].r);
-            const g1: u8 = @intFromFloat(255 * rgb_image.pixels[pixel_index1].g);
-            const b1: u8 = @intFromFloat(255 * rgb_image.pixels[pixel_index1].b);
+            const r1: u8 = @intFromFloat(255 * rgb_image.pixels[@intCast(pixel_index1)].r);
+            const g1: u8 = @intFromFloat(255 * rgb_image.pixels[@intCast(pixel_index1)].g);
+            const b1: u8 = @intFromFloat(255 * rgb_image.pixels[@intCast(pixel_index1)].b);
 
-            const r2: u8 = if (pixel_row_index + 1 < height) @intFromFloat(255 * rgb_image.pixels[pixel_index2].r) else 0;
-            const g2: u8 = if (pixel_row_index + 1 < height) @intFromFloat(255 * rgb_image.pixels[pixel_index2].g) else 0;
-            const b2: u8 = if (pixel_row_index + 1 < height) @intFromFloat(255 * rgb_image.pixels[pixel_index2].b) else 0;
+            const r2: u8 = if (pixel_row_index + 1 < height) @intFromFloat(255 * rgb_image.pixels[@intCast(pixel_index2)].r) else 0;
+            const g2: u8 = if (pixel_row_index + 1 < height) @intFromFloat(255 * rgb_image.pixels[@intCast(pixel_index2)].g) else 0;
+            const b2: u8 = if (pixel_row_index + 1 < height) @intFromFloat(255 * rgb_image.pixels[@intCast(pixel_index2)].b) else 0;
 
             const colored_pixel_string = try decorateStringWithAnsiColor(
                 "\u{2584}",
@@ -318,7 +321,7 @@ pub fn allocPrintHalfBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocato
                     (@as(u24, b1) << 0),
                 allocator,
             );
-            pixel_strings[column_index] = colored_pixel_string;
+            pixel_strings[@intCast(column_index)] = colored_pixel_string;
         }
 
         const pixel_row_string = try std.mem.concat(allocator, u8, pixel_strings);
@@ -330,7 +333,7 @@ pub fn allocPrintHalfBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocato
             }
         }
 
-        row_strings[row_index] = try std.fmt.allocPrint(
+        row_strings[@intCast(row_index)] = try std.fmt.allocPrint(
             allocator,
             "|{s}|\n",
             .{
@@ -339,7 +342,7 @@ pub fn allocPrintHalfBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocato
         );
     }
 
-    const border_filler_string = try repeatString("─", width, allocator);
+    const border_filler_string = try repeatString("─", @intCast(width), allocator);
     defer allocator.free(border_filler_string);
     const border_top_string = try std.fmt.allocPrint(allocator, "┌{s}┐\n", .{
         border_filler_string,
