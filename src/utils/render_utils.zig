@@ -3,21 +3,24 @@ pub const Dimensions = struct {
     height: i16,
 };
 
-pub const BoundingClientRect = struct {
-    x: i16,
-    y: i16,
-    dimensions: Dimensions,
+pub fn BoundingClientRect(comptime NumberType: type) type {
+    return struct {
+        x: NumberType,
+        y: NumberType,
+        width: NumberType,
+        height: NumberType,
 
-    pub fn top(self: @This()) i16 {
-        return self.y;
-    }
-    pub fn left(self: @This()) i16 {
-        return self.x;
-    }
-    pub fn bottom(self: @This()) i16 {
-        return self.y + self.dimensions.height;
-    }
-    pub fn right(self: @This()) i16 {
-        return self.x + self.dimensions.width;
-    }
-};
+        pub fn top(self: @This()) NumberType {
+            return self.y;
+        }
+        pub fn left(self: @This()) NumberType {
+            return self.x;
+        }
+        pub fn bottom(self: @This()) NumberType {
+            return self.y + self.dimensions.height;
+        }
+        pub fn right(self: @This()) NumberType {
+            return self.x + self.dimensions.width;
+        }
+    };
+}

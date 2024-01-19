@@ -70,14 +70,13 @@ pub fn main() !u8 {
     };
 
     // Start out with the bottom-right corner of the screen
-    const ammo_counter_bounding_box_dimensions = Dimensions{
-        .width = 30, //@intCast(@divTrunc(screen.pixel_width, 2)),
-        .height = 30, //@intCast(@divTrunc(screen.pixel_height, 2)),
-    };
-    const ammo_counter_bounding_box = BoundingClientRect{
-        .x = @as(i16, @intCast(screen.pixel_width)) - ammo_counter_bounding_box_dimensions.width,
-        .y = @as(i16, @intCast(screen.pixel_height)) - ammo_counter_bounding_box_dimensions.height,
-        .dimensions = ammo_counter_bounding_box_dimensions,
+    const ammo_counter_bounding_box_width = 30; //@intCast(@divTrunc(screen.pixel_width, 2)),
+    const ammo_counter_bounding_box_height = 30; //@intCast(@divTrunc(screen.pixel_height, 2)),
+    const ammo_counter_bounding_box = BoundingClientRect(i16){
+        .x = @as(i16, @intCast(screen.pixel_width)) - ammo_counter_bounding_box_width,
+        .y = @as(i16, @intCast(screen.pixel_height)) - ammo_counter_bounding_box_height,
+        .width = ammo_counter_bounding_box_width,
+        .height = ammo_counter_bounding_box_height,
     };
 
     const max_screenshots_shown = 6;

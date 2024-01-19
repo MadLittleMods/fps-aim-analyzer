@@ -1,6 +1,8 @@
 const std = @import("std");
 const assertions = @import("../utils/assertions.zig");
 const assert = assertions.assert;
+const render_utils = @import("../utils/render_utils.zig");
+const BoundingClientRect = render_utils.BoundingClientRect;
 const image_conversion = @import("image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
 const RGBPixel = image_conversion.RGBPixel;
@@ -722,33 +724,17 @@ pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, al
     return contours.toOwnedSlice();
 }
 
-pub const BoundingClientRect = struct {
-    x: usize,
-    y: usize,
-    width: usize,
-    height: usize,
-
-    pub fn top(self: @This()) usize {
-        return self.y;
-    }
-    pub fn left(self: @This()) usize {
-        return self.x;
-    }
-    pub fn bottom(self: @This()) usize {
-        return self.y + self.height;
-    }
-    pub fn right(self: @This()) usize {
-        return self.x + self.width;
-    }
-};
-
-pub fn boundingRect(points: []const ImagePoint) void {
+pub fn boundingRect(points: []const ImagePoint) BoundingClientRect(usize) {
     assert(points.len > 0, "Cannot find bounding rect for empty set of points", .{});
 
-    var min_x = 0;
-    var min_y = 0;
-    var max_x = 0;
-    var max_y = 0;
+    // Using the first value guarantees that at least that the bounds will be within the
+    // points vs trying to use a sane default like `0` could be lower/higher than any of
+    // the points and making these nullable is way too much faff compared to this
+    // elegant solution.
+    var min_x: usize = points[0].x;
+    var min_y: usize = points[0].y;
+    var max_x: usize = points[0].x;
+    var max_y: usize = points[0].y;
     for (points) |point| {
         if (point.x < min_x) {
             min_x = point.x;
@@ -770,4 +756,31 @@ pub fn boundingRect(points: []const ImagePoint) void {
         .width = max_x - min_x,
         .height = max_y - min_y,
     };
+}
+
+fn _expectBoundingClientRectEqual(actual: BoundingClientRect(usize), expected: BoundingClientRect(usize)) !void {
+    try std.testing.expectEqual(expected.x, actual.x);
+    try std.testing.expectEqual(expected.y, actual.y);
+    try std.testing.expectEqual(expected.width, actual.width);
+    try std.testing.expectEqual(expected.height, actual.height);
+}
+
+test "boundingRect" {
+    const actual = boundingRect(&.{
+        .{ .x = 5, .y = 5 },
+        .{ .x = 5, .y = 1 },
+        .{ .x = 1, .y = 5 },
+        .{ .x = 1, .y = 2 },
+        .{ .x = 3, .y = 4 },
+        .{ .x = 10, .y = 2 },
+        .{ .x = 2, .y = 10 },
+        .{ .x = 5, .y = 5 },
+    });
+    const expected = .{
+        .x = 1,
+        .y = 1,
+        .width = 9,
+        .height = 9,
+    };
+    try _expectBoundingClientRectEqual(actual, expected);
 }
