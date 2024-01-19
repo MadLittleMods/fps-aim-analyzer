@@ -82,8 +82,10 @@ const StepDirection = struct {
 };
 
 /// Caveats:
-///  - Finds a single contour in a binary image. If there are multiple objects, trace the
-///    boundary of first object then mask the object using the boundary.
+///  - Finds a single contour in a binary image. If there are multiple objects, trace
+///    the boundary of first object then mask the object using the boundary or scan over
+///    the whole image and run this multiple times with starting points for every object
+///    in the image.
 ///  - Can only find the outer contour of 4-connected pixels (pixels that are connected
 ///    by their edges). Not bullet-proof for 8-connected pixels (all surrounding
 ///    pixels).
@@ -469,6 +471,7 @@ test "findContours (multiple) (squareContourTracing)" {
     );
 }
 
+/// Test the actual output of `findContours` against the expected contours
 fn _testFindContours(
     binary_image: BinaryImage,
     contour_method: ContourMethod,
@@ -487,7 +490,10 @@ fn _testFindContours(
         allocator.free(contours);
     }
 
+    // Make sure we found the expected number of contours
     std.testing.expectEqual(expected_contours.len, contours.len) catch |err| {
+        // Trace all of the contours onto the image and print it to give a holistic
+        // picture of what's going on
         var rgb_image = try binaryToRgbImage(binary_image, allocator);
         defer rgb_image.deinit(allocator);
         for (contours, 0..) |contour, contour_index| {
@@ -517,6 +523,7 @@ fn _testFindContours(
         return err;
     };
 
+    // Compare each contour individually
     for (contours, expected_contours, 0..) |contour, expected_contour, contour_index| {
         const extra_label_string = try std.fmt.allocPrint(
             allocator,
@@ -646,7 +653,7 @@ pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, al
     var seen_boundary_points = std.AutoArrayHashMap(ImagePoint, void).init(allocator);
     defer seen_boundary_points.deinit();
 
-    // Find the starting point
+    // Find the starting points
     //
     // Starting from the left-most column, scan bottom-up until we find the first active
     // pixel
@@ -704,7 +711,7 @@ pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, al
                 };
 
                 try contours.append(contour_boundary_points);
-                // Mark all of the boundary points as seen
+                // Mark all of the new boundary points as seen
                 for (contour_boundary_points) |contour_boundary_point| {
                     try seen_boundary_points.put(contour_boundary_point, {});
                 }
@@ -715,6 +722,52 @@ pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, al
     return contours.toOwnedSlice();
 }
 
-pub fn boundingRect() void {
-    // TODO
+pub const BoundingClientRect = struct {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+
+    pub fn top(self: @This()) usize {
+        return self.y;
+    }
+    pub fn left(self: @This()) usize {
+        return self.x;
+    }
+    pub fn bottom(self: @This()) usize {
+        return self.y + self.height;
+    }
+    pub fn right(self: @This()) usize {
+        return self.x + self.width;
+    }
+};
+
+pub fn boundingRect(points: []const ImagePoint) void {
+    assert(points.len > 0, "Cannot find bounding rect for empty set of points", .{});
+
+    var min_x = 0;
+    var min_y = 0;
+    var max_x = 0;
+    var max_y = 0;
+    for (points) |point| {
+        if (point.x < min_x) {
+            min_x = point.x;
+        }
+        if (point.y < min_y) {
+            min_y = point.y;
+        }
+        if (point.x > max_x) {
+            max_x = point.x;
+        }
+        if (point.y > max_y) {
+            max_y = point.y;
+        }
+    }
+
+    return .{
+        .x = min_x,
+        .y = min_y,
+        .width = max_x - min_x,
+        .height = max_y - min_y,
+    };
 }

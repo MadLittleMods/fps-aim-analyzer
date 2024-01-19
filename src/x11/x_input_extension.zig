@@ -7,7 +7,7 @@ const std = @import("std");
 const x = @import("x");
 const common = @import("./x11_common.zig");
 const x11_extension_utils = @import("./x11_extension_utils.zig");
-const buffer_utils = @import("../buffer_utils.zig");
+const buffer_utils = @import("../utils/buffer_utils.zig");
 
 /// Check to make sure we're using a compatible version of the X Input extension
 /// that supports all of the features we need.

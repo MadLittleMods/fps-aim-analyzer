@@ -4,9 +4,12 @@ const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11//x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
-const render_utils = @import("render_utils.zig");
+const render = @import("render.zig");
 const AppState = @import("app_state.zig").AppState;
-const buffer_utils = @import("buffer_utils.zig");
+const buffer_utils = @import("utils/buffer_utils.zig");
+const render_utils = @import("utils/render_utils.zig");
+const Dimensions = render_utils.Dimensions;
+const BoundingClientRect = render_utils.BoundingClientRect;
 
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -28,13 +31,13 @@ pub fn main() !u8 {
         std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
     }
 
-    const screen = render_utils.getFirstScreenFromConnectionSetup(conn.setup);
+    const screen = render.getFirstScreenFromConnectionSetup(conn.setup);
     inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
         std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
     }
 
-    const pixmap_formats = try render_utils.getPixmapFormatsFromConnectionSetup(conn.setup);
-    const root_window_pixmap_format = try render_utils.findMatchingPixmapFormatForDepth(
+    const pixmap_formats = try render.getPixmapFormatsFromConnectionSetup(conn.setup);
+    const root_window_pixmap_format = try render.findMatchingPixmapFormatForDepth(
         pixmap_formats,
         screen.root_depth,
     );
@@ -48,30 +51,30 @@ pub fn main() !u8 {
         },
     };
 
-    const ids = render_utils.Ids.init(
+    const ids = render.Ids.init(
         screen.root,
         conn_setup_fixed_fields.resource_id_base,
     );
 
     const depth = 32;
 
-    const root_screen_dimensions = render_utils.Dimensions{
+    const root_screen_dimensions = Dimensions{
         .width = @intCast(screen.pixel_width),
         .height = @intCast(screen.pixel_height),
     };
 
     const screenshot_capture_scale = 20;
-    const screenshot_capture_dimensions = render_utils.Dimensions{
+    const screenshot_capture_dimensions = Dimensions{
         .width = @intCast(@divTrunc(screen.pixel_width, screenshot_capture_scale)),
         .height = @intCast(@divTrunc(screen.pixel_height, screenshot_capture_scale)),
     };
 
     // Start out with the bottom-right corner of the screen
-    const ammo_counter_bounding_box_dimensions = render_utils.Dimensions{
+    const ammo_counter_bounding_box_dimensions = Dimensions{
         .width = 30, //@intCast(@divTrunc(screen.pixel_width, 2)),
         .height = 30, //@intCast(@divTrunc(screen.pixel_height, 2)),
     };
-    const ammo_counter_bounding_box = render_utils.BoundingClientRect{
+    const ammo_counter_bounding_box = BoundingClientRect{
         .x = @as(i16, @intCast(screen.pixel_width)) - ammo_counter_bounding_box_dimensions.width,
         .y = @as(i16, @intCast(screen.pixel_height)) - ammo_counter_bounding_box_dimensions.height,
         .dimensions = ammo_counter_bounding_box_dimensions,
@@ -80,7 +83,7 @@ pub fn main() !u8 {
     const max_screenshots_shown = 6;
     const margin = 20;
     const padding = 10;
-    const window_dimensions = render_utils.Dimensions{
+    const window_dimensions = Dimensions{
         .width = screenshot_capture_dimensions.width + (2 * padding),
         .height = (max_screenshots_shown * (screenshot_capture_dimensions.height + padding)) + padding,
     };
@@ -164,7 +167,7 @@ pub fn main() !u8 {
         .input = input_extension,
     };
 
-    try render_utils.createResources(
+    try render.createResources(
         conn.sock,
         &buffer,
         &ids,
@@ -196,7 +199,7 @@ pub fn main() !u8 {
         x.query_text_extents.serialize(&message_buffer, ids.fg_gc, text);
         try conn.send(&message_buffer);
     }
-    const font_dims: render_utils.FontDims = blk: {
+    const font_dims: render.FontDims = blk: {
         const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
         try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
@@ -225,7 +228,7 @@ pub fn main() !u8 {
         try conn.send(&msg);
     }
 
-    var render_context = render_utils.RenderContext{
+    var render_context = render.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,
         .root_screen_depth = screen.root_depth,
@@ -357,7 +360,7 @@ pub fn main() !u8 {
     }
 
     // Clean-up
-    try render_utils.cleanupResources(conn.sock, &ids);
+    try render.cleanupResources(conn.sock, &ids);
 }
 
 test {

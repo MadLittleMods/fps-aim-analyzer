@@ -2,8 +2,7 @@ const std = @import("std");
 const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11/x11_extension_utils.zig");
-const buffer_utils = @import("buffer_utils.zig");
-const print_utils = @import("print_utils.zig");
+const buffer_utils = @import("utils/buffer_utils.zig");
 const AppState = @import("app_state.zig").AppState;
 const image_conversion = @import("vision/image_conversion.zig");
 
@@ -21,30 +20,6 @@ fn GetEncompassingSignedInt(comptime unsigned_T: type) type {
         },
     });
 }
-
-pub const Dimensions = struct {
-    width: i16,
-    height: i16,
-};
-
-pub const BoundingClientRect = struct {
-    x: i16,
-    y: i16,
-    dimensions: Dimensions,
-
-    pub fn top(self: @This()) i16 {
-        return self.y;
-    }
-    pub fn left(self: @This()) i16 {
-        return self.x;
-    }
-    pub fn bottom(self: @This()) i16 {
-        return self.y + self.dimensions.height;
-    }
-    pub fn right(self: @This()) i16 {
-        return self.x + self.dimensions.width;
-    }
-};
 
 /// Stores the IDs of the all of the resources used when communicating with the X Window server.
 pub const Ids = struct {
