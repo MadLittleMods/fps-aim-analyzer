@@ -75,10 +75,8 @@ pub fn main() !u8 {
         .height = 30, //@intCast(@divTrunc(screen.pixel_height, 2)),
     };
     const ammo_counter_bounding_box = BoundingClientRect{
-        .point = .{
-            .x = @as(i16, @intCast(screen.pixel_width)) - ammo_counter_bounding_box_dimensions.width,
-            .y = @as(i16, @intCast(screen.pixel_height)) - ammo_counter_bounding_box_dimensions.height,
-        },
+        .x = @as(i16, @intCast(screen.pixel_width)) - ammo_counter_bounding_box_dimensions.width,
+        .y = @as(i16, @intCast(screen.pixel_height)) - ammo_counter_bounding_box_dimensions.height,
         .dimensions = ammo_counter_bounding_box_dimensions,
     };
 
@@ -350,8 +348,8 @@ pub fn main() !u8 {
             x.get_image.serialize(&get_image_msg, .{
                 .format = .z_pixmap,
                 .drawable_id = ids.root,
-                .x = @intCast(ammo_counter_bounding_box.point.x),
-                .y = @intCast(ammo_counter_bounding_box.point.y),
+                .x = @intCast(ammo_counter_bounding_box.x),
+                .y = @intCast(ammo_counter_bounding_box.y),
                 .width = @intCast(ammo_counter_bounding_box.dimensions.width),
                 .height = @intCast(ammo_counter_bounding_box.dimensions.height),
                 .plane_mask = 0xffffffff,
