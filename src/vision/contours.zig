@@ -373,40 +373,46 @@ test "findContours (multiple) (squareContourTracing)" {
         allocator,
     );
 
-    // // Does not find holes
-    // try _testFindContours(
-    //     BinaryImage{
-    //         .width = 9,
-    //         .height = 8,
-    //         .pixels = &binaryPixelsfromIntArray(&[_]u1{
-    //             0, 0, 0, 0, 0, 0, 0, 0, 0,
-    //             0, 1, 1, 1, 1, 1, 1, 1, 0,
-    //             0, 1, 1, 1, 1, 1, 1, 1, 0,
-    //             0, 1, 1, 0, 1, 1, 1, 1, 0,
-    //             0, 1, 1, 0, 1, 1, 1, 1, 0,
-    //             0, 1, 1, 1, 1, 1, 1, 0, 0,
-    //             0, 1, 1, 1, 1, 1, 0, 0, 0,
-    //             0, 0, 0, 0, 0, 0, 0, 0, 0,
-    //         }),
-    //     },
-    //     .square,
-    //     &.{
-    //         &.{
-    //             .{ .x = 1, .y = 6 }, .{ .x = 1, .y = 5 },
-    //             .{ .x = 1, .y = 4 }, .{ .x = 1, .y = 3 },
-    //             .{ .x = 1, .y = 2 }, .{ .x = 1, .y = 1 },
-    //             .{ .x = 2, .y = 1 }, .{ .x = 3, .y = 1 },
-    //             .{ .x = 4, .y = 1 }, .{ .x = 5, .y = 1 },
-    //             .{ .x = 6, .y = 1 }, .{ .x = 7, .y = 1 },
-    //             .{ .x = 7, .y = 2 }, .{ .x = 7, .y = 3 },
-    //             .{ .x = 7, .y = 4 }, .{ .x = 6, .y = 4 },
-    //             .{ .x = 6, .y = 5 }, .{ .x = 5, .y = 5 },
-    //             .{ .x = 5, .y = 6 }, .{ .x = 4, .y = 6 },
-    //             .{ .x = 3, .y = 6 }, .{ .x = 2, .y = 6 },
-    //         },
-    //     },
-    //     allocator,
-    // );
+    // Holes
+    try _testFindContours(
+        BinaryImage{
+            .width = 9,
+            .height = 8,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 1, 1, 1, 1, 1, 1, 1, 0,
+                0, 1, 1, 1, 1, 1, 1, 1, 0,
+                0, 1, 1, 0, 1, 1, 1, 1, 0,
+                0, 1, 1, 0, 1, 1, 1, 1, 0,
+                0, 1, 1, 1, 1, 1, 1, 0, 0,
+                0, 1, 1, 1, 1, 1, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0,
+            }),
+        },
+        .square,
+        &.{
+            &.{
+                .{ .x = 1, .y = 6 }, .{ .x = 1, .y = 5 },
+                .{ .x = 1, .y = 4 }, .{ .x = 1, .y = 3 },
+                .{ .x = 1, .y = 2 }, .{ .x = 1, .y = 1 },
+                .{ .x = 2, .y = 1 }, .{ .x = 3, .y = 1 },
+                .{ .x = 4, .y = 1 }, .{ .x = 5, .y = 1 },
+                .{ .x = 6, .y = 1 }, .{ .x = 7, .y = 1 },
+                .{ .x = 7, .y = 2 }, .{ .x = 7, .y = 3 },
+                .{ .x = 7, .y = 4 }, .{ .x = 6, .y = 4 },
+                .{ .x = 6, .y = 5 }, .{ .x = 5, .y = 5 },
+                .{ .x = 5, .y = 6 }, .{ .x = 4, .y = 6 },
+                .{ .x = 3, .y = 6 }, .{ .x = 2, .y = 6 },
+            },
+            &.{
+                .{ .x = 3, .y = 2 }, .{ .x = 2, .y = 2 },
+                .{ .x = 2, .y = 3 }, .{ .x = 2, .y = 4 },
+                .{ .x = 2, .y = 5 }, .{ .x = 3, .y = 5 },
+                .{ .x = 4, .y = 4 }, .{ .x = 4, .y = 3 },
+            },
+        },
+        allocator,
+    );
 
     // K/wedge shape with fitting triangle
     try _testFindContours(
@@ -667,7 +673,9 @@ pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, al
                 break :blk null;
             };
 
-            // This only looks for the outside of shapes (not the holes inside)
+            // Find where we go from nothing to an active shape. This does end up
+            // finding holes in shapes as well as long as the hole doesn't share a
+            // boundary with the outer shape where we enter from.
             const has_contour_begun = // Look for an active pixel where...
                 binary_image.pixels[current_pixel_index].value and
                 // the previous pixel was inactive which indicates we're entering a shape
@@ -675,8 +683,9 @@ pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, al
 
             const already_seen_pixel_in_boundary = seen_boundary_points.get(ImagePoint{ .x = x, .y = y }) != null;
 
+            if (
             // Whenever we enter an active shape, start tracing a contour
-            if (has_contour_begun and
+            has_contour_begun and
                 // Skip if we've already seen this boundary point
                 !already_seen_pixel_in_boundary)
             {
