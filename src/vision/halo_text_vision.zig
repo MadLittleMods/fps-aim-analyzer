@@ -23,6 +23,27 @@ const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
 const decorateStringWithAnsiColor = print_utils.decorateStringWithAnsiColor;
 
+/// Basically representing the stage of cropping the process is at
+pub const ScreenshotRegion = enum {
+    full_screen,
+    /// Cropped bottom-right quadrant of the screen
+    bottom_right_quadrant,
+    /// Bounding box around the UI in the bottom-right
+    bottom_right_ui,
+    /// Bounding box specifically around the ammo counter in the bottom-right
+    ammo_counter,
+
+    /// Bounding box around the UI in the center of the screen where the reticle is
+    center,
+};
+
+pub fn Screenshot(comptime ImageType: type) type {
+    return struct {
+        image: ImageType,
+        region: ScreenshotRegion,
+    };
+}
+
 pub const ChromaticAberrationCondition = enum {
     blue,
     cyan,
@@ -461,46 +482,62 @@ test "findHaloChromaticAberrationText" {
     }
 }
 
-test "Find Halo ammo counter region" {
-    // std.debug.assert(std.fs.path.isAbsolute(abs_dir_path));
-    // var iterable_dir = try fs.openDirAbsolute(abs_dir_path, .{ .iterate = true });
-    // defer iterable_dir.close();
+pub const IsolateDiagnostics = struct {
+    pub fn deinit(diagnostics: *@This()) void {
+        _ = diagnostics;
+    }
+};
 
-    // var it = iterable_dir.iterate();
-    // while (try it.next()) |entry| {
-    //     switch (entry.kind) {
-    //         .file, .sym_link => {},
-    //         else => continue,
-    //     }
+pub fn isolateHaloAmmoCounter(
+    screenshot: Screenshot(RGBImage),
+    diagnostics: ?*IsolateDiagnostics,
+    allocator: std.mem.Allocator,
+) !Screenshot(RGBImage) {
+    _ = diagnostics;
+    // Crop the image so we have less to work with.
+    // After this step, we will have to deal with 1/4 of the image or less.
+    const cropped_screenshot = try switch (screenshot.region) {
+        .full_screen => blk: {
+            // Crop to the bottom-right quadrant (where the ammo count is)
+            const half_width = @divFloor(screenshot.image.width, 2);
+            const half_height = @divFloor(screenshot.image.height, 2);
+            const cropped_rgb_image = try cropImage(
+                screenshot.image,
+                half_width,
+                half_height,
+                screenshot.image.width - half_width,
+                screenshot.image.height - half_height,
+                // Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
+                // 1410,
+                // 877,
+                // 40,
+                // 26,
+                allocator,
+            );
+            // try printLabeledImage("cropped_rgb_image", cropped_rgb_image, .half_block, allocator);
+            try cropped_rgb_image.saveImageToFilePath("/home/eric/Downloads/36-1080-export-from-gimp-cropped.png", allocator);
+            break :blk Screenshot(RGBImage){
+                .image = cropped_rgb_image,
+                .region = .bottom_right_quadrant,
+            };
+        },
+        // No need to do anything if we're already in the bottom-right quadrant or
+        // something more specific
+        .bottom_right_quadrant, .bottom_right_ui, .ammo_counter => screenshot,
+        // Other regions do not contain the ammo counter so it's impossible for us to
+        // do anything
+        .center => error.ScreenshotRegionDoesNotContainAmmoCounter,
+    };
+    defer {
+        switch (screenshot.region) {
+            .full_screen => {
+                cropped_screenshot.image.deinit(allocator);
+            },
+            else => {},
+        }
+    }
 
-    //     // entry.name;
-    // }
-
-    const allocator = std.testing.allocator;
-    const rgb_image = try RGBImage.loadImageFromFilePath("/home/eric/Downloads/36-1080-export-from-gimp.png", allocator);
-    defer rgb_image.deinit(allocator);
-
-    const half_width = @divFloor(rgb_image.width, 2);
-    const half_height = @divFloor(rgb_image.height, 2);
-    const cropped_rgb_image = try cropImage(
-        rgb_image,
-        // Bottom-right corner (where the ammo count is)
-        half_width,
-        half_height,
-        rgb_image.width - half_width,
-        rgb_image.height - half_height,
-        // Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
-        // 1410,
-        // 877,
-        // 40,
-        // 26,
-        allocator,
-    );
-    defer cropped_rgb_image.deinit(allocator);
-    // try printLabeledImage("cropped_rgb_image", cropped_rgb_image, .half_block, allocator);
-    try cropped_rgb_image.saveImageToFilePath("/home/eric/Downloads/36-1080-export-from-gimp-cropped.png", allocator);
-
-    const hsv_image = try rgbToHsvImage(cropped_rgb_image, allocator);
+    const hsv_image = try rgbToHsvImage(cropped_screenshot.image, allocator);
     defer hsv_image.deinit(allocator);
 
     // Find the chromatic aberration text
@@ -512,7 +549,9 @@ test "Find Halo ammo counter region" {
         allocator,
     );
 
-    // Erode and dilate (open) the mask to get rid of
+    // Erode and dilate (open). Erode the mask to get rid of some of the smaller
+    // chromatic aberration captures that aren't the text we want. Dilate the mask to
+    // connect the text characters.
     const chromatic_pattern_opened_mask = opened_mask: {
         const chromatic_pattern_binary_mask = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
         defer chromatic_pattern_binary_mask.deinit(allocator);
@@ -534,7 +573,7 @@ test "Find Halo ammo counter region" {
         // Debug: After eroding
         {
             const eroded_chromatic_pattern_rgb_image = try maskImage(
-                cropped_rgb_image,
+                cropped_screenshot.image,
                 chromatic_pattern_eroded_mask,
                 allocator,
             );
@@ -567,7 +606,7 @@ test "Find Halo ammo counter region" {
     // Debug: Pixels after opening (erode/dilate)
     {
         const opened_chromatic_pattern_rgb_image = try maskImage(
-            cropped_rgb_image,
+            cropped_screenshot.image,
             chromatic_pattern_opened_mask,
             allocator,
         );
@@ -593,7 +632,7 @@ test "Find Halo ammo counter region" {
     // Debug: Trace contours
     {
         const opened_chromatic_pattern_rgb_image = try maskImage(
-            cropped_rgb_image,
+            cropped_screenshot.image,
             chromatic_pattern_opened_mask,
             allocator,
         );
@@ -617,6 +656,11 @@ test "Find Halo ammo counter region" {
         const character_min_height = 21;
         for (chromatic_contours) |contour| {
             const bounding_box = boundingRect(contour);
+            // We can naievely just look for the first bounding box that meets the
+            // minimum character size requirements because we know the `findContours()`
+            // function searches from the bottom-left corner of the image to the
+            // top-right which means the first bounding box found will be the
+            // bottom-left one which we would want to sort for anyway.
             if (bounding_box.width > character_min_width and bounding_box.height > character_min_height) {
                 break :bounding_box bounding_box;
             }
@@ -627,17 +671,52 @@ test "Find Halo ammo counter region" {
     if (optional_ammo_bounding_box) |ammo_bounding_box| {
         std.debug.print("\nammo_bounding_box: {}\n", .{ammo_bounding_box});
         const ammo_cropped_rgb_image = try cropImage(
-            cropped_rgb_image,
+            cropped_screenshot.image,
             ammo_bounding_box.x,
             ammo_bounding_box.y,
             ammo_bounding_box.width,
             ammo_bounding_box.height,
             allocator,
         );
-        defer ammo_cropped_rgb_image.deinit(allocator);
+        // defer ammo_cropped_rgb_image.deinit(allocator);
         try printLabeledImage("ammo_cropped_rgb_image", ammo_cropped_rgb_image, .half_block, allocator);
         try ammo_cropped_rgb_image.saveImageToFilePath("/home/eric/Downloads/36-1080-export-from-gimp-ammo-counter-cropped-result.png", allocator);
-    } else {
-        return error.UnableToFindAmmoCounter;
+
+        return .{
+            .image = ammo_cropped_rgb_image,
+            .region = .ammo_counter,
+        };
     }
+
+    return error.UnableToFindAmmoCounter;
+}
+
+test "Find Halo ammo counter region" {
+    // std.debug.assert(std.fs.path.isAbsolute(abs_dir_path));
+    // var iterable_dir = try fs.openDirAbsolute(abs_dir_path, .{ .iterate = true });
+    // defer iterable_dir.close();
+
+    // var it = iterable_dir.iterate();
+    // while (try it.next()) |entry| {
+    //     switch (entry.kind) {
+    //         .file, .sym_link => {},
+    //         else => continue,
+    //     }
+
+    //     // entry.name;
+    // }
+
+    const allocator = std.testing.allocator;
+    const rgb_image = try RGBImage.loadImageFromFilePath("/home/eric/Downloads/36-1080-export-from-gimp.png", allocator);
+    defer rgb_image.deinit(allocator);
+
+    const ammo_cropped_screenshot = try isolateHaloAmmoCounter(
+        .{
+            .image = rgb_image,
+            .region = .full_screen,
+        },
+        null,
+        allocator,
+    );
+    defer ammo_cropped_screenshot.image.deinit(allocator);
 }

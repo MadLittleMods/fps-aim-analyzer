@@ -45,10 +45,6 @@ pub fn main() !u8 {
     const image_byte_order: std.builtin.Endian = switch (conn_setup_fixed_fields.image_byte_order) {
         .lsb_first => .Little,
         .msb_first => .Big,
-        else => |order| {
-            std.log.err("unknown image-byte-order {}", .{order});
-            return 0xff;
-        },
     };
 
     const ids = render.Ids.init(

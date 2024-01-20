@@ -10,7 +10,7 @@ pub fn comptime_assert(comptime ok: bool, comptime msg: []const u8, args: anytyp
 
 /// Assert with custom message
 pub fn assert(ok: bool, comptime msg: []const u8, args: anytype) void {
-    if (!ok) {
+    if (std.debug.runtime_safety and !ok) {
         std.debug.panic(msg, args);
         // This alternative doesn't work right (seems like UB given this branch is unreachable)
         // std.debug.print(msg, args);
