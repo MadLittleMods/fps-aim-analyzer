@@ -13,5 +13,9 @@
             .url = "https://github.com/MadLittleMods/zigimg/archive/3f5e61e3f243fa6d17dafab7d43a9d4fd02b167c.tar.gz",
             .hash = "1220411a7238035912beba994fb7c6a96fd813ce9903c8871c11d19f9353f74237a0",
         },
+        .@"zig-neural-networks" = .{
+            .url = "https://github.com/madlittlemods/zig-neural-networks/archive/9495c13c945b1c5954ef85b3a911e52c2a747d73.tar.gz",
+            .hash = "122063af43b7289509d7108a927f7e535f0e2f00b5d902ca4b10fbf2f43bf797c5d2",
+        },
     },
 }

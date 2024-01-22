@@ -436,7 +436,7 @@ pub fn rgbToHsvPixel(rgb_pixel: RGBPixel) HSVPixel {
     const delta = max - min;
 
     const v: f32 = max;
-    // If this is just a shade of grey, return early. When the color is black, we also
+    // If this is just a shade of gray, return early. When the color is black, we also
     // avoid a divide by zero (`max == 0`) in the saturation calculation.
     if (delta < 0.00001 or max < 0.00001) {
         return HSVPixel{
@@ -488,7 +488,7 @@ pub fn rgbToHsvPixel(rgb_pixel: RGBPixel) HSVPixel {
 // Other: https://github.com/wjakob/instant-meshes/blob/7b3160864a2e1025af498c84cfed91cbfb613698/src/common.h#L358-L376
 pub fn hsvToRgbPixel(hsv_pixel: HSVPixel) RGBPixel {
     if (hsv_pixel.s == 0.0) {
-        // Achromatic (grey)
+        // Achromatic (gray)
         return RGBPixel{
             .r = hsv_pixel.v,
             .g = hsv_pixel.v,
@@ -594,6 +594,22 @@ pub fn rgbToHsvImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !HSVImag
         .width = rgb_image.width,
         .height = rgb_image.height,
         .pixels = output_hsv_pixels,
+    };
+}
+
+pub fn rgbToGrayscaleImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !GrayscaleImage {
+    const output_grayscale_pixels = try allocator.alloc(GrayscalePixel, rgb_image.pixels.len);
+    errdefer allocator.free(output_grayscale_pixels);
+    for (output_grayscale_pixels, rgb_image.pixels) |*output_grayscale_pixel, rgb_pixel| {
+        output_grayscale_pixel.* = GrayscalePixel{
+            .value = (0.299 * rgb_pixel.r) + (0.587 * rgb_pixel.b) + (0.114 * rgb_pixel.b),
+        };
+    }
+
+    return .{
+        .width = rgb_image.width,
+        .height = rgb_image.height,
+        .pixels = output_grayscale_pixels,
     };
 }
 

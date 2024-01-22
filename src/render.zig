@@ -576,8 +576,8 @@ pub const RenderContext = struct {
     ) !void {
         const image_data = get_image_reply.getData();
 
-        const capture_width: i64 = self.state.ammo_counter_bounding_box.dimensions.width;
-        const capture_height: i64 = self.state.ammo_counter_bounding_box.dimensions.height;
+        const capture_width: i64 = self.state.ammo_counter_bounding_box.width;
+        const capture_height: i64 = self.state.ammo_counter_bounding_box.height;
 
         // std.log.debug("capture_width={} capture_height={} image_data.len={}", .{
         //     capture_width,

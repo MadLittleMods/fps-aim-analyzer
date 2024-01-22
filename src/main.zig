@@ -45,6 +45,10 @@ pub fn main() !u8 {
     const image_byte_order: std.builtin.Endian = switch (conn_setup_fixed_fields.image_byte_order) {
         .lsb_first => .Little,
         .msb_first => .Big,
+        else => |order| {
+            std.log.err("unknown image-byte-order {}", .{order});
+            return 1;
+        },
     };
 
     const ids = render.Ids.init(
@@ -345,8 +349,8 @@ pub fn main() !u8 {
                 .drawable_id = ids.root,
                 .x = @intCast(ammo_counter_bounding_box.x),
                 .y = @intCast(ammo_counter_bounding_box.y),
-                .width = @intCast(ammo_counter_bounding_box.dimensions.width),
-                .height = @intCast(ammo_counter_bounding_box.dimensions.height),
+                .width = @intCast(ammo_counter_bounding_box.width),
+                .height = @intCast(ammo_counter_bounding_box.height),
                 .plane_mask = 0xffffffff,
             });
             // We handle the reply to this request above (see `analyzeScreenCapture`)

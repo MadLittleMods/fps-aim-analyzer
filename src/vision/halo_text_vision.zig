@@ -488,6 +488,7 @@ pub const IsolateDiagnostics = struct {
     }
 };
 
+/// Given a screensho of Halo Infinite, isolate the ammo counter region.
 pub fn isolateHaloAmmoCounter(
     screenshot: Screenshot(RGBImage),
     diagnostics: ?*IsolateDiagnostics,
