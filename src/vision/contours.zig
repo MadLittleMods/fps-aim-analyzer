@@ -8,6 +8,7 @@ const RGBImage = image_conversion.RGBImage;
 const RGBPixel = image_conversion.RGBPixel;
 const BinaryImage = image_conversion.BinaryImage;
 const BinaryPixel = image_conversion.BinaryPixel;
+const getPixel = image_conversion.getPixel;
 const binaryPixelsfromIntArray = image_conversion.binaryPixelsfromIntArray;
 const binaryToRgbImage = image_conversion.binaryToRgbImage;
 const print_utils = @import("../utils/print_utils.zig");
@@ -137,21 +138,11 @@ pub fn squareContourTracing(
         std.meta.eql(current_direction, start_direction)))
     {
         // Be careful to not go out of bounds while getting the current pixel index
-        const optional_current_pixel_index: ?usize = blk: {
-            const is_current_point_in_image_bounds = current_point.x >= 0 and
-                current_point.x < binary_image.width and
-                current_point.y >= 0 and
-                current_point.y < binary_image.height;
-
-            if (is_current_point_in_image_bounds) {
-                const current_image_point = ImagePoint.fromCanvasPoint(current_point);
-                break :blk (current_image_point.y * binary_image.width) + current_image_point.x;
-            }
-
-            break :blk null;
-        };
-
-        if (optional_current_pixel_index != null and binary_image.pixels[optional_current_pixel_index.?].value) {
+        // since we could have stepped outside the bounds of the image. This allows us
+        // to get away with not padding the image with a border of inactive pixels
+        // before we start processing.
+        const optional_current_pixel = getPixel(binary_image, current_point.x, current_point.y);
+        if (optional_current_pixel != null and optional_current_pixel.?.value) {
             // We found another active boundary pixel
             try boundary_points.put(ImagePoint.fromCanvasPoint(current_point), {});
             // The current pixel is active, so we go left
@@ -691,20 +682,8 @@ pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, al
         var y = binary_image.height - 1;
         while (y > 0) : (y -%= 1) {
             const current_pixel_index = (y * binary_image.width) + x;
-            // Be careful to not go out of bounds while getting the pixel index
-            const optional_last_pixel_index: ?usize = blk: {
-                const is_point_in_image_bounds = x >= 0 and
-                    x < binary_image.width and
-                    (y + 1) >= 0 and
-                    (y + 1) < binary_image.height;
-
-                if (is_point_in_image_bounds) {
-                    const last_pixel_index = ((y + 1) * binary_image.width) + x;
-                    break :blk last_pixel_index;
-                }
-
-                break :blk null;
-            };
+            // Be careful to not go out of bounds while getting the trailing pixel as we scan.
+            const optional_last_pixel = getPixel(binary_image, @intCast(x), @intCast(y + 1));
 
             // Find where we go from nothing to an active shape. This does end up
             // finding holes in shapes as well as long as the hole doesn't share a
@@ -712,7 +691,7 @@ pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, al
             const has_contour_begun = // Look for an active pixel where...
                 binary_image.pixels[current_pixel_index].value and
                 // the previous pixel was inactive which indicates we're entering a shape
-                (optional_last_pixel_index == null or !binary_image.pixels[optional_last_pixel_index.?].value);
+                (optional_last_pixel == null or !optional_last_pixel.?.value);
 
             const already_seen_pixel_in_boundary = seen_boundary_points.get(ImagePoint{ .x = x, .y = y }) != null;
 

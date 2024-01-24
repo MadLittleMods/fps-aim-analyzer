@@ -1,9 +1,9 @@
 const std = @import("std");
 const neural_networks = @import("zig-neural-networks");
-const mnist_data_point_utils = @import("utils/mnist_data_point_utils.zig");
-const CustomNoiseLayer = @import("CustomNoiseLayer.zig");
-
-const mnist_main = @import("main.zig");
+const zigimg = @import("zigimg");
+const prepare_data_points = @import("vision/ocr/prepare_data_points.zig");
+const save_load_utils = @import("vision/ocr/save_load_utils.zig");
+const CustomNoiseLayer = @import("vision/ocr/CustomNoiseLayer.zig");
 
 // Set the logging levels
 pub const std_options = struct {
@@ -12,6 +12,20 @@ pub const std_options = struct {
     pub const log_scope_levels = &[_]std.log.ScopeLevel{
         .{ .scope = .zig_neural_networks, .level = .debug },
     };
+};
+
+// Make it possible to load big 4k screenshots with zigimg
+// (see https://github.com/zigimg/zigimg/issues/154#issuecomment-1889010856)
+pub const DefaultPngOptions = struct {
+    def_processors: zigimg.png.DefaultProcessors = .{},
+    gpa_allocator: std.heap.GeneralPurposeAllocator(.{}) = undefined,
+
+    const Self = @This();
+
+    pub fn get(self: *Self) zigimg.png.ReaderOptions {
+        self.gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
+        return .{ .temp_allocator = self.gpa_allocator.allocator(), .processors = self.def_processors.get() };
+    }
 };
 
 const BATCH_SIZE: u32 = 100;
@@ -29,73 +43,72 @@ pub fn main() !void {
     // Getting the training/testing data ready
     // =======================================
     //
-    const parsed_mnist_data = try mnist_data_point_utils.getMnistDataPoints(allocator, .{});
-    defer parsed_mnist_data.deinit();
-    const mnist_data = parsed_mnist_data.value;
+    const asdf = try prepare_data_points.getHaloAmmoCounterTrainingPoints(allocator);
+    _ = asdf;
 
     // Neural network
     // =======================================
     //
     // Register the custom layer types we will be using with the library (this is used
     // for deserialization).
-    try neural_networks.Layer.registerCustomLayer(CustomNoiseLayer, allocator);
-    defer neural_networks.Layer.deinitCustomLayerMap(allocator);
+    // try neural_networks.Layer.registerCustomLayer(CustomNoiseLayer, allocator);
+    // defer neural_networks.Layer.deinitCustomLayerMap(allocator);
 
-    // Setup the layers we'll be using in our custom neural network.
-    //
-    // Let's add a custom noise layer to the beginning of the network to to add some
-    // variation to each image input which should help reduce overfitting. In the
-    // future, we could also add some random scaling, translations, and rotations.
-    var custom_noise_layer = try CustomNoiseLayer.init(
-        0.01,
-        0.75,
-        // It's nicer to have a fixed seed so we can reproduce the same results.
-        123,
-    );
-    var dense_layer1 = try neural_networks.DenseLayer.init(784, 100, allocator);
-    var activation_layer1 = try neural_networks.ActivationLayer.init(neural_networks.ActivationFunction{
-        .elu = .{},
-    });
-    var dense_layer2 = try neural_networks.DenseLayer.init(100, @typeInfo(mnist_data_point_utils.DigitLabel).Enum.fields.len, allocator);
-    var activation_layer2 = try neural_networks.ActivationLayer.init(neural_networks.ActivationFunction{
-        .soft_max = .{},
-    });
+    // // Setup the layers we'll be using in our custom neural network.
+    // //
+    // // Let's add a custom noise layer to the beginning of the network to to add some
+    // // variation to each image input which should help reduce overfitting. In the
+    // // future, we could also add some random scaling, translations, and rotations.
+    // var custom_noise_layer = try CustomNoiseLayer.init(
+    //     0.01,
+    //     0.75,
+    //     // It's nicer to have a fixed seed so we can reproduce the same results.
+    //     123,
+    // );
+    // var dense_layer1 = try neural_networks.DenseLayer.init(784, 100, allocator);
+    // var activation_layer1 = try neural_networks.ActivationLayer.init(neural_networks.ActivationFunction{
+    //     .elu = .{},
+    // });
+    // var dense_layer2 = try neural_networks.DenseLayer.init(100, @typeInfo(mnist_data_point_utils.DigitLabel).Enum.fields.len, allocator);
+    // var activation_layer2 = try neural_networks.ActivationLayer.init(neural_networks.ActivationFunction{
+    //     .soft_max = .{},
+    // });
 
-    var base_layers = [_]neural_networks.Layer{
-        dense_layer1.layer(),
-        activation_layer1.layer(),
-        dense_layer2.layer(),
-        activation_layer2.layer(),
-    };
-    var training_layers = [_]neural_networks.Layer{
-        // The CustomNoiseLayer should only be used during training to reduce overfitting.
-        // It doesn't make sense to run during testing because we don't want to skew our
-        // inputs at all.
-        custom_noise_layer.layer(),
-    } ++ base_layers;
-    defer for (&training_layers) |*layer| {
-        layer.deinit(allocator);
-    };
+    // var base_layers = [_]neural_networks.Layer{
+    //     dense_layer1.layer(),
+    //     activation_layer1.layer(),
+    //     dense_layer2.layer(),
+    //     activation_layer2.layer(),
+    // };
+    // var training_layers = [_]neural_networks.Layer{
+    //     // The CustomNoiseLayer should only be used during training to reduce overfitting.
+    //     // It doesn't make sense to run during testing because we don't want to skew our
+    //     // inputs at all.
+    //     custom_noise_layer.layer(),
+    // } ++ base_layers;
+    // defer for (&training_layers) |*layer| {
+    //     layer.deinit(allocator);
+    // };
 
-    var neural_network_for_training = try neural_networks.NeuralNetwork.initFromLayers(
-        &training_layers,
-        neural_networks.CostFunction{ .cross_entropy = .{} },
-    );
-    defer neural_network_for_training.deinit(allocator);
+    // var neural_network_for_training = try neural_networks.NeuralNetwork.initFromLayers(
+    //     &training_layers,
+    //     neural_networks.CostFunction{ .cross_entropy = .{} },
+    // );
+    // defer neural_network_for_training.deinit(allocator);
 
-    var neural_network_for_testing = try neural_networks.NeuralNetwork.initFromLayers(
-        &base_layers,
-        neural_networks.CostFunction{ .cross_entropy = .{} },
-    );
-    defer neural_network_for_testing.deinit(allocator);
+    // var neural_network_for_testing = try neural_networks.NeuralNetwork.initFromLayers(
+    //     &base_layers,
+    //     neural_networks.CostFunction{ .cross_entropy = .{} },
+    // );
+    // defer neural_network_for_testing.deinit(allocator);
 
-    try train(
-        &neural_network_for_training,
-        &neural_network_for_testing,
-        mnist_data,
-        0,
-        allocator,
-    );
+    // try train(
+    //     &neural_network_for_training,
+    //     &neural_network_for_testing,
+    //     mnist_data,
+    //     0,
+    //     allocator,
+    // );
 }
 
 /// Runs the training loop so the neural network can learn, and prints out progress
@@ -103,7 +116,7 @@ pub fn main() !void {
 pub fn train(
     neural_network_for_training: *neural_networks.NeuralNetwork,
     neural_network_for_testing: *neural_networks.NeuralNetwork,
-    mnist_data: mnist_data_point_utils.NeuralNetworkData,
+    mnist_data: prepare_data_points.NeuralNetworkData,
     starting_epoch_index: u32,
     allocator: std.mem.Allocator,
 ) !void {
@@ -158,11 +171,11 @@ pub fn train(
                 const runtime_duration_seconds = current_timestamp_seconds - start_timestamp_seconds;
 
                 const cost = try neural_network_for_testing.cost_many(
-                    mnist_data.testing_data_points[0..NUM_OF_IMAGES_TO_QUICK_TEST_ON],
+                    mnist_data.testing_data_points,
                     allocator,
                 );
                 const accuracy = try neural_network_for_testing.getAccuracyAgainstTestingDataPoints(
-                    mnist_data.testing_data_points[0..NUM_OF_IMAGES_TO_QUICK_TEST_ON],
+                    mnist_data.testing_data_points,
                     allocator,
                 );
                 std.log.debug("epoch {d: <3} batch {d: <3} {s: >12} -> cost {d}, " ++
@@ -171,7 +184,7 @@ pub fn train(
                     batch_index,
                     std.fmt.fmtDurationSigned(runtime_duration_seconds * std.time.ns_per_s),
                     cost,
-                    NUM_OF_IMAGES_TO_QUICK_TEST_ON,
+                    mnist_data.testing_data_points.len,
                     accuracy,
                 });
             }

@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) !void {
         src: []const u8,
     }{
         .{ .name = "main", .src = "src/main.zig" },
-        .{ .name = "train_ocr", .src = "src/vision/ocr/main_train_ocr_neural_network.zig" },
+        .{ .name = "train_ocr", .src = "src/main_train_ocr_neural_network.zig" },
     }) |exe_cfg| {
         const exe_name = exe_cfg.name;
         const exe_src = exe_cfg.src;

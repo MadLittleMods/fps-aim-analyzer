@@ -10,7 +10,7 @@ const maskImage = image_conversion.maskImage;
 const rgbToHsvImage = image_conversion.rgbToHsvImage;
 const hsvToRgbImage = image_conversion.hsvToRgbImage;
 const hsvToBinaryImage = image_conversion.hsvToBinaryImage;
-const hsvPixelInRange = image_conversion.hsvPixelInRange;
+const checkHsvPixelInRange = image_conversion.checkHsvPixelInRange;
 const morphological_operations = @import("morphological_operations.zig");
 const getStructuringElement = morphological_operations.getStructuringElement;
 const erode = morphological_operations.erode;
@@ -81,7 +81,7 @@ fn _findNextUnmetCondition(conditions: std.EnumArray(ChromaticAberrationConditio
 
 pub fn checkForChromaticAberrationConditionInHsvPixel(hsv_pixel: HSVPixel, condition: ChromaticAberrationCondition) bool {
     return switch (condition) {
-        .blue => hsvPixelInRange(
+        .blue => checkHsvPixelInRange(
             hsv_pixel,
             // OpenCV:
             //  - h: [0, 180]
@@ -93,27 +93,27 @@ pub fn checkForChromaticAberrationConditionInHsvPixel(hsv_pixel: HSVPixel, condi
             // OpenCV: (152, 255, 255)
             HSVPixel.init(0.844444, 1.0, 1.0),
         ),
-        .cyan => hsvPixelInRange(
+        .cyan => checkHsvPixelInRange(
             hsv_pixel,
             // OpenCV: (90, 34, 214)
             HSVPixel.init(0.5, 0.133333, 0.839215),
             // OpenCV: (136, 255, 255)
             HSVPixel.init(0.755555, 1.0, 1.0),
         ),
-        .yellow => hsvPixelInRange(
+        .yellow => checkHsvPixelInRange(
             hsv_pixel,
             // OpenCV: (14, 20, 157)
             HSVPixel.init(0.077777, 0.078843, 0.615686),
             // OpenCV: (56, 195, 255)
             HSVPixel.init(0.311111, 0.764705, 1.0),
         ),
-        .red => hsvPixelInRange(
+        .red => checkHsvPixelInRange(
             hsv_pixel,
             // OpenCV: (0, 50, 130)
             HSVPixel.init(0.0, 0.196078, 0.509803),
             // OpenCV: (14, 185, 255)
             HSVPixel.init(0.077777, 0.725490, 1.0),
-        ) or hsvPixelInRange(
+        ) or checkHsvPixelInRange(
             hsv_pixel,
             // OpenCV: (155, 51, 138)
             HSVPixel.init(0.861111, 0.2, 0.541176),
@@ -488,7 +488,7 @@ pub const IsolateDiagnostics = struct {
     }
 };
 
-/// Given a screensho of Halo Infinite, isolate the ammo counter region.
+/// Given a screenshot of Halo Infinite, isolate the ammo counter region.
 pub fn isolateHaloAmmoCounter(
     screenshot: Screenshot(RGBImage),
     diagnostics: ?*IsolateDiagnostics,
@@ -588,8 +588,8 @@ pub fn isolateHaloAmmoCounter(
         // Create a horizontal kernel and dilate to connect text characters
         const dilate_kernel = try getStructuringElement(
             .rectangle,
+            3,
             9,
-            13,
             allocator,
         );
         defer dilate_kernel.deinit(allocator);
@@ -652,20 +652,20 @@ pub fn isolateHaloAmmoCounter(
         );
     }
 
+    const bounding_boxes = try allocator.alloc(BoundingClientRect(usize), chromatic_contours.len);
+    for (chromatic_contours, bounding_boxes) |contour, *bounding_box| {
+        bounding_box.* = boundingRect(contour);
+        // TODO:
+        // if (bounding_box.width > character_min_width and bounding_box.height > character_min_height) {
+        //     break :bounding_box bounding_box;
+        // }
+    }
+
     const optional_ammo_bounding_box: ?BoundingClientRect(usize) = bounding_box: {
         const character_min_width = 14;
+        _ = character_min_width;
         const character_min_height = 21;
-        for (chromatic_contours) |contour| {
-            const bounding_box = boundingRect(contour);
-            // We can naievely just look for the first bounding box that meets the
-            // minimum character size requirements because we know the `findContours()`
-            // function searches from the bottom-left corner of the image to the
-            // top-right which means the first bounding box found will be the
-            // bottom-left one which we would want to sort for anyway.
-            if (bounding_box.width > character_min_width and bounding_box.height > character_min_height) {
-                break :bounding_box bounding_box;
-            }
-        }
+        _ = character_min_height;
         break :bounding_box null;
     };
 
@@ -693,20 +693,6 @@ pub fn isolateHaloAmmoCounter(
 }
 
 test "Find Halo ammo counter region" {
-    // std.debug.assert(std.fs.path.isAbsolute(abs_dir_path));
-    // var iterable_dir = try fs.openDirAbsolute(abs_dir_path, .{ .iterate = true });
-    // defer iterable_dir.close();
-
-    // var it = iterable_dir.iterate();
-    // while (try it.next()) |entry| {
-    //     switch (entry.kind) {
-    //         .file, .sym_link => {},
-    //         else => continue,
-    //     }
-
-    //     // entry.name;
-    // }
-
     const allocator = std.testing.allocator;
     const rgb_image = try RGBImage.loadImageFromFilePath("/home/eric/Downloads/36-1080-export-from-gimp.png", allocator);
     defer rgb_image.deinit(allocator);

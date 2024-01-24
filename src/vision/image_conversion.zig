@@ -240,6 +240,16 @@ pub const RGBImage = struct {
     }
 };
 
+/// Quick helper to convert a bunch of 0/1 into BinaryPixel's
+pub fn rgbPixelsfromHexArray(comptime hex_pixels: []const u24) [hex_pixels.len]RGBPixel {
+    var rgb_pixels = [_]RGBPixel{RGBPixel{ .r = 0, .g = 0, .b = 0 }} ** hex_pixels.len;
+    for (hex_pixels, 0..) |hex_pixel, index| {
+        rgb_pixels[index] = RGBPixel.fromHexNumber(hex_pixel);
+    }
+
+    return rgb_pixels;
+}
+
 pub const HSVImage = struct {
     width: usize,
     height: usize,
@@ -318,6 +328,73 @@ pub fn expectBinaryImageEqual(
     };
 }
 
+pub fn getPixelIndex(image: anytype, x: isize, y: isize) ?usize {
+    const is_current_point_in_image_bounds = x >= 0 and
+        x < image.width and
+        y >= 0 and
+        y < image.height;
+
+    if (is_current_point_in_image_bounds) {
+        return (@as(usize, @intCast(y)) * image.width) + @as(usize, @intCast(x));
+    }
+
+    return null;
+}
+
+pub fn getPixel(image: anytype, x: isize, y: isize) ?std.meta.Child(@TypeOf(image.pixels)) {
+    const optional_pixel_index = getPixelIndex(image, x, y);
+    if (optional_pixel_index) |pixel_index| {
+        return image.pixels[pixel_index];
+    }
+
+    return null;
+}
+
+pub fn getPixelIndexClamped(image: anytype, x: isize, y: isize) usize {
+    const x_clamped = @as(usize, @intCast(
+        std.math.clamp(x, 0, @as(isize, @intCast(image.width - 1))),
+    ));
+    const y_clamped = @as(usize, @intCast(
+        std.math.clamp(y, 0, @as(isize, @intCast(image.height - 1))),
+    ));
+    const pixel_index = (y_clamped * image.width) + x_clamped;
+    return pixel_index;
+}
+
+pub fn getPixelClamped(image: anytype, x: isize, y: isize) std.meta.Child(@TypeOf(image.pixels)) {
+    const pixel_index_clamped = getPixelIndexClamped(image, x, y);
+    return image.pixels[pixel_index_clamped];
+}
+
+test "getPixelIndexClamped" {
+    const image = BinaryImage{
+        .width = 5,
+        .height = 5,
+        .pixels = &binaryPixelsfromIntArray(&[_]u1{
+            0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 1, 0,
+            0, 0, 0, 0, 0,
+        }),
+    };
+
+    // In bounds
+    try std.testing.expectEqual(@as(usize, 0), getPixelIndexClamped(image, 0, 0));
+    try std.testing.expectEqual(@as(usize, 4), getPixelIndexClamped(image, 4, 0));
+    try std.testing.expectEqual(@as(usize, 20), getPixelIndexClamped(image, 0, 4));
+    try std.testing.expectEqual(@as(usize, 24), getPixelIndexClamped(image, 4, 4));
+
+    // Out of bounds are clamped
+    try std.testing.expectEqual(@as(usize, 0), getPixelIndexClamped(image, -2, 0));
+    try std.testing.expectEqual(@as(usize, 4), getPixelIndexClamped(image, 6, 0));
+    try std.testing.expectEqual(@as(usize, 10), getPixelIndexClamped(image, -2, 2));
+    try std.testing.expectEqual(@as(usize, 0), getPixelIndexClamped(image, 0, -1));
+    try std.testing.expectEqual(@as(usize, 20), getPixelIndexClamped(image, 0, 6));
+    try std.testing.expectEqual(@as(usize, 22), getPixelIndexClamped(image, 2, 6));
+    try std.testing.expectEqual(@as(usize, 24), getPixelIndexClamped(image, 6, 6));
+}
+
 pub fn cropImage(
     image: anytype,
     x: usize,
@@ -326,7 +403,7 @@ pub fn cropImage(
     height: usize,
     allocator: std.mem.Allocator,
 ) !@TypeOf(image) {
-    const PixelType = @TypeOf(image.pixels[0]);
+    const PixelType = std.meta.Child(@TypeOf(image.pixels));
     var output_pixels = try allocator.alloc(PixelType, width * height);
     for (0..height) |crop_y| {
         for (0..width) |crop_x| {
@@ -357,7 +434,7 @@ pub fn maskImage(
         mask.height,
     });
 
-    const PixelType = @TypeOf(image.pixels[0]);
+    const PixelType = std.meta.Child(@TypeOf(image.pixels));
     var output_pixels = try allocator.alloc(PixelType, image.pixels.len);
     errdefer allocator.free(output_pixels);
     // Black/blank out the image
@@ -388,6 +465,246 @@ pub fn maskImage(
         .height = image.height,
         .pixels = output_pixels,
     };
+}
+
+/// Sampling methods to use when resizing an image
+const InterpolationMethod = enum {
+    nearest,
+    bilinear,
+    bicubic,
+};
+
+/// Nearest neighbor sampling: Sample the nearest pixel to the given uv coordinate.
+pub fn sampleNearest(source_image: anytype, u: f32, v: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
+    const x: isize = @intFromFloat(u * @as(f32, @floatFromInt(source_image.width)));
+    const y: isize = @intFromFloat(v * @as(f32, @floatFromInt(source_image.height)));
+
+    return getPixelClamped(source_image, x, y);
+    // return source_image.pixels[y * source_image.width + x];
+}
+
+/// Linear interpolate between two values.
+fn lerp(a: f32, b: f32, t: f32) f32 {
+    return a + (b - a) * t;
+}
+
+// Bilinear interpolate between four values.
+fn bilerp(p00: f32, p10: f32, p01: f32, p11: f32, x_fractional: f32, y_fractional: f32) f32 {
+    // p00 ----🔵---- p10
+    //         |
+    //         |
+    //         |
+    // p01 ----🟠---- p11
+    //
+    // Interpolate between the first set of values in the x-direction to find the blue dot
+    const x1 = lerp(p00, p10, x_fractional);
+    // Interpolate between the second set of values in the x-direction to find the orange dot
+    const x2 = lerp(p01, p11, x_fractional);
+
+    // Interpolate between the two new intermediate values in the y-direction to find the green dot
+    //
+    // p00 ----x1---- p10
+    //         |
+    //         🟢
+    //         |
+    // p01 ----x2---- p11
+    const result = lerp(x1, x2, y_fractional);
+    return result;
+}
+
+// Reference:
+//  - https://blog.demofox.org/2015/08/15/resizing-images-with-bicubic-interpolation/
+//  - https://en.wikipedia.org/wiki/Bilinear_interpolation
+pub fn sampleBilinear(source_image: anytype, u: f32, v: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
+    // Calculate coordinates. We also need to offset by half a pixel to keep image from
+    // shifting down and left half a pixel.
+    const x = (u * @as(f32, @floatFromInt(source_image.width))) - 0.5;
+    const x_int: isize = @intFromFloat(x);
+    const x_fractional = x - @floor(x);
+
+    const y = (v * @as(f32, @floatFromInt(source_image.height))) - 0.5;
+    const y_int: isize = @intFromFloat(y);
+    const y_fractional = y - @floor(y);
+
+    const p00 = getPixelClamped(source_image, x_int + 0, y_int + 0);
+    const p10 = getPixelClamped(source_image, x_int + 1, y_int + 0);
+    const p01 = getPixelClamped(source_image, x_int + 0, y_int + 1);
+    const p11 = getPixelClamped(source_image, x_int + 1, y_int + 1);
+
+    // Interpolate bi-linearly!
+    const PixelType = std.meta.Child(@TypeOf(source_image.pixels));
+    switch (PixelType) {
+        RGBPixel => {
+            return .{
+                .r = bilerp(p00.r, p10.r, p01.r, p11.r, x_fractional, y_fractional),
+                .g = bilerp(p00.g, p10.g, p01.g, p11.g, x_fractional, y_fractional),
+                .b = bilerp(p00.b, p10.b, p01.b, p11.b, x_fractional, y_fractional),
+            };
+        },
+        HSVPixel => {
+            return .{
+                .h = bilerp(p00.h, p10.h, p01.h, p11.h, x_fractional, y_fractional),
+                .s = bilerp(p00.s, p10.s, p01.s, p11.s, x_fractional, y_fractional),
+                .v = bilerp(p00.v, p10.v, p01.v, p11.v, x_fractional, y_fractional),
+            };
+        },
+        GrayscalePixel => {
+            return .{
+                .value = bilerp(p00.value, p10.value, p01.value, p11.value, x_fractional, y_fractional),
+            };
+        },
+        BinaryPixel => {
+            @compileError("sampleBilinear(...): BinaryPixel is not supported since we can't interpolate between true/false");
+        },
+        else => {
+            @compileLog("PixelType=", @typeName(PixelType));
+            @compileError("sampleBilinear(...): Unsupported pixel type");
+        },
+    }
+}
+
+/// Hermite Bicubic interpolation
+///
+// Reference:
+//  - https://blog.demofox.org/2015/08/15/resizing-images-with-bicubic-interpolation/
+//  - Bicubic Interpolation - Computerphile, https://www.youtube.com/watch?v=poY_nGzEEWM
+//  - https://en.wikipedia.org/wiki/Bicubic_interpolation
+pub fn sampleBicubic(source_image: anytype, u: f32, v: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
+    // Calculate coordinates. We also need to offset by half a pixel to keep image from
+    // shifting down and left half a pixel.
+    const x = (u * @as(f32, @floatFromInt(source_image.width))) - 0.5;
+    const x_int: isize = @intFromFloat(x);
+    const x_fractional = x - @floor(x);
+    _ = x_fractional;
+
+    const y = (v * @as(f32, @floatFromInt(source_image.height))) - 0.5;
+    const y_int: isize = @intFromFloat(y);
+    const y_fractional = y - @floor(y);
+    _ = y_fractional;
+
+    // Get the surrounding 16 pixels
+
+    // 1st row
+    const p00 = getPixelClamped(source_image, x_int - 1, y_int - 1);
+    _ = p00;
+    const p10 = getPixelClamped(source_image, x_int + 0, y_int - 1);
+    _ = p10;
+    const p20 = getPixelClamped(source_image, x_int + 1, y_int - 1);
+    _ = p20;
+    const p30 = getPixelClamped(source_image, x_int + 2, y_int - 1);
+    _ = p30;
+
+    // 2nd row
+    const p01 = getPixelClamped(source_image, x_int - 1, y_int + 0);
+    _ = p01;
+    const p11 = getPixelClamped(source_image, x_int + 0, y_int + 0);
+    _ = p11;
+    const p21 = getPixelClamped(source_image, x_int + 1, y_int + 0);
+    _ = p21;
+    const p31 = getPixelClamped(source_image, x_int + 2, y_int + 0);
+    _ = p31;
+
+    // 3rd row
+    const p02 = getPixelClamped(source_image, x_int - 1, y_int + 1);
+    _ = p02;
+    const p12 = getPixelClamped(source_image, x_int + 0, y_int + 1);
+    _ = p12;
+    const p22 = getPixelClamped(source_image, x_int + 1, y_int + 1);
+    _ = p22;
+    const p32 = getPixelClamped(source_image, x_int + 2, y_int + 1);
+    _ = p32;
+
+    // 4th row
+    const p03 = getPixelClamped(source_image, x_int - 1, y_int + 2);
+    _ = p03;
+    const p13 = getPixelClamped(source_image, x_int + 0, y_int + 2);
+    _ = p13;
+    const p23 = getPixelClamped(source_image, x_int + 1, y_int + 2);
+    _ = p23;
+    const p33 = getPixelClamped(source_image, x_int + 2, y_int + 2);
+    _ = p33;
+
+    // TODO: implement
+    return getPixelClamped(source_image, 0, 0);
+}
+
+/// Pretty much an "auto" interpolation method.
+pub fn getIdealInterpolationMethod(
+    image: anytype,
+    new_width: usize,
+    new_height: usize,
+) InterpolationMethod {
+    // If the image can be perfectly resized using nearest neighbor, then use that.
+    if (image.width % new_width == 0 and image.height % new_height == 0) {
+        return .nearest;
+    }
+
+    // Otherwise, use bicubic interpolation.
+    return .bicubic;
+}
+
+// Reference: https://blog.demofox.org/2015/08/15/resizing-images-with-bicubic-interpolation/
+pub fn resizeImage(
+    image: anytype,
+    new_width: usize,
+    new_height: usize,
+    /// Sample type to use when resizing
+    interpolation_method: InterpolationMethod,
+    allocator: std.mem.Allocator,
+) !@TypeOf(image) {
+    const PixelType = std.meta.Child(@TypeOf(image.pixels));
+    var output_pixels = try allocator.alloc(PixelType, new_width * new_height);
+
+    for (0..new_height) |y| {
+        const row_start_pixel_index = y * new_width;
+        const v = @as(f32, @floatFromInt(y)) / @as(f32, @floatFromInt(new_height - 1));
+        for (0..new_width) |x| {
+            const current_pixel_index = row_start_pixel_index + x;
+            const u = @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(new_width - 1));
+
+            output_pixels[current_pixel_index] = switch (interpolation_method) {
+                .nearest => sampleNearest(image, u, v),
+                .bilinear => sampleBilinear(image, u, v),
+                .bicubic => sampleBicubic(image, u, v),
+            };
+        }
+    }
+
+    return .{
+        .width = new_width,
+        .height = new_height,
+        .pixels = output_pixels,
+    };
+}
+
+test "resizeImage" {
+    const allocator = std.testing.allocator;
+
+    // 8x8 cow art via https://www.reddit.com/r/PixelArt/comments/103bznv/just_started_my_pixel_art_journey_i_heard_it_was/
+    const image = RGBImage{
+        .width = 8,
+        .height = 8,
+        .pixels = &rgbPixelsfromHexArray(&[_]u24{
+            0xdbc9b4, 0x000000, 0x000000, 0xdbc9b4, 0x000000, 0x000000, 0x000000, 0x000000,
+            0x000000, 0xfcecd1, 0xfcecd1, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000,
+            0x000000, 0xfcecd1, 0xfcecd1, 0x2d1e2f, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0x2d1e2f,
+            0xc3a79c, 0xdbc9b4, 0xc3a79c, 0xfcecd1, 0xfcecd1, 0x2d1e2f, 0xfcecd1, 0xfcecd1,
+            0xdbc9b4, 0xdbc9b4, 0xdbc9b4, 0xfcecd1, 0x2d1e2f, 0x2d1e2f, 0xfcecd1, 0xfcecd1,
+            0x000000, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1,
+            0x000000, 0xfcecd1, 0x000000, 0xfcecd1, 0x000000, 0xdbc9b4, 0x000000, 0xfcecd1,
+            0x000000, 0xc3a79c, 0x000000, 0xc3a79c, 0x000000, 0x9c807e, 0x000000, 0xc3a79c,
+        }),
+    };
+
+    const nearest_resized_image = try resizeImage(image, 24, 24, .nearest, allocator);
+    defer nearest_resized_image.deinit(allocator);
+
+    const bilinear_resized_image = try resizeImage(image, 64, 64, .bilinear, allocator);
+    defer bilinear_resized_image.deinit(allocator);
+
+    try printLabeledImage("Original", image, .half_block, allocator);
+    try printLabeledImage("Nearest-neighbor resized", nearest_resized_image, .half_block, allocator);
+    try printLabeledImage("Bilinear resized", bilinear_resized_image, .half_block, allocator);
 }
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
@@ -661,14 +978,14 @@ pub fn binaryToRgbImage(binary_image: BinaryImage, allocator: std.mem.Allocator)
     };
 }
 
-pub fn hsvPixelInRange(pixel: HSVPixel, lower_bound: HSVPixel, upper_bound: HSVPixel) bool {
+pub fn checkHsvPixelInRange(pixel: HSVPixel, lower_bound: HSVPixel, upper_bound: HSVPixel) bool {
     return pixel.h >= lower_bound.h and pixel.h <= upper_bound.h and
         pixel.s >= lower_bound.s and pixel.s <= upper_bound.s and
         pixel.v >= lower_bound.v and pixel.v <= upper_bound.v;
 }
 
-test "hsvPixelInRange" {
-    try std.testing.expect(hsvPixelInRange(
+test "checkHsvPixelInRange" {
+    try std.testing.expect(checkHsvPixelInRange(
         HSVPixel{ .h = 6.60075366e-01, .s = 7.25409865e-01, .v = 9.56862747e-01 },
         // OpenCV: (90, 34, 214)
         HSVPixel.init(0.5, 0.133333, 0.839215),
