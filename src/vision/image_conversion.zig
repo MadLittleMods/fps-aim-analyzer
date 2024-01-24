@@ -522,7 +522,6 @@ pub fn sampleBilinear(source_image: anytype, u: f32, v: f32) std.meta.Child(@Typ
     // integer truncation around the edges is sampled correctly.
     const x = (u * @as(f32, @floatFromInt(source_image.width))) - 0.5;
     const x_fractional = x - @floor(x);
-
     const y = (v * @as(f32, @floatFromInt(source_image.height))) - 0.5;
     const y_fractional = y - @floor(y);
 
@@ -714,7 +713,26 @@ test "resizeImage" {
 
     try printLabeledImage("Original", image, .half_block, allocator);
     try printLabeledImage("Nearest-neighbor resized", nearest_resized_image, .half_block, allocator);
-    try printLabeledImage("Bilinear resized", bilinear_resized_image, .full_block, allocator);
+    try printLabeledImage("Bilinear resized", bilinear_resized_image, .half_block, allocator);
+
+    // 16x16 test image via via https://medium.com/hackernoon/how-tensorflows-tf-image-resize-stole-60-days-of-my-life-aba5eb093f35
+    const test_square_image = RGBImage{
+        .width = 16,
+        .height = 16,
+        .pixels = &rgbPixelsfromHexArray(
+            &([_]u24{0x010ab9} ** 16 ++
+                [_]u24{ 0x03a3de, 0xe91b51 } ++ [_]u24{0xde03a8} ** 12 ++ [_]u24{ 0xe91b51, 0x03a3de } ++
+                ([_]u24{ 0x2d1903, 0xe91b51, 0x1be951 } ++ [_]u24{0xffffff} ** 10 ++ [_]u24{ 0x1be951, 0xe91b51, 0x2d1903 }) ** 12 ++
+                [_]u24{ 0x03a3de, 0xe91b51 } ++ [_]u24{0xde03a8} ** 12 ++ [_]u24{ 0xe91b51, 0x03a3de } ++
+                [_]u24{0x010ab9} ** 16),
+        ),
+    };
+
+    const bilinear_resized_test_square_image = try resizeImage(test_square_image, 4, 4, .bilinear, allocator);
+    defer bilinear_resized_test_square_image.deinit(allocator);
+
+    try printLabeledImage("Original test_square_image", test_square_image, .half_block, allocator);
+    try printLabeledImage("Bilinear resized", bilinear_resized_test_square_image, .half_block, allocator);
 }
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
