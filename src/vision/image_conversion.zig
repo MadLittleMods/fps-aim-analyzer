@@ -516,20 +516,24 @@ fn bilerp(p00: f32, p10: f32, p01: f32, p11: f32, x_fractional: f32, y_fractiona
 //  - https://blog.demofox.org/2015/08/15/resizing-images-with-bicubic-interpolation/
 //  - https://en.wikipedia.org/wiki/Bilinear_interpolation
 pub fn sampleBilinear(source_image: anytype, u: f32, v: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
-    // Calculate coordinates. We also need to offset by half a pixel to keep image from
-    // shifting down and left half a pixel.
+    // Calculate coordinates. Offset by half a pixel so that we are measuring to/from
+    // the center of a pixel which can then can be rounded back down to the pixel
+    // coordinate. This allows sampling to occur evenly around a pixel position and
+    // integer truncation around the edges is sampled correctly.
     const x = (u * @as(f32, @floatFromInt(source_image.width))) - 0.5;
     const x_int: isize = @intFromFloat(x);
+    _ = x_int;
     const x_fractional = x - @floor(x);
 
     const y = (v * @as(f32, @floatFromInt(source_image.height))) - 0.5;
     const y_int: isize = @intFromFloat(y);
+    _ = y_int;
     const y_fractional = y - @floor(y);
 
-    const p00 = getPixelClamped(source_image, x_int + 0, y_int + 0);
-    const p10 = getPixelClamped(source_image, x_int + 1, y_int + 0);
-    const p01 = getPixelClamped(source_image, x_int + 0, y_int + 1);
-    const p11 = getPixelClamped(source_image, x_int + 1, y_int + 1);
+    const p00 = getPixelClamped(source_image, @intFromFloat(x + 0), @intFromFloat(y + 0));
+    const p10 = getPixelClamped(source_image, @intFromFloat(x + 1), @intFromFloat(y + 0));
+    const p01 = getPixelClamped(source_image, @intFromFloat(x + 0), @intFromFloat(y + 1));
+    const p11 = getPixelClamped(source_image, @intFromFloat(x + 1), @intFromFloat(y + 1));
 
     // Interpolate bi-linearly!
     const PixelType = std.meta.Child(@TypeOf(source_image.pixels));
@@ -693,6 +697,7 @@ test "resizeImage" {
             // 0x000000, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1,
             // 0x000000, 0xfcecd1, 0x000000, 0xfcecd1, 0x000000, 0xdbc9b4, 0x000000, 0xfcecd1,
             // 0x000000, 0xc3a79c, 0x000000, 0xc3a79c, 0x000000, 0x9c807e, 0x000000, 0xc3a79c,
+
             // 8x8 mooshroom variation
             0x940c0f, 0xffffff, 0xffffff, 0x940c0f, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
             0xffffff, 0xa80e12, 0xa80e12, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
@@ -708,12 +713,12 @@ test "resizeImage" {
     const nearest_resized_image = try resizeImage(image, 24, 24, .nearest, allocator);
     defer nearest_resized_image.deinit(allocator);
 
-    const bilinear_resized_image = try resizeImage(image, 64, 64, .bilinear, allocator);
+    const bilinear_resized_image = try resizeImage(image, 32, 32, .bilinear, allocator);
     defer bilinear_resized_image.deinit(allocator);
 
     try printLabeledImage("Original", image, .half_block, allocator);
     try printLabeledImage("Nearest-neighbor resized", nearest_resized_image, .half_block, allocator);
-    try printLabeledImage("Bilinear resized", bilinear_resized_image, .half_block, allocator);
+    try printLabeledImage("Bilinear resized", bilinear_resized_image, .full_block, allocator);
 }
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
