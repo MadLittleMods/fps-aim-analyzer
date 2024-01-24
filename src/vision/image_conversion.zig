@@ -521,13 +521,9 @@ pub fn sampleBilinear(source_image: anytype, u: f32, v: f32) std.meta.Child(@Typ
     // coordinate. This allows sampling to occur evenly around a pixel position and
     // integer truncation around the edges is sampled correctly.
     const x = (u * @as(f32, @floatFromInt(source_image.width))) - 0.5;
-    const x_int: isize = @intFromFloat(x);
-    _ = x_int;
     const x_fractional = x - @floor(x);
 
     const y = (v * @as(f32, @floatFromInt(source_image.height))) - 0.5;
-    const y_int: isize = @intFromFloat(y);
-    _ = y_int;
     const y_fractional = y - @floor(y);
 
     const p00 = getPixelClamped(source_image, @intFromFloat(x + 0), @intFromFloat(y + 0));
