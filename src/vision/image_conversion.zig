@@ -687,10 +687,19 @@ pub fn resizeImage(
 
     for (0..new_height) |y| {
         const row_start_pixel_index = y * new_width;
-        const v = @as(f32, @floatFromInt(y)) / @as(f32, @floatFromInt(new_height - 1));
+        // > This translates [pixel coordinates] to UVs, or "normalized" coordinates
+        // > e.g. [0.5/4, 1.5/4, 2.5/4, 3.5/4], which spans a range of [0.5/width, 1 –
+        // > 0.5/width] (pixel centers).
+        // >
+        // > This representation seems counterintuitive at first, but what it provides
+        // > us is a guarantee and convention that the image corners are placed at [0
+        // > and 1] normalized, or [0, width] unnormalized.
+        // >
+        // > *-- https://bartwronski.com/2021/02/15/bilinear-down-upsampling-pixel-grids-and-that-half-pixel-offset/*
+        const v = (@as(f32, @floatFromInt(y + 1)) - 0.5) / @as(f32, @floatFromInt(new_height));
         for (0..new_width) |x| {
             const current_pixel_index = row_start_pixel_index + x;
-            const u = @as(f32, @floatFromInt(x)) / @as(f32, @floatFromInt(new_width - 1));
+            const u = (@as(f32, @floatFromInt(x + 1)) - 0.5) / @as(f32, @floatFromInt(new_width));
 
             output_pixels[current_pixel_index] = switch (interpolation_method) {
                 .nearest => sampleNearest(image, u, v),
