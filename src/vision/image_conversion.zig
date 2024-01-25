@@ -563,6 +563,15 @@ pub fn sampleBilinear(source_image: anytype, u: f32, v: f32) std.meta.Child(@Typ
     }
 }
 
+fn cubicHermiteInterpolation(A: f32, B: f32, C: f32, D: f32, t: f32) f32 {
+    const a = -A / 2.0 + (3.0 * B) / 2.0 - (3.0 * C) / 2.0 + D / 2.0;
+    const b = A - (5.0 * B) / 2.0 + 2.0 * C - D / 2.0;
+    const c = -A / 2.0 + C / 2.0;
+    const d = B;
+
+    return a * t * t * t + b * t * t + c * t + d;
+}
+
 /// Hermite Bicubic interpolation
 ///
 // Reference:
@@ -574,58 +583,66 @@ pub fn sampleBicubic(source_image: anytype, u: f32, v: f32) std.meta.Child(@Type
     // shifting down and left half a pixel.
     const x = (u * @as(f32, @floatFromInt(source_image.width))) - 0.5;
     const x_int: isize = @intFromFloat(x);
+    _ = x_int;
     const x_fractional = x - @floor(x);
-    _ = x_fractional;
 
     const y = (v * @as(f32, @floatFromInt(source_image.height))) - 0.5;
     const y_int: isize = @intFromFloat(y);
+    _ = y_int;
     const y_fractional = y - @floor(y);
-    _ = y_fractional;
 
     // Get the surrounding 16 pixels
-
+    //
     // 1st row
-    const p00 = getPixelClamped(source_image, x_int - 1, y_int - 1);
-    _ = p00;
-    const p10 = getPixelClamped(source_image, x_int + 0, y_int - 1);
-    _ = p10;
-    const p20 = getPixelClamped(source_image, x_int + 1, y_int - 1);
-    _ = p20;
-    const p30 = getPixelClamped(source_image, x_int + 2, y_int - 1);
-    _ = p30;
-
+    const p00 = getPixelClamped(source_image, @intFromFloat(x - 1), @intFromFloat(y - 1));
+    const p10 = getPixelClamped(source_image, @intFromFloat(x + 0), @intFromFloat(y - 1));
+    const p20 = getPixelClamped(source_image, @intFromFloat(x + 1), @intFromFloat(y - 1));
+    const p30 = getPixelClamped(source_image, @intFromFloat(x + 2), @intFromFloat(y - 1));
     // 2nd row
-    const p01 = getPixelClamped(source_image, x_int - 1, y_int + 0);
-    _ = p01;
-    const p11 = getPixelClamped(source_image, x_int + 0, y_int + 0);
-    _ = p11;
-    const p21 = getPixelClamped(source_image, x_int + 1, y_int + 0);
-    _ = p21;
-    const p31 = getPixelClamped(source_image, x_int + 2, y_int + 0);
-    _ = p31;
-
+    const p01 = getPixelClamped(source_image, @intFromFloat(x - 1), @intFromFloat(y + 0));
+    const p11 = getPixelClamped(source_image, @intFromFloat(x + 0), @intFromFloat(y + 0));
+    const p21 = getPixelClamped(source_image, @intFromFloat(x + 1), @intFromFloat(y + 0));
+    const p31 = getPixelClamped(source_image, @intFromFloat(x + 2), @intFromFloat(y + 0));
     // 3rd row
-    const p02 = getPixelClamped(source_image, x_int - 1, y_int + 1);
-    _ = p02;
-    const p12 = getPixelClamped(source_image, x_int + 0, y_int + 1);
-    _ = p12;
-    const p22 = getPixelClamped(source_image, x_int + 1, y_int + 1);
-    _ = p22;
-    const p32 = getPixelClamped(source_image, x_int + 2, y_int + 1);
-    _ = p32;
-
+    const p02 = getPixelClamped(source_image, @intFromFloat(x - 1), @intFromFloat(y + 1));
+    const p12 = getPixelClamped(source_image, @intFromFloat(x + 0), @intFromFloat(y + 1));
+    const p22 = getPixelClamped(source_image, @intFromFloat(x + 1), @intFromFloat(y + 1));
+    const p32 = getPixelClamped(source_image, @intFromFloat(x + 2), @intFromFloat(y + 1));
     // 4th row
-    const p03 = getPixelClamped(source_image, x_int - 1, y_int + 2);
-    _ = p03;
-    const p13 = getPixelClamped(source_image, x_int + 0, y_int + 2);
-    _ = p13;
-    const p23 = getPixelClamped(source_image, x_int + 1, y_int + 2);
-    _ = p23;
-    const p33 = getPixelClamped(source_image, x_int + 2, y_int + 2);
-    _ = p33;
+    const p03 = getPixelClamped(source_image, @intFromFloat(x - 1), @intFromFloat(y + 2));
+    const p13 = getPixelClamped(source_image, @intFromFloat(x + 0), @intFromFloat(y + 2));
+    const p23 = getPixelClamped(source_image, @intFromFloat(x + 1), @intFromFloat(y + 2));
+    const p33 = getPixelClamped(source_image, @intFromFloat(x + 2), @intFromFloat(y + 2));
 
-    // TODO: implement
-    return getPixelClamped(source_image, 0, 0);
+    const PixelType = std.meta.Child(@TypeOf(source_image.pixels));
+    const pixel_value_field_names: []const []const u8 = comptime switch (PixelType) {
+        RGBPixel => &.{ "r", "g", "b" },
+        HSVPixel => &.{ "h", "s", "v" },
+        GrayscalePixel => &.{"value"},
+        BinaryPixel => {
+            @compileError("sampleBicubic(...): BinaryPixel is not supported since we can't interpolate between true/false");
+        },
+        else => {
+            @compileLog("PixelType=", @typeName(PixelType));
+            @compileError("sampleBilinear(...): Unsupported pixel type");
+        },
+    };
+
+    var resultant_pixel: PixelType = undefined;
+    inline for (pixel_value_field_names) |pixel_value_field_name| {
+        // Rename it to something shorter so all of these lookups fit better
+        const f = pixel_value_field_name;
+
+        const x1 = cubicHermiteInterpolation(@field(p00, f), @field(p10, f), @field(p20, f), @field(p30, f), x_fractional);
+        const x2 = cubicHermiteInterpolation(@field(p01, f), @field(p11, f), @field(p21, f), @field(p31, f), x_fractional);
+        const x3 = cubicHermiteInterpolation(@field(p02, f), @field(p12, f), @field(p22, f), @field(p32, f), x_fractional);
+        const x4 = cubicHermiteInterpolation(@field(p03, f), @field(p13, f), @field(p23, f), @field(p33, f), x_fractional);
+        const result = cubicHermiteInterpolation(x1, x2, x3, x4, y_fractional);
+
+        @field(resultant_pixel, f) = std.math.clamp(result, 0.0, 1.0);
+    }
+
+    return resultant_pixel;
 }
 
 /// Pretty much an "auto" interpolation method.
@@ -725,11 +742,15 @@ test "resizeImage" {
     const bilinear_resized_image = try resizeImage(image, 32, 32, .bilinear, allocator);
     defer bilinear_resized_image.deinit(allocator);
 
-    try printLabeledImage("Original", image, .half_block, allocator);
-    try printLabeledImage("Nearest-neighbor resized", nearest_resized_image, .half_block, allocator);
-    try printLabeledImage("Bilinear resized", bilinear_resized_image, .half_block, allocator);
+    const bicubic_resized_image = try resizeImage(image, 32, 32, .bicubic, allocator);
+    defer bicubic_resized_image.deinit(allocator);
 
-    // 16x16 test image via via https://medium.com/hackernoon/how-tensorflows-tf-image-resize-stole-60-days-of-my-life-aba5eb093f35
+    try printLabeledImage("Original (8x8)", image, .half_block, allocator);
+    try printLabeledImage("Nearest-neighbor resized (24x24)", nearest_resized_image, .half_block, allocator);
+    try printLabeledImage("Bilinear resized (32x32)", bilinear_resized_image, .half_block, allocator);
+    try printLabeledImage("Bicubic resized (32x32)", bicubic_resized_image, .half_block, allocator);
+
+    // 16x16 test image via https://medium.com/hackernoon/how-tensorflows-tf-image-resize-stole-60-days-of-my-life-aba5eb093f35
     const test_square_image = RGBImage{
         .width = 16,
         .height = 16,
@@ -745,8 +766,15 @@ test "resizeImage" {
     const bilinear_resized_test_square_image = try resizeImage(test_square_image, 4, 4, .bilinear, allocator);
     defer bilinear_resized_test_square_image.deinit(allocator);
 
-    try printLabeledImage("Original test_square_image", test_square_image, .half_block, allocator);
-    try printLabeledImage("Bilinear resized", bilinear_resized_test_square_image, .full_block, allocator);
+    const bicubic_resized_test_square_image = try resizeImage(test_square_image, 4, 4, .bicubic, allocator);
+    defer bicubic_resized_test_square_image.deinit(allocator);
+
+    try printLabeledImage("Original test_square_image (16x16)", test_square_image, .half_block, allocator);
+    // FIXME: This one looks different when comparing it to what other applications do
+    try printLabeledImage("Bilinear resized (4x4)", bilinear_resized_test_square_image, .full_block, allocator);
+    try printLabeledImage("Bicubic resized (4x4)", bicubic_resized_test_square_image, .full_block, allocator);
+
+    return error.OkButWeShouldLookAtThisInTheFuture;
 }
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
