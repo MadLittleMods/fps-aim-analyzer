@@ -515,11 +515,12 @@ fn bilerp(p00: f32, p10: f32, p01: f32, p11: f32, x_fractional: f32, y_fractiona
 // Reference:
 //  - https://blog.demofox.org/2015/08/15/resizing-images-with-bicubic-interpolation/
 //  - https://en.wikipedia.org/wiki/Bilinear_interpolation
+//  - https://bartwronski.com/2021/02/15/bilinear-down-upsampling-pixel-grids-and-that-half-pixel-offset/
 pub fn sampleBilinear(source_image: anytype, u: f32, v: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
     // Calculate coordinates. Offset by half a pixel so that we are measuring to/from
     // the center of a pixel which can then can be rounded back down to the pixel
     // coordinate. This allows sampling to occur evenly around a pixel position and
-    // integer truncation around the edges is sampled correctly.
+    // integer truncation works correctly around the edges/corners.
     const x = (u * @as(f32, @floatFromInt(source_image.width))) - 0.5;
     const x_fractional = x - @floor(x);
     const y = (v * @as(f32, @floatFromInt(source_image.height))) - 0.5;
@@ -638,8 +639,21 @@ pub fn getIdealInterpolationMethod(
         return .nearest;
     }
 
-    // Otherwise, use bicubic interpolation.
-    return .bicubic;
+    // > When making an image smaller, use bicubic, which has a natural sharpening
+    // > effect. You want to emphasize the data that remains in the new, smaller image
+    // > after discarding all that extra detail from the original image
+    // >
+    // > -- https://blog.codinghorror.com/better-image-resizing/
+    if (image.width < new_width or image.height < new_height) {
+        return .bicubic;
+    }
+
+    // > When making an image larger, use bilinear, which has a natural smoothing
+    // > effect. You want to blend over the interpolated fake detail in the new, larger
+    // > image that never existed in the original image.
+    // >
+    // > -- https://blog.codinghorror.com/better-image-resizing/
+    return .bilinear;
 }
 
 // Reference: https://blog.demofox.org/2015/08/15/resizing-images-with-bicubic-interpolation/
@@ -732,7 +746,7 @@ test "resizeImage" {
     defer bilinear_resized_test_square_image.deinit(allocator);
 
     try printLabeledImage("Original test_square_image", test_square_image, .half_block, allocator);
-    try printLabeledImage("Bilinear resized", bilinear_resized_test_square_image, .half_block, allocator);
+    try printLabeledImage("Bilinear resized", bilinear_resized_test_square_image, .full_block, allocator);
 }
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to

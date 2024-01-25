@@ -234,7 +234,7 @@ pub fn allocPrintBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !
 
         row_strings[row_index] = try std.fmt.allocPrint(
             allocator,
-            "|{s}|\n",
+            "│{s}│\n",
             .{
                 pixel_row_string,
             },
