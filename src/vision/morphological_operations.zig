@@ -6,7 +6,7 @@ const BinaryImage = image_conversion.BinaryImage;
 const BinaryPixel = image_conversion.BinaryPixel;
 const binaryPixelsfromIntArray = image_conversion.binaryPixelsfromIntArray;
 const binaryToRgbImage = image_conversion.binaryToRgbImage;
-const expectBinaryImageEqual = image_conversion.expectBinaryImageEqual;
+const expectImageEqual = image_conversion.expectImageEqual;
 const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
 
@@ -258,7 +258,7 @@ fn _testStructuringElement(
         .pixels = &expected_pixels,
     };
 
-    try expectBinaryImageEqual(
+    try expectImageEqual(
         actual_structuring_element,
         expected_image,
         allocator,
@@ -569,7 +569,7 @@ test "erode" {
         .pixels = &expected_eroded_pixels,
     };
 
-    try expectBinaryImageEqual(
+    try expectImageEqual(
         eroded_binary_image,
         expected_eroded_image,
         allocator,
@@ -610,7 +610,7 @@ test "dilate" {
         .pixels = &expected_dilated_pixels,
     };
 
-    try expectBinaryImageEqual(
+    try expectImageEqual(
         dilated_binary_image,
         expected_dilated_image,
         allocator,

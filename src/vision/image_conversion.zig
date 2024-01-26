@@ -303,29 +303,87 @@ pub fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len
     return binary_pixels;
 }
 
-pub fn expectBinaryImageEqual(
-    actual_binary_image: BinaryImage,
-    expected_binary_image: BinaryImage,
+fn convertToRgbImage(image: anytype, allocator: std.mem.Allocator) !RGBImage {
+    switch (@TypeOf(image)) {
+        RGBImage => {
+            // We could just `return image;` directly here but then downstream usage
+            // will have to conditionally `deinit()` so we'll just make the downstream
+            // usage consistent by always returning a copy that someone can `deinit()`.
+            const copy_pixels = try allocator.alloc(RGBPixel, image.pixels.len);
+            std.mem.copyForwards(RGBPixel, copy_pixels, image.pixels);
+
+            return .{
+                .width = image.width,
+                .height = image.height,
+                .pixels = copy_pixels,
+            };
+        },
+        HSVImage => return hsvToRgbImage(image, allocator),
+        GrayscaleImage => return grayscaleToRgbImage(image, allocator),
+        BinaryImage => return binaryToRgbImage(image, allocator),
+        else => {
+            @compileLog("image=", @typeName(image));
+            @compileError("convertToRgbImage(...): Unsupported image type");
+        },
+    }
+}
+
+pub fn expectImageEqual(
+    actual_image: anytype,
+    expected_image: @TypeOf(actual_image),
     allocator: std.mem.Allocator,
 ) !void {
-    try std.testing.expectEqual(expected_binary_image.width, actual_binary_image.width);
-    try std.testing.expectEqual(expected_binary_image.height, actual_binary_image.height);
+    try std.testing.expectEqual(expected_image.width, actual_image.width);
+    try std.testing.expectEqual(expected_image.height, actual_image.height);
 
+    const PixelType = std.meta.Child(@TypeOf(actual_image.pixels));
     std.testing.expectEqualSlices(
-        BinaryPixel,
-        actual_binary_image.pixels,
-        expected_binary_image.pixels,
+        PixelType,
+        actual_image.pixels,
+        expected_image.pixels,
     ) catch |err| {
-        const actual_rgb_image = try binaryToRgbImage(actual_binary_image, allocator);
+        const actual_rgb_image = try convertToRgbImage(actual_image, allocator);
         defer actual_rgb_image.deinit(allocator);
         try printLabeledImage("Actual image", actual_rgb_image, .full_block, allocator);
 
-        const expected_rgb_image = try binaryToRgbImage(expected_binary_image, allocator);
+        const expected_rgb_image = try convertToRgbImage(expected_image, allocator);
         defer expected_rgb_image.deinit(allocator);
         try printLabeledImage("Expected image", expected_rgb_image, .full_block, allocator);
 
         return err;
     };
+}
+
+pub fn expectImageApproxEqual(
+    actual_image: anytype,
+    expected_image: @TypeOf(actual_image),
+    tolerance: f32,
+    allocator: std.mem.Allocator,
+) !void {
+    try std.testing.expectEqual(expected_image.width, actual_image.width);
+    try std.testing.expectEqual(expected_image.height, actual_image.height);
+    try std.testing.expectEqual(expected_image.pixels.len, actual_image.pixels.len);
+
+    const PixelType = std.meta.Child(@TypeOf(actual_image.pixels));
+    inline for (comptime getPixelValueFieldNames(PixelType)) |pixel_value_field_name| {
+        for (actual_image.pixels, expected_image.pixels, 0..) |actual_pixel, expected_pixel, pixel_index| {
+            // Emulate `expectApproxEqualSlices` since that doesn't exist.
+            //
+            // Check if the pixel value is within the tolerance
+            std.testing.expectApproxEqAbs(
+                @field(actual_pixel, pixel_value_field_name),
+                @field(expected_pixel, pixel_value_field_name),
+                tolerance,
+            ) catch {
+                std.debug.print("Pixel index {} was not within tolerance of the expected.\n", .{
+                    pixel_index,
+                });
+                // Print a better error using `expectImageEqual` (this will always fail
+                // given that one of the pixels above wasn't within tolerance)
+                try expectImageEqual(actual_image, expected_image, allocator);
+            };
+        }
+    }
 }
 
 pub fn getPixelIndex(image: anytype, x: isize, y: isize) ?usize {
@@ -470,9 +528,25 @@ pub fn maskImage(
 /// Sampling methods to use when resizing an image
 const InterpolationMethod = enum {
     nearest,
+    average,
     bilinear,
     bicubic,
 };
+
+pub fn getPixelValueFieldNames(comptime PixelType: type) []const []const u8 {
+    const pixel_value_field_names: []const []const u8 = comptime switch (PixelType) {
+        RGBPixel => &.{ "r", "g", "b" },
+        HSVPixel => &.{ "h", "s", "v" },
+        GrayscalePixel => &.{"value"},
+        BinaryPixel => &.{"value"},
+        else => {
+            @compileLog("PixelType=", @typeName(PixelType));
+            @compileError("getPixelValueFieldNames(...): Unknown pixel type");
+        },
+    };
+
+    return pixel_value_field_names;
+}
 
 /// Nearest neighbor sampling: Sample the nearest pixel to the given uv coordinate.
 pub fn sampleNearest(source_image: anytype, u: f32, v: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
@@ -481,6 +555,74 @@ pub fn sampleNearest(source_image: anytype, u: f32, v: f32) std.meta.Child(@Type
 
     return getPixelClamped(source_image, x, y);
     // return source_image.pixels[y * source_image.width + x];
+}
+
+// Average all pixels in the UV region [u - u_min,  u + u_min] and [v - v_min,  v + v_min]
+pub fn sampleAverage(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
+    const x_min = ((u - u_min) * @as(f32, @floatFromInt(source_image.width)));
+    const x_max = ((u + u_min) * @as(f32, @floatFromInt(source_image.width)));
+    const y_min = ((v - v_min) * @as(f32, @floatFromInt(source_image.height)));
+    const y_max = ((v + v_min) * @as(f32, @floatFromInt(source_image.height)));
+
+    const x_min_int: isize = @intFromFloat(x_min);
+    const x_max_int: isize = @intFromFloat(@ceil(x_max));
+    const y_min_int: isize = @intFromFloat(y_min);
+    const y_max_int: isize = @intFromFloat(@ceil(y_max));
+
+    // std.debug.print("\nx_min {d:.3} x_max {d:.3} y_min {d:.3} y_max {d:.3} x_min_int={d} x_max_int={d} y_min_int={d} y_max_int={d}", .{
+    //     x_min,
+    //     x_max,
+    //     y_min,
+    //     y_max,
+    //     x_min_int,
+    //     x_max_int,
+    //     y_min_int,
+    //     y_max_int,
+    // });
+
+    const PixelType = std.meta.Child(@TypeOf(source_image.pixels));
+    var resultant_pixel: PixelType = undefined;
+    inline for (comptime getPixelValueFieldNames(PixelType)) |pixel_value_field_name| {
+        // Rename it to something shorter so all of these lookups fit better
+        const f = pixel_value_field_name;
+
+        var sum: f32 = 0.0;
+        for (@intCast(y_min_int)..@intCast(y_max_int)) |y_int| {
+            for (@intCast(x_min_int)..@intCast(x_max_int)) |x_int| {
+                const x = @as(f32, @floatFromInt(x_int));
+                const y = @as(f32, @floatFromInt(y_int));
+
+                var x_portion: f32 = 1.0;
+                if (x < x_min) {
+                    x_portion = @fabs(x - x_min);
+                } else if (x > x_max) {
+                    x_portion = @fabs(x - x_max);
+                }
+
+                var y_portion: f32 = 1.0;
+                if (y < y_min) {
+                    y_portion = @fabs(y - y_min);
+                } else if (y > y_max) {
+                    y_portion = @fabs(y - y_max);
+                }
+
+                // std.debug.print("\n\tx_portion={d:.3} y_portion={d:.3}", .{
+                //     x_portion,
+                //     y_portion,
+                // });
+
+                const pixel = getPixelClamped(source_image, @intCast(x_int), @intCast(y_int));
+                sum += @field(pixel, f) * (x_portion * y_portion);
+            }
+        }
+
+        const result = sum / ((x_max - x_min) * (y_max - y_min));
+        // std.debug.print("\nresult {s} {d:.3}", .{ f, result });
+
+        @field(resultant_pixel, f) = result;
+    }
+
+    return resultant_pixel;
 }
 
 /// Linear interpolate between two values.
@@ -615,21 +757,8 @@ pub fn sampleBicubic(source_image: anytype, u: f32, v: f32) std.meta.Child(@Type
     const p33 = getPixelClamped(source_image, @intFromFloat(x + 2), @intFromFloat(y + 2));
 
     const PixelType = std.meta.Child(@TypeOf(source_image.pixels));
-    const pixel_value_field_names: []const []const u8 = comptime switch (PixelType) {
-        RGBPixel => &.{ "r", "g", "b" },
-        HSVPixel => &.{ "h", "s", "v" },
-        GrayscalePixel => &.{"value"},
-        BinaryPixel => {
-            @compileError("sampleBicubic(...): BinaryPixel is not supported since we can't interpolate between true/false");
-        },
-        else => {
-            @compileLog("PixelType=", @typeName(PixelType));
-            @compileError("sampleBilinear(...): Unsupported pixel type");
-        },
-    };
-
     var resultant_pixel: PixelType = undefined;
-    inline for (pixel_value_field_names) |pixel_value_field_name| {
+    inline for (comptime getPixelValueFieldNames(PixelType)) |pixel_value_field_name| {
         // Rename it to something shorter so all of these lookups fit better
         const f = pixel_value_field_name;
 
@@ -639,6 +768,7 @@ pub fn sampleBicubic(source_image: anytype, u: f32, v: f32) std.meta.Child(@Type
         const x4 = cubicHermiteInterpolation(@field(p03, f), @field(p13, f), @field(p23, f), @field(p33, f), x_fractional);
         const result = cubicHermiteInterpolation(x1, x2, x3, x4, y_fractional);
 
+        // We need to clamp because the cubic hermite curves under/overshoot the values
         @field(resultant_pixel, f) = std.math.clamp(result, 0.0, 1.0);
     }
 
@@ -685,6 +815,9 @@ pub fn resizeImage(
     const PixelType = std.meta.Child(@TypeOf(image.pixels));
     var output_pixels = try allocator.alloc(PixelType, new_width * new_height);
 
+    const u_min = (0 + 0.5) / @as(f32, @floatFromInt(new_height));
+    const v_min = (0 + 0.5) / @as(f32, @floatFromInt(new_width));
+
     for (0..new_height) |y| {
         const row_start_pixel_index = y * new_width;
 
@@ -707,6 +840,7 @@ pub fn resizeImage(
 
             output_pixels[current_pixel_index] = switch (interpolation_method) {
                 .nearest => sampleNearest(image, u, v),
+                .average => sampleAverage(image, u, v, u_min, v_min),
                 .bilinear => sampleBilinear(image, u, v),
                 .bicubic => sampleBicubic(image, u, v),
             };
@@ -720,48 +854,53 @@ pub fn resizeImage(
     };
 }
 
+// When comparing float pixels, they should be less than an 8-bit increment value apart
+// which means there will be no difference when we convert back to 8-bit (255) based
+// values since everything is floored.
+const PIXEL_TOLERANCE = 1.0 / 255.0;
+
 test "resizeImage" {
     const allocator = std.testing.allocator;
 
-    const image = RGBImage{
-        .width = 8,
-        .height = 8,
-        .pixels = &rgbPixelsfromHexArray(&[_]u24{
-            // 8x8 cow art via https://www.reddit.com/r/PixelArt/comments/103bznv/just_started_my_pixel_art_journey_i_heard_it_was/
-            // 0xdbc9b4, 0x000000, 0x000000, 0xdbc9b4, 0x000000, 0x000000, 0x000000, 0x000000,
-            // 0x000000, 0xfcecd1, 0xfcecd1, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000,
-            // 0x000000, 0xfcecd1, 0xfcecd1, 0x2d1e2f, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0x2d1e2f,
-            // 0xc3a79c, 0xdbc9b4, 0xc3a79c, 0xfcecd1, 0xfcecd1, 0x2d1e2f, 0xfcecd1, 0xfcecd1,
-            // 0xdbc9b4, 0xdbc9b4, 0xdbc9b4, 0xfcecd1, 0x2d1e2f, 0x2d1e2f, 0xfcecd1, 0xfcecd1,
-            // 0x000000, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1,
-            // 0x000000, 0xfcecd1, 0x000000, 0xfcecd1, 0x000000, 0xdbc9b4, 0x000000, 0xfcecd1,
-            // 0x000000, 0xc3a79c, 0x000000, 0xc3a79c, 0x000000, 0x9c807e, 0x000000, 0xc3a79c,
+    // const image = RGBImage{
+    //     .width = 8,
+    //     .height = 8,
+    //     .pixels = &rgbPixelsfromHexArray(&[_]u24{
+    //         // 8x8 cow art via https://www.reddit.com/r/PixelArt/comments/103bznv/just_started_my_pixel_art_journey_i_heard_it_was/
+    //         // 0xdbc9b4, 0x000000, 0x000000, 0xdbc9b4, 0x000000, 0x000000, 0x000000, 0x000000,
+    //         // 0x000000, 0xfcecd1, 0xfcecd1, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000,
+    //         // 0x000000, 0xfcecd1, 0xfcecd1, 0x2d1e2f, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0x2d1e2f,
+    //         // 0xc3a79c, 0xdbc9b4, 0xc3a79c, 0xfcecd1, 0xfcecd1, 0x2d1e2f, 0xfcecd1, 0xfcecd1,
+    //         // 0xdbc9b4, 0xdbc9b4, 0xdbc9b4, 0xfcecd1, 0x2d1e2f, 0x2d1e2f, 0xfcecd1, 0xfcecd1,
+    //         // 0x000000, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1,
+    //         // 0x000000, 0xfcecd1, 0x000000, 0xfcecd1, 0x000000, 0xdbc9b4, 0x000000, 0xfcecd1,
+    //         // 0x000000, 0xc3a79c, 0x000000, 0xc3a79c, 0x000000, 0x9c807e, 0x000000, 0xc3a79c,
 
-            // 8x8 mooshroom variation
-            0x940c0f, 0xffffff, 0xffffff, 0x940c0f, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
-            0xffffff, 0xa80e12, 0xa80e12, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
-            0xffffff, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xa80e12, 0xa80e12, 0xa80e12, 0xb3b3b3,
-            0x171414, 0xd39696, 0x171414, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xa80e12, 0xa80e12,
-            0xce9191, 0xd39696, 0xce9191, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xa80e12, 0xa80e12,
-            0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
-            0xffffff, 0xa80e12, 0xffffff, 0xa80e12, 0xffffff, 0x940c0f, 0xd39696, 0xa80e12,
-            0xffffff, 0x171414, 0xffffff, 0x171414, 0xffffff, 0x333333, 0xffffff, 0x171414,
-        }),
-    };
+    //         // 8x8 mooshroom variation
+    //         0x940c0f, 0xffffff, 0xffffff, 0x940c0f, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
+    //         0xffffff, 0xa80e12, 0xa80e12, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
+    //         0xffffff, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xa80e12, 0xa80e12, 0xa80e12, 0xb3b3b3,
+    //         0x171414, 0xd39696, 0x171414, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xa80e12, 0xa80e12,
+    //         0xce9191, 0xd39696, 0xce9191, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xa80e12, 0xa80e12,
+    //         0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
+    //         0xffffff, 0xa80e12, 0xffffff, 0xa80e12, 0xffffff, 0x940c0f, 0xd39696, 0xa80e12,
+    //         0xffffff, 0x171414, 0xffffff, 0x171414, 0xffffff, 0x333333, 0xffffff, 0x171414,
+    //     }),
+    // };
 
-    const nearest_resized_image = try resizeImage(image, 24, 24, .nearest, allocator);
-    defer nearest_resized_image.deinit(allocator);
+    // const nearest_resized_image = try resizeImage(image, 24, 24, .nearest, allocator);
+    // defer nearest_resized_image.deinit(allocator);
 
-    const bilinear_resized_image = try resizeImage(image, 32, 32, .bilinear, allocator);
-    defer bilinear_resized_image.deinit(allocator);
+    // const bilinear_resized_image = try resizeImage(image, 32, 32, .bilinear, allocator);
+    // defer bilinear_resized_image.deinit(allocator);
 
-    const bicubic_resized_image = try resizeImage(image, 32, 32, .bicubic, allocator);
-    defer bicubic_resized_image.deinit(allocator);
+    // const bicubic_resized_image = try resizeImage(image, 32, 32, .bicubic, allocator);
+    // defer bicubic_resized_image.deinit(allocator);
 
-    try printLabeledImage("Original (8x8)", image, .half_block, allocator);
-    try printLabeledImage("Nearest-neighbor resized (24x24)", nearest_resized_image, .half_block, allocator);
-    try printLabeledImage("Bilinear resized (32x32)", bilinear_resized_image, .half_block, allocator);
-    try printLabeledImage("Bicubic resized (32x32)", bicubic_resized_image, .half_block, allocator);
+    // try printLabeledImage("Original (8x8)", image, .half_block, allocator);
+    // try printLabeledImage("Nearest-neighbor resized (24x24)", nearest_resized_image, .half_block, allocator);
+    // try printLabeledImage("Bilinear resized (32x32)", bilinear_resized_image, .half_block, allocator);
+    // try printLabeledImage("Bicubic resized (32x32)", bicubic_resized_image, .half_block, allocator);
 
     // 16x16 test image via https://medium.com/hackernoon/how-tensorflows-tf-image-resize-stole-60-days-of-my-life-aba5eb093f35
     const test_square_image = RGBImage{
@@ -776,6 +915,9 @@ test "resizeImage" {
         ),
     };
 
+    const average_resized_test_square_image = try resizeImage(test_square_image, 4, 4, .average, allocator);
+    defer average_resized_test_square_image.deinit(allocator);
+
     const bilinear_resized_test_square_image = try resizeImage(test_square_image, 4, 4, .bilinear, allocator);
     defer bilinear_resized_test_square_image.deinit(allocator);
 
@@ -783,9 +925,38 @@ test "resizeImage" {
     defer bicubic_resized_test_square_image.deinit(allocator);
 
     try printLabeledImage("Original test_square_image (16x16)", test_square_image, .half_block, allocator);
+    try printLabeledImage("Average resized (4x4)", average_resized_test_square_image, .full_block, allocator);
     // FIXME: This one looks different when comparing it to what other applications do
     try printLabeledImage("Bilinear resized (4x4)", bilinear_resized_test_square_image, .full_block, allocator);
     try printLabeledImage("Bicubic resized (4x4)", bicubic_resized_test_square_image, .full_block, allocator);
+
+    // 4x4 test checkerboard image
+    const test_checkerboard_image = RGBImage{
+        .width = 4,
+        .height = 4,
+        .pixels = &rgbPixelsfromHexArray(&.{
+            0xff0000, 0x00ff00, 0xff0000, 0x0000ff,
+            0x00ff00, 0xff0000, 0x0000ff, 0xff0000,
+            0x0000ff, 0x00ff00, 0xff0000, 0xffffff,
+            0x00ff00, 0x0000ff, 0xffffff, 0xff0000,
+        }),
+    };
+
+    const average_resized_test_checkerboard_image = try resizeImage(test_checkerboard_image, 2, 2, .average, allocator);
+    defer average_resized_test_checkerboard_image.deinit(allocator);
+    try expectImageApproxEqual(average_resized_test_checkerboard_image, RGBImage{
+        .width = 2,
+        .height = 2,
+        .pixels = &rgbPixelsfromHexArray(&.{
+            0x808000, 0x800080,
+            0x008080, 0xff8080,
+        }),
+    }, PIXEL_TOLERANCE, allocator);
+
+    try printLabeledImage("Original test_checkerboard_image (4x4)", test_checkerboard_image, .full_block, allocator);
+    try printLabeledImage("Average resized (2x2)", average_resized_test_checkerboard_image, .full_block, allocator);
+
+    // TODO: Test average resize with non-perfectly divisible dimensions
 
     return error.OkButWeShouldLookAtThisInTheFuture;
 }
@@ -1040,6 +1211,24 @@ pub fn hsvToBinaryImage(hsv_image: HSVImage, allocator: std.mem.Allocator) !Bina
         .width = hsv_image.width,
         .height = hsv_image.height,
         .pixels = output_binary_pixels,
+    };
+}
+
+pub fn grayscaleToRgbImage(grayscale_image: GrayscaleImage, allocator: std.mem.Allocator) !RGBImage {
+    const output_rgb_pixels = try allocator.alloc(RGBPixel, grayscale_image.pixels.len);
+    errdefer allocator.free(output_rgb_pixels);
+    for (output_rgb_pixels, grayscale_image.pixels) |*output_rgb_pixel, grayscale_pixel| {
+        output_rgb_pixel.* = RGBPixel{
+            .r = grayscale_pixel.value,
+            .g = grayscale_pixel.value,
+            .b = grayscale_pixel.value,
+        };
+    }
+
+    return .{
+        .width = grayscale_image.width,
+        .height = grayscale_image.height,
+        .pixels = output_rgb_pixels,
     };
 }
 
