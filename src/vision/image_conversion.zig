@@ -517,10 +517,10 @@ fn bilerp(p00: f32, p10: f32, p01: f32, p11: f32, x_fractional: f32, y_fractiona
 //  - https://en.wikipedia.org/wiki/Bilinear_interpolation
 //  - https://bartwronski.com/2021/02/15/bilinear-down-upsampling-pixel-grids-and-that-half-pixel-offset/
 pub fn sampleBilinear(source_image: anytype, u: f32, v: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
-    // Calculate coordinates. Offset by half a pixel so that we are measuring to/from
-    // the center of a pixel which can then can be rounded back down to the pixel
-    // coordinate. This allows sampling to occur evenly around a pixel position and
-    // integer truncation works correctly around the edges/corners.
+    // Calculate pixel center coordinates in the source image. Offset by half a pixel so
+    // that we are measuring to/from the center of a pixel which can then can be rounded
+    // back down to the pixel coordinate. This allows sampling to occur evenly around a
+    // pixel position and integer truncation works correctly around the edges/corners.
     const x = (u * @as(f32, @floatFromInt(source_image.width))) - 0.5;
     const x_fractional = x - @floor(x);
     const y = (v * @as(f32, @floatFromInt(source_image.height))) - 0.5;
@@ -687,6 +687,10 @@ pub fn resizeImage(
 
     for (0..new_height) |y| {
         const row_start_pixel_index = y * new_width;
+
+        // Calculate UV offset to the center of the pixel (this way when we sample the
+        // image, we get a proper average)
+        //
         // > This translates [pixel coordinates] to UVs, or "normalized" coordinates
         // > e.g. [0.5/4, 1.5/4, 2.5/4, 3.5/4], which spans a range of [0.5/width, 1 –
         // > 0.5/width] (pixel centers).
@@ -695,11 +699,11 @@ pub fn resizeImage(
         // > us is a guarantee and convention that the image corners are placed at [0
         // > and 1] normalized, or [0, width] unnormalized.
         // >
-        // > *-- https://bartwronski.com/2021/02/15/bilinear-down-upsampling-pixel-grids-and-that-half-pixel-offset/*
-        const v = (@as(f32, @floatFromInt(y + 1)) - 0.5) / @as(f32, @floatFromInt(new_height));
+        // > -- https://bartwronski.com/2021/02/15/bilinear-down-upsampling-pixel-grids-and-that-half-pixel-offset/
+        const v = (@as(f32, @floatFromInt(y)) + 0.5) / @as(f32, @floatFromInt(new_height));
         for (0..new_width) |x| {
             const current_pixel_index = row_start_pixel_index + x;
-            const u = (@as(f32, @floatFromInt(x + 1)) - 0.5) / @as(f32, @floatFromInt(new_width));
+            const u = (@as(f32, @floatFromInt(x)) + 0.5) / @as(f32, @floatFromInt(new_width));
 
             output_pixels[current_pixel_index] = switch (interpolation_method) {
                 .nearest => sampleNearest(image, u, v),
