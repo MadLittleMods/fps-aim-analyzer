@@ -528,7 +528,7 @@ pub fn maskImage(
 /// Sampling methods to use when resizing an image
 const InterpolationMethod = enum {
     nearest,
-    average,
+    box,
     bilinear,
     bicubic,
 };
@@ -558,7 +558,7 @@ pub fn sampleNearest(source_image: anytype, u: f32, v: f32) std.meta.Child(@Type
 }
 
 // Average all pixels in the UV region [u - u_min,  u + u_min] and [v - v_min,  v + v_min]
-pub fn sampleAverage(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
+pub fn sampleBox(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
     const x_min = ((u - u_min) * @as(f32, @floatFromInt(source_image.width)));
     const x_max = ((u + u_min) * @as(f32, @floatFromInt(source_image.width)));
     const y_min = ((v - v_min) * @as(f32, @floatFromInt(source_image.height)));
@@ -568,17 +568,6 @@ pub fn sampleAverage(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f
     const x_max_int: isize = @intFromFloat(@ceil(x_max));
     const y_min_int: isize = @intFromFloat(y_min);
     const y_max_int: isize = @intFromFloat(@ceil(y_max));
-
-    // std.debug.print("\nx_min {d:.3} x_max {d:.3} y_min {d:.3} y_max {d:.3} x_min_int={d} x_max_int={d} y_min_int={d} y_max_int={d}", .{
-    //     x_min,
-    //     x_max,
-    //     y_min,
-    //     y_max,
-    //     x_min_int,
-    //     x_max_int,
-    //     y_min_int,
-    //     y_max_int,
-    // });
 
     const PixelType = std.meta.Child(@TypeOf(source_image.pixels));
     var resultant_pixel: PixelType = undefined;
@@ -606,18 +595,14 @@ pub fn sampleAverage(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f
                     y_portion = @fabs(y - y_max);
                 }
 
-                // std.debug.print("\n\tx_portion={d:.3} y_portion={d:.3}", .{
-                //     x_portion,
-                //     y_portion,
-                // });
-
                 const pixel = getPixelClamped(source_image, @intCast(x_int), @intCast(y_int));
-                sum += @field(pixel, f) * (x_portion * y_portion);
+                const area = x_portion * y_portion;
+                sum += @field(pixel, f) * area;
             }
         }
 
-        const result = sum / ((x_max - x_min) * (y_max - y_min));
-        // std.debug.print("\nresult {s} {d:.3}", .{ f, result });
+        const total_area = (x_max - x_min) * (y_max - y_min);
+        const result = sum / total_area;
 
         @field(resultant_pixel, f) = result;
     }
@@ -786,21 +771,25 @@ pub fn getIdealInterpolationMethod(
         return .nearest;
     }
 
-    // > When making an image smaller, use bicubic, which has a natural sharpening
-    // > effect. You want to emphasize the data that remains in the new, smaller image
-    // > after discarding all that extra detail from the original image
-    // >
-    // > -- https://blog.codinghorror.com/better-image-resizing/
-    if (image.width < new_width or image.height < new_height) {
-        return .bicubic;
-    }
-
     // > When making an image larger, use bilinear, which has a natural smoothing
     // > effect. You want to blend over the interpolated fake detail in the new, larger
     // > image that never existed in the original image.
     // >
     // > -- https://blog.codinghorror.com/better-image-resizing/
-    return .bilinear;
+    if (new_width > image.width or new_height > image.height) {
+        return .bilinear;
+    }
+
+    // > When making an image smaller, use bicubic, which has a natural sharpening
+    // > effect. You want to emphasize the data that remains in the new, smaller image
+    // > after discarding all that extra detail from the original image
+    // >
+    // > -- https://blog.codinghorror.com/better-image-resizing/
+    // return .bicubic;
+    //
+    // But instead, we will use box sampling since it takes all pixels into account and
+    // produce a more accurate result
+    return .box;
 }
 
 // Reference: https://blog.demofox.org/2015/08/15/resizing-images-with-bicubic-interpolation/
@@ -840,7 +829,7 @@ pub fn resizeImage(
 
             output_pixels[current_pixel_index] = switch (interpolation_method) {
                 .nearest => sampleNearest(image, u, v),
-                .average => sampleAverage(image, u, v, u_min, v_min),
+                .box => sampleBox(image, u, v, u_min, v_min),
                 .bilinear => sampleBilinear(image, u, v),
                 .bicubic => sampleBicubic(image, u, v),
             };
@@ -915,8 +904,8 @@ test "resizeImage" {
         ),
     };
 
-    const average_resized_test_square_image = try resizeImage(test_square_image, 4, 4, .average, allocator);
-    defer average_resized_test_square_image.deinit(allocator);
+    const box_resized_test_square_image = try resizeImage(test_square_image, 4, 4, .average, allocator);
+    defer box_resized_test_square_image.deinit(allocator);
 
     const bilinear_resized_test_square_image = try resizeImage(test_square_image, 4, 4, .bilinear, allocator);
     defer bilinear_resized_test_square_image.deinit(allocator);
@@ -925,7 +914,7 @@ test "resizeImage" {
     defer bicubic_resized_test_square_image.deinit(allocator);
 
     try printLabeledImage("Original test_square_image (16x16)", test_square_image, .half_block, allocator);
-    try printLabeledImage("Average resized (4x4)", average_resized_test_square_image, .full_block, allocator);
+    try printLabeledImage("Box resized (4x4)", box_resized_test_square_image, .full_block, allocator);
     // FIXME: This one looks different when comparing it to what other applications do
     try printLabeledImage("Bilinear resized (4x4)", bilinear_resized_test_square_image, .full_block, allocator);
     try printLabeledImage("Bicubic resized (4x4)", bicubic_resized_test_square_image, .full_block, allocator);
@@ -942,9 +931,9 @@ test "resizeImage" {
         }),
     };
 
-    const average_resized_test_checkerboard_image = try resizeImage(test_checkerboard_image, 2, 2, .average, allocator);
-    defer average_resized_test_checkerboard_image.deinit(allocator);
-    try expectImageApproxEqual(average_resized_test_checkerboard_image, RGBImage{
+    const box_resized_test_checkerboard_image = try resizeImage(test_checkerboard_image, 2, 2, .average, allocator);
+    defer box_resized_test_checkerboard_image.deinit(allocator);
+    try expectImageApproxEqual(box_resized_test_checkerboard_image, RGBImage{
         .width = 2,
         .height = 2,
         .pixels = &rgbPixelsfromHexArray(&.{
@@ -954,9 +943,9 @@ test "resizeImage" {
     }, PIXEL_TOLERANCE, allocator);
 
     try printLabeledImage("Original test_checkerboard_image (4x4)", test_checkerboard_image, .full_block, allocator);
-    try printLabeledImage("Average resized (2x2)", average_resized_test_checkerboard_image, .full_block, allocator);
+    try printLabeledImage("Box resized (2x2)", box_resized_test_checkerboard_image, .full_block, allocator);
 
-    // TODO: Test average resize with non-perfectly divisible dimensions
+    // TODO: Test box resize with non-perfectly divisible dimensions
 
     return error.OkButWeShouldLookAtThisInTheFuture;
 }
