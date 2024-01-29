@@ -1,6 +1,7 @@
 const std = @import("std");
 const render_utils = @import("../utils/render_utils.zig");
 const BoundingClientRect = render_utils.BoundingClientRect;
+const findIntersection = render_utils.findIntersection;
 const image_conversion = @import("image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
 const RGBPixel = image_conversion.RGBPixel;
@@ -31,67 +32,6 @@ pub fn sampleNearest(source_image: anytype, u: f32, v: f32) std.meta.Child(@Type
     // return source_image.pixels[y * source_image.width + x];
 }
 
-/// Find the intersection region between two rectangles.
-fn findIntersection(rect1: BoundingClientRect(f32), rect2: BoundingClientRect(f32)) ?BoundingClientRect(f32) {
-    const x = @max(rect1.left(), rect2.left());
-    const x_overlap = @min(rect1.right(), rect2.right()) - x;
-    const y = @max(rect1.top(), rect2.top());
-    const y_overlap = @min(rect1.bottom(), rect2.bottom()) - y;
-
-    if (x_overlap >= 0 and y_overlap >= 0) {
-        return .{
-            .x = x,
-            .y = y,
-            .width = x_overlap,
-            .height = y_overlap,
-        };
-    }
-
-    return null;
-}
-
-test "findIntersection" {
-    const allocator = std.testing.allocator;
-    _ = allocator;
-
-    // Intersection
-    try std.testing.expectEqual(findIntersection(
-        BoundingClientRect(f32){
-            .x = 1.0,
-            .y = 1.0,
-            .width = 2.0,
-            .height = 2.0,
-        },
-        BoundingClientRect(f32){
-            .x = 2,
-            .y = 2,
-            .width = 2.0,
-            .height = 2.0,
-        },
-    ), .{
-        .x = 2.0,
-        .y = 2.0,
-        .width = 1.0,
-        .height = 1.0,
-    });
-
-    // No intersection
-    try std.testing.expectEqual(findIntersection(
-        BoundingClientRect(f32){
-            .x = 1.0,
-            .y = 1.0,
-            .width = 2.0,
-            .height = 2.0,
-        },
-        BoundingClientRect(f32){
-            .x = 6.0,
-            .y = 1.0,
-            .width = 2.0,
-            .height = 2.0,
-        },
-    ), null);
-}
-
 // Average all pixels in the UV region [u - u_min,  u + u_min] and [v - v_min,  v + v_min]
 pub fn sampleBox(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
     const x_min = ((u - u_min) * @as(f32, @floatFromInt(source_image.width)));
@@ -99,6 +39,7 @@ pub fn sampleBox(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) 
     const y_min = ((v - v_min) * @as(f32, @floatFromInt(source_image.height)));
     const y_max = ((v + v_min) * @as(f32, @floatFromInt(source_image.height)));
 
+    // Find the integer bounds that enclose the region
     const x_min_int: isize = @intFromFloat(x_min);
     const x_max_int: isize = @intFromFloat(@ceil(x_max));
     const y_min_int: isize = @intFromFloat(y_min);
@@ -113,10 +54,9 @@ pub fn sampleBox(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) 
 
     const PixelType = std.meta.Child(@TypeOf(source_image.pixels));
     var resultant_pixel: PixelType = undefined;
+    // Loop through the  "R", "G", "B" values of the pixel
     inline for (comptime getPixelValueFieldNames(PixelType)) |pixel_value_field_name| {
-        // Rename it to something shorter so all of these lookups fit better
-        const f = pixel_value_field_name;
-
+        // Sum up all of the source pixels in the UV region
         var sum: f32 = 0.0;
         var total_area: f32 = 0.0;
         for (@intCast(y_min_int)..@intCast(y_max_int)) |y_int| {
@@ -130,36 +70,25 @@ pub fn sampleBox(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) 
                     .width = 1.0,
                     .height = 1.0,
                 };
+                // Use the overlap of the UV source region and the current pixel we're
+                // considering to find out how much this source pixel contributes to the
+                // color of the resultant pixel
                 const maybe_overlap_box = findIntersection(source_box, pixel_box);
-
-                if (u < 0.25 and v < 0.25) {
-                    std.debug.print("\nsource x: {d:.3}, y: {d:.3}", .{ x, y });
-                    // std.debug.print("\n\tx: {d:.3} < {d:.3} > {d:.3} --- y: {d:.3} < {d:.3} > {d:.3}", .{ x_min, x, x_max, y_min, y, y_max });
-                    std.debug.print("\n\tsource_box: ({d:.3}, {d:.3}, {d:.3}, {d:.3}) pixel_box: ({d:.3}, {d:.3}, {d:.3}, {d:.3}) overlap: {any}", .{
-                        source_box.x,      source_box.y, source_box.width, source_box.height,
-                        pixel_box.x,       pixel_box.y,  pixel_box.width,  pixel_box.height,
-                        maybe_overlap_box,
-                    });
-                }
 
                 const pixel = getPixelClamped(source_image, @intCast(x_int), @intCast(y_int));
                 const area = if (maybe_overlap_box) |overlap_box|
                     overlap_box.width * overlap_box.height
                 else
                     0.0;
-                if (u < 0.25 and v < 0.25) {
-                    std.debug.print("\n\t{s} value={d:.3} area={d:.3}", .{ f, @field(pixel, f), area });
-                }
-                sum += @field(pixel, f) * area;
+
+                sum += @field(pixel, pixel_value_field_name) * area;
                 total_area += area;
             }
         }
 
+        // Get the average of all the pixels in the UV region
         const result = sum / total_area;
-        if (u < 0.25 and v < 0.25) {
-            std.debug.print("\nresult for {s}: {d:.3} <- {d:.3} / {d:.3}", .{ f, result, sum, total_area });
-        }
-        @field(resultant_pixel, f) = result;
+        @field(resultant_pixel, pixel_value_field_name) = result;
     }
 
     return resultant_pixel;
@@ -321,10 +250,10 @@ pub fn getIdealInterpolationMethod(
     new_width: usize,
     new_height: usize,
 ) InterpolationMethod {
-    // If the image can be perfectly resized using nearest neighbor, then use that.
-    if (image.width % new_width == 0 and image.height % new_height == 0) {
-        return .nearest;
-    }
+    // // If the image can be perfectly resized using nearest neighbor, then use that.
+    // if (image.width % new_width == 0 and image.height % new_height == 0) {
+    //     return .nearest;
+    // }
 
     // > When making an image larger, use bilinear, which has a natural smoothing
     // > effect. You want to blend over the interpolated fake detail in the new, larger
@@ -381,10 +310,6 @@ pub fn resizeImage(
         for (0..new_width) |x| {
             const current_pixel_index = row_start_pixel_index + x;
             const u = (@as(f32, @floatFromInt(x)) + 0.5) / @as(f32, @floatFromInt(new_width));
-
-            if (u < 0.25 and v < 0.25) {
-                std.debug.print("\nx={} y={}", .{ x, y });
-            }
 
             output_pixels[current_pixel_index] = switch (interpolation_method) {
                 .nearest => sampleNearest(image, u, v),
@@ -640,19 +565,19 @@ test "resizeImage .box" {
     const allocator = std.testing.allocator;
 
     const test_cases = [_]ResizeTestCase{
-        // .{
-        //     .label = "Downscale test_square_image (uniformly)",
-        //     .source_image = test_square_image,
-        //     .new_width = 4,
-        //     .new_height = 4,
-        //     .expected_pixels = &rgbPixelsfromHexArray(&.{
-        //         // (matches Serenity/Chrome)
-        //         0x70528a, 0xb782d7, 0xb782d7, 0x70528a,
-        //         0x8b8668, 0xffffff, 0xffffff, 0x8c8768,
-        //         0x8b8668, 0xffffff, 0xffffff, 0x8c8768,
-        //         0x70528a, 0xb782d7, 0xb782d7, 0x70528a,
-        //     }),
-        // },
+        .{
+            .label = "Downscale test_square_image uniformly",
+            .source_image = test_square_image,
+            .new_width = 4,
+            .new_height = 4,
+            .expected_pixels = &rgbPixelsfromHexArray(&.{
+                // (matches Serenity/Chrome)
+                0x70528a, 0xb782d7, 0xb782d7, 0x70528a,
+                0x8b8668, 0xffffff, 0xffffff, 0x8c8768,
+                0x8b8668, 0xffffff, 0xffffff, 0x8c8768,
+                0x70528a, 0xb782d7, 0xb782d7, 0x70528a,
+            }),
+        },
         .{
             .label = "Upscale mooshroom_image uniformly",
             .source_image = mooshroom_image,
@@ -685,22 +610,67 @@ test "resizeImage .box" {
                 0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414, 0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414, 0xfefefe, 0xffffff, 0xffffff, 0x333333, 0x333333, 0x333333, 0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414,
             }),
         },
-        // .{
-        //     .label = "Upscale test_color_checkerboard_image uniformly",
-        //     .source_image = test_color_checkerboard_image,
-        //     .new_width = 8,
-        //     .new_height = 8,
-        //     .expected_pixels = &rgbPixelsfromHexArray(&.{
-        //         0xff0000, 0xff0000, 0x00ff00, 0x00ff00, 0xff0000, 0xff0000, 0x0000ff, 0x0000ff,
-        //         0xff0000, 0xff0000, 0x00ff00, 0x00ff00, 0xff0000, 0xff0000, 0x0000ff, 0x0000ff,
-        //         0x00ff00, 0x00ff00, 0xff0000, 0xff0000, 0x0000ff, 0x0000ff, 0xff0000, 0xff0000,
-        //         0x00ff00, 0x00ff00, 0xff0000, 0xff0000, 0x0000ff, 0x0000ff, 0xff0000, 0xff0000,
-        //         0x0000ff, 0x0000ff, 0x00ff00, 0x00ff00, 0xff0000, 0xff0000, 0xffffff, 0xffffff,
-        //         0x0000ff, 0x0000ff, 0x00ff00, 0x00ff00, 0xff0000, 0xff0000, 0xffffff, 0xffffff,
-        //         0x00ff00, 0x00ff00, 0x0000ff, 0x0000ff, 0xffffff, 0xffffff, 0xff0000, 0xff0000,
-        //         0x00ff00, 0x00ff00, 0x0000ff, 0x0000ff, 0xffffff, 0xffffff, 0xff0000, 0xff0000,
-        //     }),
-        // },
+
+        .{
+            .label = "Downscale test_square_image (non-evenly divisible)",
+            .source_image = test_square_image,
+            .new_width = 7,
+            .new_height = 7,
+            .expected_pixels = &rgbPixelsfromHexArray(&.{
+                0x492f99, 0x7824b3, 0x8125ba, 0x8125ba, 0x8125ba, 0x7824b3, 0x492f99,
+                0x7d332e, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x7c332e,
+                0x7c332e, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x7c332e,
+                0x7d332e, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x7c332e,
+                0x7c332e, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x7c332e,
+                0x7c332e, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x7c332e,
+                0x492f99, 0x7824b3, 0x8125ba, 0x8125ba, 0x8125ba, 0x7824b3, 0x492f99,
+            }),
+        },
+        .{
+            .label = "Upscale test_square_image (non-evenly divisible)",
+            .source_image = test_square_image,
+            .new_width = 23,
+            .new_height = 23,
+            .expected_pixels = &rgbPixelsfromHexArray(&.{
+                0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9,
+                0x0260cd, 0x4a35a1, 0x821184, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x821184, 0x4a35a1, 0x0260cd,
+                0x0891c2, 0x864e82, 0xe41b5a, 0xc51f9d, 0xd921ac, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xd921ac, 0xc51f9d, 0xe41b5a, 0x864e82, 0x0891c2,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3450, 0x961a2e, 0x2d1903,
+                0x2d1902, 0x961a2e, 0xcf3451, 0x1be950, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be950, 0xcf3451, 0x961a2e, 0x2d1803,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be850, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be850, 0xcf3451, 0x961a2e, 0x2d1802,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3450, 0x961a2e, 0x2d1903,
+                0x2d1902, 0x961a2e, 0xcf3451, 0x1ae950, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1ae950, 0xcf3450, 0x961a2e, 0x2c1902,
+                0x2d1902, 0x961a2e, 0xcf3451, 0x1be950, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be950, 0xcf3450, 0x961a2e, 0x2d1803,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3450, 0x961a2e, 0x2d1903,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3451, 0x961a2e, 0x2d1903,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3450, 0x961a2e, 0x2d1903,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3451, 0x961a2e, 0x2d1903,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3450, 0x961a2e, 0x2d1903,
+                0x2c1902, 0x961a2e, 0xcf3451, 0x1ae950, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1ae950, 0xcf3450, 0x961a2e, 0x2d1903,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be950, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be950, 0xcf3450, 0x961a2e, 0x2d1803,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3450, 0x961a2e, 0x2d1903,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be850, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be850, 0xcf3450, 0x961a2e, 0x2d1802,
+                0x2d1902, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3450, 0x961a2e, 0x2d1903,
+                0x2d1903, 0x961a2e, 0xcf3451, 0x1be951, 0xb7f8c8, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xb7f8c8, 0x1be951, 0xcf3450, 0x961a2e, 0x2d1903,
+                0x0891c2, 0x864e82, 0xe41b5a, 0xc51f9d, 0xd921ac, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xe222b2, 0xd921ac, 0xc51f9d, 0xe41b5a, 0x864e82, 0x0891c2,
+                0x0260cd, 0x4a35a1, 0x821184, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x7d06af, 0x821184, 0x4a35a1, 0x0260cd,
+                0x010ab9, 0x0109b9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9, 0x010ab9,
+            }),
+        },
+        .{
+            .label = "Downscale test_square_image (non-uniform and non-evenly divisible)",
+            .source_image = test_square_image,
+            .new_width = 9,
+            .new_height = 6,
+            .expected_pixels = &rgbPixelsfromHexArray(&.{
+                0x583995, 0x931f9e, 0x9d24b8, 0x9d24b8, 0x9d24b8, 0x9d24b8, 0x9d24b8, 0x931f9e, 0x4b409b,
+                0x7f2e2d, 0xa4bd92, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xa3bd92, 0x712b26,
+                0x7f2e2d, 0xa4bd92, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xa3bd92, 0x712b26,
+                0x7f2e2d, 0xa4bd92, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xa3bd92, 0x712b26,
+                0x7f2e2d, 0xa4bd92, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xa3bd92, 0x712b26,
+                0x583995, 0x931f9e, 0x9d24b8, 0x9d24b8, 0x9d24b8, 0x9d24b8, 0x9d24b8, 0x931f9e, 0x4b409b,
+            }),
+        },
     };
 
     for (test_cases) |test_case| {

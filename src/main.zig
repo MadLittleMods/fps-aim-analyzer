@@ -363,5 +363,6 @@ pub fn main() !u8 {
 }
 
 test {
+    _ = @import("utils/render_utils.zig");
     _ = @import("vision/vision.zig");
 }
