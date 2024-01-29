@@ -1,4 +1,6 @@
 const std = @import("std");
+const render_utils = @import("../utils/render_utils.zig");
+const BoundingClientRect = render_utils.BoundingClientRect;
 const image_conversion = @import("image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
 const RGBPixel = image_conversion.RGBPixel;
@@ -29,6 +31,67 @@ pub fn sampleNearest(source_image: anytype, u: f32, v: f32) std.meta.Child(@Type
     // return source_image.pixels[y * source_image.width + x];
 }
 
+/// Find the intersection region between two rectangles.
+fn findIntersection(rect1: BoundingClientRect(f32), rect2: BoundingClientRect(f32)) ?BoundingClientRect(f32) {
+    const x = @max(rect1.left(), rect2.left());
+    const x_overlap = @min(rect1.right(), rect2.right()) - x;
+    const y = @max(rect1.top(), rect2.top());
+    const y_overlap = @min(rect1.bottom(), rect2.bottom()) - y;
+
+    if (x_overlap >= 0 and y_overlap >= 0) {
+        return .{
+            .x = x,
+            .y = y,
+            .width = x_overlap,
+            .height = y_overlap,
+        };
+    }
+
+    return null;
+}
+
+test "findIntersection" {
+    const allocator = std.testing.allocator;
+    _ = allocator;
+
+    // Intersection
+    try std.testing.expectEqual(findIntersection(
+        BoundingClientRect(f32){
+            .x = 1.0,
+            .y = 1.0,
+            .width = 2.0,
+            .height = 2.0,
+        },
+        BoundingClientRect(f32){
+            .x = 2,
+            .y = 2,
+            .width = 2.0,
+            .height = 2.0,
+        },
+    ), .{
+        .x = 2.0,
+        .y = 2.0,
+        .width = 1.0,
+        .height = 1.0,
+    });
+
+    // No intersection
+    try std.testing.expectEqual(findIntersection(
+        BoundingClientRect(f32){
+            .x = 1.0,
+            .y = 1.0,
+            .width = 2.0,
+            .height = 2.0,
+        },
+        BoundingClientRect(f32){
+            .x = 6.0,
+            .y = 1.0,
+            .width = 2.0,
+            .height = 2.0,
+        },
+    ), null);
+}
+
 // Average all pixels in the UV region [u - u_min,  u + u_min] and [v - v_min,  v + v_min]
 pub fn sampleBox(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) std.meta.Child(@TypeOf(source_image.pixels)) {
     const x_min = ((u - u_min) * @as(f32, @floatFromInt(source_image.width)));
@@ -40,6 +103,13 @@ pub fn sampleBox(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) 
     const x_max_int: isize = @intFromFloat(@ceil(x_max));
     const y_min_int: isize = @intFromFloat(y_min);
     const y_max_int: isize = @intFromFloat(@ceil(y_max));
+
+    const source_box = BoundingClientRect(f32){
+        .x = x_min,
+        .y = y_min,
+        .width = x_max - x_min,
+        .height = y_max - y_min,
+    };
 
     const PixelType = std.meta.Child(@TypeOf(source_image.pixels));
     var resultant_pixel: PixelType = undefined;
@@ -54,29 +124,31 @@ pub fn sampleBox(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) 
                 const x = @as(f32, @floatFromInt(x_int));
                 const y = @as(f32, @floatFromInt(y_int));
 
+                const pixel_box = BoundingClientRect(f32){
+                    .x = x,
+                    .y = y,
+                    .width = 1.0,
+                    .height = 1.0,
+                };
+                const maybe_overlap_box = findIntersection(source_box, pixel_box);
+
                 if (u < 0.25 and v < 0.25) {
-                    std.debug.print("\n\tx: {} < {} > {}", .{ x_min, x, x_max });
-                    std.debug.print("\n\ty: {} < {} > {}", .{ y_min, y, y_max });
-                }
-
-                var x_portion: f32 = 1.0;
-                if (x < x_min) {
-                    x_portion = @fabs(x - x_min);
-                } else if (x > x_max) {
-                    x_portion = @fabs(x - x_max);
-                }
-
-                var y_portion: f32 = 1.0;
-                if (y < y_min) {
-                    y_portion = @fabs(y - y_min);
-                } else if (y > y_max) {
-                    y_portion = @fabs(y - y_max);
+                    std.debug.print("\nsource x: {d:.3}, y: {d:.3}", .{ x, y });
+                    // std.debug.print("\n\tx: {d:.3} < {d:.3} > {d:.3} --- y: {d:.3} < {d:.3} > {d:.3}", .{ x_min, x, x_max, y_min, y, y_max });
+                    std.debug.print("\n\tsource_box: ({d:.3}, {d:.3}, {d:.3}, {d:.3}) pixel_box: ({d:.3}, {d:.3}, {d:.3}, {d:.3}) overlap: {any}", .{
+                        source_box.x,      source_box.y, source_box.width, source_box.height,
+                        pixel_box.x,       pixel_box.y,  pixel_box.width,  pixel_box.height,
+                        maybe_overlap_box,
+                    });
                 }
 
                 const pixel = getPixelClamped(source_image, @intCast(x_int), @intCast(y_int));
-                const area = x_portion * y_portion;
+                const area = if (maybe_overlap_box) |overlap_box|
+                    overlap_box.width * overlap_box.height
+                else
+                    0.0;
                 if (u < 0.25 and v < 0.25) {
-                    std.debug.print("\n\t{s} value={} area={}", .{ f, @field(pixel, f), area });
+                    std.debug.print("\n\t{s} value={d:.3} area={d:.3}", .{ f, @field(pixel, f), area });
                 }
                 sum += @field(pixel, f) * area;
                 total_area += area;
@@ -85,7 +157,7 @@ pub fn sampleBox(source_image: anytype, u: f32, v: f32, u_min: f32, v_min: f32) 
 
         const result = sum / total_area;
         if (u < 0.25 and v < 0.25) {
-            std.debug.print("\nresult for {s}: {} <- {} / {}", .{ f, result, sum, total_area });
+            std.debug.print("\nresult for {s}: {d:.3} <- {d:.3} / {d:.3}", .{ f, result, sum, total_area });
         }
         @field(resultant_pixel, f) = result;
     }
@@ -587,7 +659,30 @@ test "resizeImage .box" {
             .new_width = 24,
             .new_height = 24,
             .expected_pixels = &rgbPixelsfromHexArray(&.{
-                // ...
+                0x940c0f, 0x940b0f, 0x940b0f, 0xfefefe, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0x940c0f, 0x940c0f, 0x940c0f, 0xfefefe, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
+                0x940b0f, 0x940c0f, 0x940c0f, 0xfefefe, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0x940c0e, 0x940c0e, 0x940c0e, 0xfefefe, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
+                0x940b0f, 0x940c0f, 0x940c0f, 0xfefefe, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0x940c0e, 0x940c0e, 0x940c0e, 0xfefefe, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
+                0xfefefe, 0xfefefe, 0xfefefe, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xfefefe, 0xfefefe, 0xfefefe, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xa70e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xa70e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xa70e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3,
+                0x171414, 0x171414, 0x171414, 0xd29595, 0xd39696, 0xd39696, 0x171414, 0x171414, 0x171414, 0xa80e12, 0xa80e12, 0xa80e12, 0xa70d12, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
+                0x171414, 0x171414, 0x171414, 0xd29595, 0xd39696, 0xd39696, 0x171414, 0x171414, 0x171414, 0xa80e12, 0xa80e12, 0xa80e12, 0xa70d12, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
+                0x171414, 0x171414, 0x171414, 0xd29595, 0xd39696, 0xd39696, 0x171414, 0x171414, 0x171414, 0xa80e12, 0xa80e12, 0xa80e12, 0xa70d12, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
+                0xcd9090, 0xcd9090, 0xcd9090, 0xd39696, 0xd39595, 0xd39595, 0xcd9090, 0xcd9090, 0xcd9090, 0xa70d12, 0xa70d12, 0xa70d12, 0xb2b2b2, 0xb2b2b2, 0xb2b2b2, 0xb2b2b2, 0xb2b2b2, 0xb2b2b2, 0xa80d12, 0xa80d12, 0xa80d12, 0xa80d12, 0xa80d12, 0xa80d12,
+                0xce9191, 0xce9191, 0xce9191, 0xd39696, 0xd39696, 0xd39696, 0xce9191, 0xce9191, 0xce9191, 0xa80e12, 0xa80e12, 0xa80e12, 0xb2b2b2, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
+                0xce9191, 0xce9191, 0xce9191, 0xd39696, 0xd39696, 0xd39696, 0xce9191, 0xce9191, 0xce9191, 0xa80e12, 0xa80e12, 0xa80e12, 0xb2b2b2, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xb3b3b3, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80d12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80d12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80d12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xfefefe, 0xffffff, 0xffffff, 0x940c0f, 0x940c0f, 0x940c0f, 0xd39696, 0xd39696, 0xd39696, 0xa80e12, 0xa80e12, 0xa80e12,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xfefefe, 0xffffff, 0xffffff, 0x940c0f, 0x940c0f, 0x940c0f, 0xd39696, 0xd39696, 0xd39696, 0xa80e12, 0xa80e12, 0xa80e12,
+                0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xffffff, 0xffffff, 0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xfefefe, 0xffffff, 0xffffff, 0x940c0f, 0x940c0f, 0x940c0f, 0xd39696, 0xd39696, 0xd39696, 0xa80e12, 0xa80e12, 0xa80e12,
+                0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414, 0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414, 0xfefefe, 0xffffff, 0xffffff, 0x333333, 0x333333, 0x333333, 0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414,
+                0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414, 0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414, 0xfefefe, 0xffffff, 0xffffff, 0x333333, 0x333333, 0x333333, 0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414,
+                0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414, 0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414, 0xfefefe, 0xffffff, 0xffffff, 0x333333, 0x333333, 0x333333, 0xffffff, 0xffffff, 0xffffff, 0x171414, 0x171414, 0x171414,
             }),
         },
         // .{

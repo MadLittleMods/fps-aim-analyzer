@@ -17,10 +17,10 @@ pub fn BoundingClientRect(comptime NumberType: type) type {
             return self.x;
         }
         pub fn bottom(self: @This()) NumberType {
-            return self.y + self.dimensions.height;
+            return self.y + self.height;
         }
         pub fn right(self: @This()) NumberType {
-            return self.x + self.dimensions.width;
+            return self.x + self.width;
         }
     };
 }
