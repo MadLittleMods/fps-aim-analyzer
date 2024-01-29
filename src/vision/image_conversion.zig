@@ -379,6 +379,9 @@ pub fn expectImageEqual(
         const actual_rgb_image = try convertToRgbImage(actual_image, allocator);
         defer actual_rgb_image.deinit(allocator);
         try printLabeledImage("Actual image", actual_rgb_image, .full_block, allocator);
+        // Print a list of pixels so we can copy-paste them into our test if if looks good
+        std.debug.print("\nActual image pixels: ", .{});
+        _debugPrintPixels(actual_image);
 
         const expected_rgb_image = try convertToRgbImage(expected_image, allocator);
         defer expected_rgb_image.deinit(allocator);
@@ -386,6 +389,15 @@ pub fn expectImageEqual(
 
         return err;
     };
+}
+
+fn _debugPrintPixels(image: anytype) void {
+    for (image.pixels, 0..) |pixel, pixel_index| {
+        switch (@TypeOf(pixel)) {
+            RGBPixel => std.debug.print("0x{x:0>6}, ", .{pixel.toHexNumber()}),
+            else => std.debug.print("\n[{}]: {any}", .{ pixel_index, pixel }),
+        }
+    }
 }
 
 pub fn expectImageApproxEqual(
@@ -404,12 +416,7 @@ pub fn expectImageApproxEqual(
 
         // Print a list of pixels so we can copy-paste them into our test if if looks good
         std.debug.print("\nActual image pixels: ", .{});
-        for (actual_image.pixels, 0..) |pixel, pixel_index| {
-            switch (@TypeOf(pixel)) {
-                RGBPixel => std.debug.print("0x{x:0>6}, ", .{pixel.toHexNumber()}),
-                else => std.debug.print("\n[{}]: {any}", .{ pixel_index, pixel }),
-            }
-        }
+        _debugPrintPixels(actual_image);
         std.debug.print("\n", .{});
 
         // Print our current expected result to compare
