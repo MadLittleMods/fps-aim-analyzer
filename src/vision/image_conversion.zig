@@ -337,7 +337,7 @@ pub fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len
     return binary_pixels;
 }
 
-fn convertToRgbImage(image: anytype, allocator: std.mem.Allocator) !RGBImage {
+pub fn convertToRgbImage(image: anytype, allocator: std.mem.Allocator) !RGBImage {
     switch (@TypeOf(image)) {
         RGBImage => {
             // We could just `return image;` directly here but then downstream usage

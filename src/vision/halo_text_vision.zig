@@ -7,6 +7,7 @@ const HSVImage = image_conversion.HSVImage;
 const RGBImage = image_conversion.RGBImage;
 const cropImage = image_conversion.cropImage;
 const maskImage = image_conversion.maskImage;
+const convertToRgbImage = image_conversion.convertToRgbImage;
 const rgbToHsvImage = image_conversion.rgbToHsvImage;
 const hsvToRgbImage = image_conversion.hsvToRgbImage;
 const hsvToBinaryImage = image_conversion.hsvToBinaryImage;
@@ -483,8 +484,18 @@ test "findHaloChromaticAberrationText" {
 }
 
 pub const IsolateDiagnostics = struct {
-    pub fn deinit(diagnostics: *@This()) void {
-        _ = diagnostics;
+    images: std.StringArrayHashMap(RGBImage),
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        for (self.images) |image| {
+            image.deinit(allocator);
+        }
+        allocator.free(self.images);
+    }
+
+    pub fn addImage(self: *@This(), label: []const u8, image: anytype, allocator: std.mem.Allocator) !void {
+        const rgb_image = try convertToRgbImage(image, allocator);
+        try self.images.put(label, rgb_image);
     }
 };
 
@@ -493,8 +504,7 @@ pub fn isolateHaloAmmoCounter(
     screenshot: Screenshot(RGBImage),
     diagnostics: ?*IsolateDiagnostics,
     allocator: std.mem.Allocator,
-) !Screenshot(RGBImage) {
-    _ = diagnostics;
+) !?[]const RGBImage {
     // Crop the image so we have less to work with.
     // After this step, we will have to deal with 1/4 of the image or less.
     const cropped_screenshot = try switch (screenshot.region) {
@@ -508,15 +518,13 @@ pub fn isolateHaloAmmoCounter(
                 half_height,
                 screenshot.image.width - half_width,
                 screenshot.image.height - half_height,
-                // Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
+                // TODO: Remove -- Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
                 // 1410,
                 // 877,
                 // 40,
                 // 26,
                 allocator,
             );
-            // try printLabeledImage("cropped_rgb_image", cropped_rgb_image, .half_block, allocator);
-            try cropped_rgb_image.saveImageToFilePath("/home/eric/Downloads/36-1080-export-from-gimp-cropped.png", allocator);
             break :blk Screenshot(RGBImage){
                 .image = cropped_rgb_image,
                 .region = .bottom_right_quadrant,
@@ -537,6 +545,10 @@ pub fn isolateHaloAmmoCounter(
             else => {},
         }
     }
+    // Debug: Pixels after cropping
+    if (diagnostics) |diag| {
+        try diag.addImage("cropped_screenshot", cropped_screenshot.image, allocator);
+    }
 
     const hsv_image = try rgbToHsvImage(cropped_screenshot.image, allocator);
     defer hsv_image.deinit(allocator);
@@ -544,11 +556,10 @@ pub fn isolateHaloAmmoCounter(
     // Find the chromatic aberration text
     const chromatic_pattern_hsv_img = try findHaloChromaticAberrationText(hsv_image, allocator);
     defer chromatic_pattern_hsv_img.deinit(allocator);
-    // Debug: After finding the chromatic aberration pattern
-    try chromatic_pattern_hsv_img.saveImageToFilePath(
-        "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result1.png",
-        allocator,
-    );
+    // Debug: Pixels after finding chromatic aberration pattern
+    if (diagnostics) |diag| {
+        try diag.addImage("chromatic_pattern_hsv_img", chromatic_pattern_hsv_img, allocator);
+    }
 
     // Erode and dilate (open). Erode the mask to get rid of some of the smaller
     // chromatic aberration captures that aren't the text we want. Dilate the mask to
@@ -579,10 +590,10 @@ pub fn isolateHaloAmmoCounter(
                 allocator,
             );
             defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
-            try eroded_chromatic_pattern_rgb_image.saveImageToFilePath(
-                "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result2.png",
-                allocator,
-            );
+            // Debug: Pixels after eroding
+            if (diagnostics) |diag| {
+                try diag.addImage("eroded_chromatic_pattern_rgb_image", eroded_chromatic_pattern_rgb_image, allocator);
+            }
         }
 
         // Create a horizontal kernel and dilate to connect text characters
@@ -604,20 +615,6 @@ pub fn isolateHaloAmmoCounter(
     };
     defer chromatic_pattern_opened_mask.deinit(allocator);
 
-    // Debug: Pixels after opening (erode/dilate)
-    {
-        const opened_chromatic_pattern_rgb_image = try maskImage(
-            cropped_screenshot.image,
-            chromatic_pattern_opened_mask,
-            allocator,
-        );
-        defer opened_chromatic_pattern_rgb_image.deinit(allocator);
-        try opened_chromatic_pattern_rgb_image.saveImageToFilePath(
-            "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result3.png",
-            allocator,
-        );
-    }
-
     // Find the contours in the opened mask
     const chromatic_contours = try findContours(
         chromatic_pattern_opened_mask,
@@ -630,66 +627,76 @@ pub fn isolateHaloAmmoCounter(
         }
         allocator.free(chromatic_contours);
     }
-    // Debug: Trace contours
-    {
+    // Debug: ...
+    if (diagnostics) |diag| {
+        // Debug: Pixels after opening (erode/dilate)
         const opened_chromatic_pattern_rgb_image = try maskImage(
             cropped_screenshot.image,
             chromatic_pattern_opened_mask,
             allocator,
         );
         defer opened_chromatic_pattern_rgb_image.deinit(allocator);
+        try diag.addImage("opened_chromatic_pattern_rgb_image", opened_chromatic_pattern_rgb_image, allocator);
 
+        // Debug: Trace contours
         const traced_rgb_image = try traceContoursOnRgbImage(
             opened_chromatic_pattern_rgb_image,
             chromatic_contours,
             allocator,
         );
         defer traced_rgb_image.deinit(allocator);
-
-        try traced_rgb_image.saveImageToFilePath(
-            "/home/eric/Downloads/36-1080-export-from-gimp-chromatic-aberration-result4.png",
-            allocator,
-        );
+        try diag.addImage("contour_traced_rgb_image", traced_rgb_image, allocator);
     }
 
-    const bounding_boxes = try allocator.alloc(BoundingClientRect(usize), chromatic_contours.len);
-    for (chromatic_contours, bounding_boxes) |contour, *bounding_box| {
-        bounding_box.* = boundingRect(contour);
-        // TODO:
-        // if (bounding_box.width > character_min_width and bounding_box.height > character_min_height) {
-        //     break :bounding_box bounding_box;
-        // }
-    }
+    const character_min_width = 14;
+    const character_min_height = 21;
+    // We only expect 2-3 characters in the ammo counter most of the time. 4 characters
+    // seems possible and 5 doesn't seem like it will happen at all.
+    const max_num_ammo_characters = 5;
 
-    const optional_ammo_bounding_box: ?BoundingClientRect(usize) = bounding_box: {
-        const character_min_width = 14;
-        _ = character_min_width;
-        const character_min_height = 21;
-        _ = character_min_height;
-        break :bounding_box null;
+    // Find the bounding boxes around the contours that are big enough to be characters
+    var num_ammo_characters: u4 = 0;
+    var ammo_digit_bounding_boxes = [max_num_ammo_characters]BoundingClientRect(usize){
+        undefined, undefined, undefined, undefined, undefined,
     };
+    for (chromatic_contours) |contour| {
+        const bounding_box = boundingRect(contour);
+        // Only consider bounding boxes that are big enough to be characters
+        const is_character_sized_bounding_box = bounding_box.width > character_min_width and bounding_box.height > character_min_height;
+        if (is_character_sized_bounding_box) {
+            ammo_digit_bounding_boxes[num_ammo_characters] = bounding_box;
+            num_ammo_characters += 1;
 
-    if (optional_ammo_bounding_box) |ammo_bounding_box| {
-        std.debug.print("\nammo_bounding_box: {}\n", .{ammo_bounding_box});
-        const ammo_cropped_rgb_image = try cropImage(
-            cropped_screenshot.image,
-            ammo_bounding_box.x,
-            ammo_bounding_box.y,
-            ammo_bounding_box.width,
-            ammo_bounding_box.height,
-            allocator,
-        );
-        // defer ammo_cropped_rgb_image.deinit(allocator);
-        try printLabeledImage("ammo_cropped_rgb_image", ammo_cropped_rgb_image, .half_block, allocator);
-        try ammo_cropped_rgb_image.saveImageToFilePath("/home/eric/Downloads/36-1080-export-from-gimp-ammo-counter-cropped-result.png", allocator);
-
-        return .{
-            .image = ammo_cropped_rgb_image,
-            .region = .ammo_counter,
-        };
+            // Stop after we find the max number of characters we expect
+            if (num_ammo_characters >= max_num_ammo_characters) {
+                break;
+            }
+        }
+        // We expect the ammo counter bounding boxes to be consecutive so if we find a
+        // bounding box that is too small after we already found some digits, we can
+        // stop looking for more
+        else if (!is_character_sized_bounding_box and num_ammo_characters > 0) {
+            break;
+        }
     }
 
-    return error.UnableToFindAmmoCounter;
+    if (num_ammo_characters > 0) {
+        var ammo_digit_rgb_images = try allocator.alloc(RGBImage, num_ammo_characters);
+        for (ammo_digit_bounding_boxes[0..num_ammo_characters], ammo_digit_rgb_images) |bounding_box, *ammo_digit_rgb_image| {
+            ammo_digit_rgb_image.* = try cropImage(
+                cropped_screenshot.image,
+                bounding_box.x,
+                bounding_box.y,
+                bounding_box.width,
+                bounding_box.height,
+                allocator,
+            );
+        }
+
+        return ammo_digit_rgb_images;
+    }
+
+    return null;
 }
 
 test "Find Halo ammo counter region" {
@@ -697,7 +704,7 @@ test "Find Halo ammo counter region" {
     const rgb_image = try RGBImage.loadImageFromFilePath("/home/eric/Downloads/36-1080-export-from-gimp.png", allocator);
     defer rgb_image.deinit(allocator);
 
-    const ammo_cropped_screenshot = try isolateHaloAmmoCounter(
+    const maybe_ammo_cropped_digits = try isolateHaloAmmoCounter(
         .{
             .image = rgb_image,
             .region = .full_screen,
@@ -705,5 +712,21 @@ test "Find Halo ammo counter region" {
         null,
         allocator,
     );
-    defer ammo_cropped_screenshot.image.deinit(allocator);
+    try std.testing.expect(maybe_ammo_cropped_digits != null);
+    defer if (maybe_ammo_cropped_digits) |ammo_cropped_digits| {
+        for (ammo_cropped_digits) |ammo_cropped_digit| {
+            ammo_cropped_digit.deinit(allocator);
+        }
+        allocator.free(ammo_cropped_digits);
+    };
+
+    if (maybe_ammo_cropped_digits) |ammo_cropped_digits| {
+        try std.testing.expect(ammo_cropped_digits.len == 2);
+
+        for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
+            const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
+            defer allocator.free(digit_label);
+            try printLabeledImage(digit_label, ammo_cropped_digit, .half_block, allocator);
+        }
+    }
 }
