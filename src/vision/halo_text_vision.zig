@@ -7,6 +7,7 @@ const HSVImage = image_conversion.HSVImage;
 const RGBImage = image_conversion.RGBImage;
 const cropImage = image_conversion.cropImage;
 const maskImage = image_conversion.maskImage;
+const resizeImage = image_conversion.resizeImage;
 const convertToRgbImage = image_conversion.convertToRgbImage;
 const rgbToHsvImage = image_conversion.rgbToHsvImage;
 const hsvToRgbImage = image_conversion.hsvToRgbImage;
@@ -38,10 +39,20 @@ pub const ScreenshotRegion = enum {
     center,
 };
 
+/// Screenshot of the game (or portion of the game)
 pub fn Screenshot(comptime ImageType: type) type {
     return struct {
         image: ImageType,
+        /// Region of the game window that was captured
         region: ScreenshotRegion,
+        /// Width of the entire game window
+        pre_crop_width: usize,
+        /// Height of the entire game window
+        pre_crop_height: usize,
+        /// Resolution width that the game is rendering at
+        game_resolution_width: usize,
+        /// Resolution height that the game is rendering at
+        game_resolution_height: usize,
     };
 }
 
@@ -504,12 +515,58 @@ pub const IsolateDiagnostics = struct {
     }
 };
 
+pub fn resizeScreenshotToDesiredGameResolution(
+    screenshot: Screenshot(RGBImage),
+    desired_game_resolution_height: f32,
+    allocator: std.mem.Allocator,
+) !Screenshot(RGBImage) {
+    // Scale the window size down (or up) to match the resolution
+    const resolution_scale = @as(f32, @floatFromInt(screenshot.pre_crop_height)) / @as(f32, @floatFromInt(screenshot.game_resolution_height));
+    // Scale back up (or down) to match our desired resolution
+    const window_scale = desired_game_resolution_height / @as(f32, @floatFromInt(screenshot.game_resolution_height));
+
+    const combined_scale = window_scale * resolution_scale;
+
+    const resized_rgb_image = try resizeImage(
+        screenshot.image,
+        @intFromFloat(
+            @as(f32, @floatFromInt(screenshot.image.width)) * combined_scale,
+        ),
+        @intFromFloat(
+            @as(f32, @floatFromInt(screenshot.image.height)) * combined_scale,
+        ),
+        .box,
+        allocator,
+    );
+
+    return .{
+        .image = resized_rgb_image,
+        .region = screenshot.region,
+        .pre_crop_width = @intFromFloat(
+            @as(f32, @floatFromInt(screenshot.pre_crop_width)) * combined_scale,
+        ),
+        .pre_crop_height = @intFromFloat(
+            @as(f32, @floatFromInt(screenshot.pre_crop_height)) * combined_scale,
+        ),
+        .game_resolution_width = @intFromFloat(
+            @as(f32, @floatFromInt(screenshot.game_resolution_width)) * combined_scale,
+        ),
+        .game_resolution_height = @intFromFloat(
+            @as(f32, @floatFromInt(screenshot.game_resolution_height)) * combined_scale,
+        ),
+    };
+}
+
+/// We only expect 2-3 characters in the ammo counter most of the time. 4 characters
+/// seems possible and 5 doesn't seem like it will happen at all.
+pub const MAX_NUM_AMMO_CHARACTERS = 5;
+
 /// Given a screenshot of Halo Infinite, isolate the ammo counter region.
 pub fn isolateHaloAmmoCounter(
     screenshot: Screenshot(RGBImage),
     diagnostics: ?*IsolateDiagnostics,
     allocator: std.mem.Allocator,
-) !?[]const RGBImage {
+) ![]const RGBImage {
     // Crop the image so we have less to work with.
     // After this step, we will have to deal with 1/4 of the image or less.
     const cropped_screenshot = try switch (screenshot.region) {
@@ -533,6 +590,11 @@ pub fn isolateHaloAmmoCounter(
             break :blk Screenshot(RGBImage){
                 .image = cropped_rgb_image,
                 .region = .bottom_right_quadrant,
+                // We're just cropping so the pre_crop and resolution is still the same
+                .pre_crop_width = screenshot.pre_crop_width,
+                .pre_crop_height = screenshot.pre_crop_height,
+                .game_resolution_width = screenshot.game_resolution_width,
+                .game_resolution_height = screenshot.game_resolution_height,
             };
         },
         // No need to do anything if we're already in the bottom-right quadrant or
@@ -555,7 +617,21 @@ pub fn isolateHaloAmmoCounter(
         try diag.addImage("cropped_screenshot", cropped_screenshot.image, allocator);
     }
 
-    const hsv_image = try rgbToHsvImage(cropped_screenshot.image, allocator);
+    // Resize the image to a smaller size so we can work with it faster and have a
+    // consistent character size to pass to the OCR
+    const DESIRED_GAME_RESOLUTION_HEIGHT: f32 = 1080;
+    const resized_screenshot = try resizeScreenshotToDesiredGameResolution(
+        cropped_screenshot,
+        DESIRED_GAME_RESOLUTION_HEIGHT,
+        allocator,
+    );
+    defer resized_screenshot.image.deinit(allocator);
+    // Debug: Pixels after resizing
+    if (diagnostics) |diag| {
+        try diag.addImage("resized_rgb_image", resized_screenshot.image, allocator);
+    }
+
+    const hsv_image = try rgbToHsvImage(resized_screenshot.image, allocator);
     defer hsv_image.deinit(allocator);
 
     // Find the chromatic aberration text
@@ -590,7 +666,7 @@ pub fn isolateHaloAmmoCounter(
         // Debug: After eroding
         {
             const eroded_chromatic_pattern_rgb_image = try maskImage(
-                cropped_screenshot.image,
+                resized_screenshot.image,
                 chromatic_pattern_eroded_mask,
                 allocator,
             );
@@ -636,7 +712,7 @@ pub fn isolateHaloAmmoCounter(
     if (diagnostics) |diag| {
         // Debug: Pixels after opening (erode/dilate)
         const opened_chromatic_pattern_rgb_image = try maskImage(
-            cropped_screenshot.image,
+            resized_screenshot.image,
             chromatic_pattern_opened_mask,
             allocator,
         );
@@ -653,27 +729,25 @@ pub fn isolateHaloAmmoCounter(
         try diag.addImage("contour_traced_rgb_image", traced_rgb_image, allocator);
     }
 
-    const character_min_width = 14;
-    const character_min_height = 21;
-    // We only expect 2-3 characters in the ammo counter most of the time. 4 characters
-    // seems possible and 5 doesn't seem like it will happen at all.
-    const max_num_ammo_characters = 5;
+    const CHARACTER_MIN_WIDTH = 14;
+    const CHARACTER_MIN_HEIGHT = 21;
 
     // Find the bounding boxes around the contours that are big enough to be characters
     var num_ammo_characters: u4 = 0;
-    var ammo_digit_bounding_boxes = [max_num_ammo_characters]BoundingClientRect(usize){
+    var ammo_digit_bounding_boxes = [MAX_NUM_AMMO_CHARACTERS]BoundingClientRect(usize){
         undefined, undefined, undefined, undefined, undefined,
     };
     for (chromatic_contours) |contour| {
         const bounding_box = boundingRect(contour);
         // Only consider bounding boxes that are big enough to be characters
-        const is_character_sized_bounding_box = bounding_box.width > character_min_width and bounding_box.height > character_min_height;
+        const is_character_sized_bounding_box = bounding_box.width > CHARACTER_MIN_WIDTH and
+            bounding_box.height > CHARACTER_MIN_HEIGHT;
         if (is_character_sized_bounding_box) {
             ammo_digit_bounding_boxes[num_ammo_characters] = bounding_box;
             num_ammo_characters += 1;
 
             // Stop after we find the max number of characters we expect
-            if (num_ammo_characters >= max_num_ammo_characters) {
+            if (num_ammo_characters >= MAX_NUM_AMMO_CHARACTERS) {
                 break;
             }
         }
@@ -685,23 +759,19 @@ pub fn isolateHaloAmmoCounter(
         }
     }
 
-    if (num_ammo_characters > 0) {
-        var ammo_digit_rgb_images = try allocator.alloc(RGBImage, num_ammo_characters);
-        for (ammo_digit_bounding_boxes[0..num_ammo_characters], ammo_digit_rgb_images) |bounding_box, *ammo_digit_rgb_image| {
-            ammo_digit_rgb_image.* = try cropImage(
-                cropped_screenshot.image,
-                bounding_box.x,
-                bounding_box.y,
-                bounding_box.width,
-                bounding_box.height,
-                allocator,
-            );
-        }
-
-        return ammo_digit_rgb_images;
+    var ammo_digit_rgb_images = try allocator.alloc(RGBImage, num_ammo_characters);
+    for (ammo_digit_bounding_boxes[0..num_ammo_characters], ammo_digit_rgb_images) |bounding_box, *ammo_digit_rgb_image| {
+        ammo_digit_rgb_image.* = try cropImage(
+            resized_screenshot.image,
+            bounding_box.x,
+            bounding_box.y,
+            bounding_box.width,
+            bounding_box.height,
+            allocator,
+        );
     }
 
-    return null;
+    return ammo_digit_rgb_images;
 }
 
 test "Find Halo ammo counter region" {
