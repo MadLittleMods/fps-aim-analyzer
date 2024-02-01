@@ -486,11 +486,16 @@ test "findHaloChromaticAberrationText" {
 pub const IsolateDiagnostics = struct {
     images: std.StringArrayHashMap(RGBImage),
 
+    pub fn init(allocator: std.mem.Allocator) @This() {
+        const images = std.StringArrayHashMap(RGBImage).init(allocator);
+        return .{ .images = images };
+    }
+
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        for (self.images) |image| {
+        for (self.images.values()) |image| {
             image.deinit(allocator);
         }
-        allocator.free(self.images);
+        self.images.deinit();
     }
 
     pub fn addImage(self: *@This(), label: []const u8, image: anytype, allocator: std.mem.Allocator) !void {

@@ -410,7 +410,7 @@ pub fn allocPrintLabeledImage(
 pub fn printImage(rgb_image: RGBImage, print_type: PrintType, allocator: std.mem.Allocator) !void {
     const image_string = try allocPrintImage(rgb_image, print_type, allocator);
     defer allocator.free(image_string);
-    std.debug.print("\n{s}", .{image_string});
+    std.debug.print("\n{s}\n", .{image_string});
 }
 
 /// Print an labeled image to the terminal using unicode block characters to visualize
@@ -428,5 +428,5 @@ pub fn printLabeledImage(
         allocator,
     );
     defer allocator.free(image_string);
-    std.debug.print("\n{s}", .{image_string});
+    std.debug.print("\n{s}\n", .{image_string});
 }
