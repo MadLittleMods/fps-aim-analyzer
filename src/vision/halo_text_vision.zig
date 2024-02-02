@@ -734,9 +734,7 @@ pub fn isolateHaloAmmoCounter(
 
     // Find the bounding boxes around the contours that are big enough to be characters
     var num_ammo_characters: u4 = 0;
-    var ammo_digit_bounding_boxes = [MAX_NUM_AMMO_CHARACTERS]BoundingClientRect(usize){
-        undefined, undefined, undefined, undefined, undefined,
-    };
+    var ammo_digit_bounding_boxes: [MAX_NUM_AMMO_CHARACTERS]BoundingClientRect(usize) = undefined;
     for (chromatic_contours) |contour| {
         const bounding_box = boundingRect(contour);
         // Only consider bounding boxes that are big enough to be characters
@@ -779,29 +777,36 @@ test "Find Halo ammo counter region" {
     const rgb_image = try RGBImage.loadImageFromFilePath("/home/eric/Downloads/36-1080-export-from-gimp.png", allocator);
     defer rgb_image.deinit(allocator);
 
-    const maybe_ammo_cropped_digits = try isolateHaloAmmoCounter(
+    const ammo_cropped_digits = try isolateHaloAmmoCounter(
         .{
             .image = rgb_image,
             .region = .full_screen,
+            // Since these are full screen images, the pre_crop_width and
+            // pre_crop_height are the same as the width and height
+            .pre_crop_width = rgb_image.width,
+            .pre_crop_height = rgb_image.height,
+            // These are 1:1 screenshots, so the game resolution is the same
+            // as the image resolution
+            .game_resolution_width = rgb_image.width,
+            .game_resolution_height = rgb_image.height,
         },
         null,
         allocator,
     );
-    try std.testing.expect(maybe_ammo_cropped_digits != null);
-    defer if (maybe_ammo_cropped_digits) |ammo_cropped_digits| {
+    defer {
         for (ammo_cropped_digits) |ammo_cropped_digit| {
             ammo_cropped_digit.deinit(allocator);
         }
         allocator.free(ammo_cropped_digits);
-    };
+    }
 
-    if (maybe_ammo_cropped_digits) |ammo_cropped_digits| {
-        try std.testing.expect(ammo_cropped_digits.len == 2);
-
+    std.testing.expect(ammo_cropped_digits.len == 2) catch |err| {
         for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
             const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
             defer allocator.free(digit_label);
             try printLabeledImage(digit_label, ammo_cropped_digit, .half_block, allocator);
         }
-    }
+
+        return err;
+    };
 }

@@ -142,19 +142,13 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                             label,
                         });
                         defer allocator.free(debug_file_name);
-                        const debug_file_dir = try std.fs.path.join(allocator, &.{
+                        const debug_full_file_path = try std.fs.path.join(allocator, &.{
                             "debug/",
                             screenshot_dir_path,
-                        });
-                        defer allocator.free(debug_file_dir);
-                        const debug_full_file_path = try std.fs.path.join(allocator, &.{
-                            debug_file_dir,
                             debug_file_name,
                         });
                         defer allocator.free(debug_full_file_path);
 
-                        // try printLabeledImage(label, image, .half_block, allocator);
-                        try std.fs.Dir.makePath(std.fs.cwd(), debug_file_dir);
                         try image.saveImageToFilePath(debug_full_file_path, allocator);
                     }
                 }

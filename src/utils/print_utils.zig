@@ -2,6 +2,7 @@ const std = @import("std");
 const image_conversion = @import("../vision/image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
 const rgbToHsvImage = image_conversion.rgbToHsvImage;
+const rgbPixelsfromHexArray = image_conversion.rgbPixelsfromHexArray;
 
 fn repeatString(string: []const u8, repeat: usize, allocator: std.mem.Allocator) ![]const u8 {
     const resultant_string = try allocator.alloc(u8, repeat * string.len);
@@ -362,6 +363,90 @@ pub fn allocPrintHalfBlockImage(rgb_image: RGBImage, allocator: std.mem.Allocato
     return resultant_string;
 }
 
+const KittyPixelFormat = enum {
+    rgb,
+    rgba,
+    png,
+};
+
+const KittyAction = enum {
+    transmit,
+    transmit_and_display,
+    query_terminal,
+    display,
+    delete,
+    transmit_animation_data,
+    control_animation,
+    compose_animation,
+};
+
+pub fn allocPrintKittyImage(rgb_image: RGBImage, allocator: std.mem.Allocator) ![]const u8 {
+    var pixel_bytes = try allocator.alloc(u8, rgb_image.width * rgb_image.height * 3);
+    defer allocator.free(pixel_bytes);
+    for (0..rgb_image.height) |row_index| {
+        for (0..rgb_image.width) |column_index| {
+            const pixel_index = row_index * rgb_image.width + column_index;
+            const pixel = rgb_image.pixels[pixel_index];
+            const pixel_byte_index = pixel_index * 3;
+            pixel_bytes[pixel_byte_index] = @intFromFloat(255 * pixel.r);
+            pixel_bytes[pixel_byte_index + 1] = @intFromFloat(255 * pixel.g);
+            pixel_bytes[pixel_byte_index + 2] = @intFromFloat(255 * pixel.b);
+        }
+    }
+
+    const pixel_format_control_code = switch (KittyPixelFormat.rgb) {
+        .rgb => 24,
+        .rgba => 32,
+        .png => 100,
+    };
+
+    const action_control_code = switch (KittyAction.transmit_and_display) {
+        .transmit => "t",
+        .transmit_and_display => "T",
+        .query_terminal => "q",
+        // Also known as "put"
+        .display => "p",
+        .delete => "d",
+        .transmit_animation_data => "f",
+        .control_animation => "a",
+        .compose_animation => "c",
+    };
+
+    const encoder = std.base64.standard.Encoder;
+    var base64_buffer = try allocator.alloc(u8, encoder.calcSize(pixel_bytes.len));
+    defer allocator.free(base64_buffer);
+    const base64_payload = encoder.encode(base64_buffer, pixel_bytes);
+
+    // Graphics escape code: <ESC>_G<control data>;<payload><ESC>\
+    // <ESC> is just byte 27
+    // https://sw.kovidgoyal.net/kitty/graphics-protocol/#control-data-reference
+    return try std.fmt.allocPrint(allocator, "\u{001b}_Gf={},s={},v={},a={s};{s}\u{001b}\\", .{
+        pixel_format_control_code,
+        rgb_image.width,
+        rgb_image.height,
+        action_control_code,
+        base64_payload,
+    });
+}
+
+test "allocPrintKittyImage" {
+    const allocator = std.testing.allocator;
+
+    const kitty_output = try allocPrintKittyImage(
+        .{
+            .width = 20,
+            .height = 20,
+            .pixels = &rgbPixelsfromHexArray(&[_]u24{0xff0000} ** (20 * 20)),
+        },
+        allocator,
+    );
+    defer allocator.free(kitty_output);
+
+    std.debug.print("allocPrintKittyImage\n{s}", .{
+        kitty_output,
+    });
+}
+
 pub const PrintType = enum {
     /// Print using full block/shade characters. This gives nice plain-text
     /// copy/pasteable output but takes up a lot of horizontal/vertical real estate since
@@ -370,7 +455,10 @@ pub const PrintType = enum {
     /// Print using half block characters. This takes up half the horizontal/vertical
     /// real estate since we're able to pack in 1x2 pixels per character.
     half_block,
-    // TODO: Print using the kitty graphics protocol (seems the most widely supported)
+    // Print using the Kitty graphics protocol (seems the most widely supported actual
+    // pixel display protocol for terminals at the moment).
+    // https://sw.kovidgoyal.net/kitty/graphics-protocol/
+    kitty,
     // TODO: Print using the iTerm2 graphics protocol, https://iterm2.com/documentation-images.html
     // TODO: Print using Sixel graphic data
 };
@@ -379,6 +467,7 @@ pub fn allocPrintImage(rgb_image: RGBImage, print_type: PrintType, allocator: st
     return switch (print_type) {
         .full_block => allocPrintBlockImage(rgb_image, allocator),
         .half_block => allocPrintHalfBlockImage(rgb_image, allocator),
+        .kitty => allocPrintKittyImage(rgb_image, allocator),
     };
 }
 

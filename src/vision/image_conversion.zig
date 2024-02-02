@@ -255,6 +255,12 @@ pub const RGBImage = struct {
             };
         }
 
+        // Make sure the directory exists
+        const maybe_directory_to_create = std.fs.path.dirname(image_file_path);
+        if (maybe_directory_to_create) |directory_to_create| {
+            try std.fs.Dir.makePath(std.fs.cwd(), directory_to_create);
+        }
+
         try img.writeToFilePath(image_file_path, .{ .png = .{} });
     }
 };
