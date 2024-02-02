@@ -3,6 +3,8 @@ const image_conversion = @import("../vision/image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
 const rgbToHsvImage = image_conversion.rgbToHsvImage;
 const rgbPixelsfromHexArray = image_conversion.rgbPixelsfromHexArray;
+const test_images = @import("../vision/test_images.zig");
+const test_square_image = test_images.test_square_image;
 
 fn repeatString(string: []const u8, repeat: usize, allocator: std.mem.Allocator) ![]const u8 {
     const resultant_string = try allocator.alloc(u8, repeat * string.len);
@@ -418,7 +420,7 @@ pub fn allocPrintKittyImage(rgb_image: RGBImage, allocator: std.mem.Allocator) !
     const base64_payload = encoder.encode(base64_buffer, pixel_bytes);
 
     // Graphics escape code: <ESC>_G<control data>;<payload><ESC>\
-    // <ESC> is just byte 27
+    // <ESC> is just byte 27 (\u{001b})
     // https://sw.kovidgoyal.net/kitty/graphics-protocol/#control-data-reference
     return try std.fmt.allocPrint(allocator, "\u{001b}_Gf={},s={},v={},a={s};{s}\u{001b}\\", .{
         pixel_format_control_code,
@@ -434,17 +436,32 @@ test "allocPrintKittyImage" {
 
     const kitty_output = try allocPrintKittyImage(
         .{
-            .width = 20,
-            .height = 20,
-            .pixels = &rgbPixelsfromHexArray(&[_]u24{0xff0000} ** (20 * 20)),
+            .width = 2,
+            .height = 2,
+            .pixels = &rgbPixelsfromHexArray(&[_]u24{
+                0xff0000, 0x00ff00,
+                0x00ff00, 0xff0000,
+            }),
         },
         allocator,
     );
     defer allocator.free(kitty_output);
 
-    std.debug.print("allocPrintKittyImage\n{s}", .{
+    try std.testing.expectEqualSlices(
+        u8,
+        "\u{001b}_Gf=24,s=2,v=2,a=T;/wAAAP8AAP8A/wAA\u{001b}\\",
         kitty_output,
-    });
+    );
+
+    // const kitty_output = try allocPrintKittyImage(
+    //     test_square_image,
+    //     allocator,
+    // );
+    // defer allocator.free(kitty_output);
+
+    // std.debug.print("allocPrintKittyImage\n{s}", .{
+    //     kitty_output,
+    // });
 }
 
 pub const PrintType = enum {

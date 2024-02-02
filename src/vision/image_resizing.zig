@@ -12,6 +12,10 @@ const getPixelClamped = image_conversion.getPixelClamped;
 const getPixelValueFieldNames = image_conversion.getPixelValueFieldNames;
 const rgbPixelsfromHexArray = image_conversion.rgbPixelsfromHexArray;
 const expectImageApproxEqual = image_conversion.expectImageApproxEqual;
+const test_images = @import("test_images.zig");
+const mooshroom_image = test_images.mooshroom_image;
+const test_square_image = test_images.test_square_image;
+const test_color_checkerboard_image = test_images.test_color_checkerboard_image;
 const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
 
@@ -350,57 +354,6 @@ pub fn resizeImage(
         .pixels = output_pixels,
     };
 }
-
-const mooshroom_image = RGBImage{
-    .width = 8,
-    .height = 8,
-    .pixels = &rgbPixelsfromHexArray(&[_]u24{
-        // 8x8 cow art via https://www.reddit.com/r/PixelArt/comments/103bznv/just_started_my_pixel_art_journey_i_heard_it_was/
-        // 0xdbc9b4, 0x000000, 0x000000, 0xdbc9b4, 0x000000, 0x000000, 0x000000, 0x000000,
-        // 0x000000, 0xfcecd1, 0xfcecd1, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000,
-        // 0x000000, 0xfcecd1, 0xfcecd1, 0x2d1e2f, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0x2d1e2f,
-        // 0xc3a79c, 0xdbc9b4, 0xc3a79c, 0xfcecd1, 0xfcecd1, 0x2d1e2f, 0xfcecd1, 0xfcecd1,
-        // 0xdbc9b4, 0xdbc9b4, 0xdbc9b4, 0xfcecd1, 0x2d1e2f, 0x2d1e2f, 0xfcecd1, 0xfcecd1,
-        // 0x000000, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1, 0xfcecd1,
-        // 0x000000, 0xfcecd1, 0x000000, 0xfcecd1, 0x000000, 0xdbc9b4, 0x000000, 0xfcecd1,
-        // 0x000000, 0xc3a79c, 0x000000, 0xc3a79c, 0x000000, 0x9c807e, 0x000000, 0xc3a79c,
-
-        // 8x8 mooshroom variation (color differences are easier to see)
-        0x940c0f, 0xffffff, 0xffffff, 0x940c0f, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
-        0xffffff, 0xa80e12, 0xa80e12, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff,
-        0xffffff, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xa80e12, 0xa80e12, 0xa80e12, 0xb3b3b3,
-        0x171414, 0xd39696, 0x171414, 0xa80e12, 0xa80e12, 0xb3b3b3, 0xa80e12, 0xa80e12,
-        0xce9191, 0xd39696, 0xce9191, 0xa80e12, 0xb3b3b3, 0xb3b3b3, 0xa80e12, 0xa80e12,
-        0xffffff, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12, 0xa80e12,
-        0xffffff, 0xa80e12, 0xffffff, 0xa80e12, 0xffffff, 0x940c0f, 0xd39696, 0xa80e12,
-        0xffffff, 0x171414, 0xffffff, 0x171414, 0xffffff, 0x333333, 0xffffff, 0x171414,
-    }),
-};
-
-// 16x16 test image via https://medium.com/hackernoon/how-tensorflows-tf-image-resize-stole-60-days-of-my-life-aba5eb093f35
-const test_square_image = RGBImage{
-    .width = 16,
-    .height = 16,
-    .pixels = &rgbPixelsfromHexArray(
-        &([_]u24{0x010ab9} ** 16 ++
-            [_]u24{ 0x03a3de, 0xe91b51 } ++ [_]u24{0xde03a8} ** 12 ++ [_]u24{ 0xe91b51, 0x03a3de } ++
-            ([_]u24{ 0x2d1903, 0xe91b51, 0x1be951 } ++ [_]u24{0xffffff} ** 10 ++ [_]u24{ 0x1be951, 0xe91b51, 0x2d1903 }) ** 12 ++
-            [_]u24{ 0x03a3de, 0xe91b51 } ++ [_]u24{0xde03a8} ** 12 ++ [_]u24{ 0xe91b51, 0x03a3de } ++
-            [_]u24{0x010ab9} ** 16),
-    ),
-};
-
-// 4x4 test checkerboard image
-const test_color_checkerboard_image = RGBImage{
-    .width = 4,
-    .height = 4,
-    .pixels = &rgbPixelsfromHexArray(&.{
-        0xff0000, 0x00ff00, 0xff0000, 0x0000ff,
-        0x00ff00, 0xff0000, 0x0000ff, 0xff0000,
-        0x0000ff, 0x00ff00, 0xff0000, 0xffffff,
-        0x00ff00, 0x0000ff, 0xffffff, 0xff0000,
-    }),
-};
 
 // When comparing float pixels, they should be less than an 8-bit increment value apart
 // which means there will be no difference when we convert back to 8-bit (255) based
