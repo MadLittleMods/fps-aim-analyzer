@@ -580,11 +580,6 @@ pub fn isolateHaloAmmoCounter(
                 half_height,
                 screenshot.image.width - half_width,
                 screenshot.image.height - half_height,
-                // TODO: Remove -- Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
-                // 1410,
-                // 877,
-                // 40,
-                // 26,
                 allocator,
             );
             break :blk Screenshot(RGBImage){
@@ -680,8 +675,8 @@ pub fn isolateHaloAmmoCounter(
         // Create a horizontal kernel and dilate to connect text characters
         const dilate_kernel = try getStructuringElement(
             .rectangle,
-            3,
             9,
+            13,
             allocator,
         );
         defer dilate_kernel.deinit(allocator);
@@ -740,6 +735,13 @@ pub fn isolateHaloAmmoCounter(
         // Only consider bounding boxes that are big enough to be characters
         const is_character_sized_bounding_box = bounding_box.width > CHARACTER_MIN_WIDTH and
             bounding_box.height > CHARACTER_MIN_HEIGHT;
+        std.debug.print("\nis_character_sized_bounding_box={}, width {} > {}, height {} > {}", .{
+            is_character_sized_bounding_box,
+            bounding_box.width,
+            CHARACTER_MIN_WIDTH,
+            bounding_box.height,
+            CHARACTER_MIN_HEIGHT,
+        });
         if (is_character_sized_bounding_box) {
             ammo_digit_bounding_boxes[num_ammo_characters] = bounding_box;
             num_ammo_characters += 1;
@@ -774,23 +776,50 @@ pub fn isolateHaloAmmoCounter(
 
 test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
-    const rgb_image = try RGBImage.loadImageFromFilePath("/home/eric/Downloads/36-1080-export-from-gimp.png", allocator);
-    defer rgb_image.deinit(allocator);
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
+    const image_file_stem_name = std.fs.path.stem(image_file_path);
 
+    const rgb_image = try RGBImage.loadImageFromFilePath(image_file_path, allocator);
+    defer rgb_image.deinit(allocator);
+    const full_screenshot = Screenshot(RGBImage){
+        .image = rgb_image,
+        .region = .full_screen,
+        // Since these are full screen images, the pre_crop_width and
+        // pre_crop_height are the same as the width and height
+        .pre_crop_width = rgb_image.width,
+        .pre_crop_height = rgb_image.height,
+        // These are 1:1 screenshots, so the game resolution is the same
+        // as the image resolution
+        .game_resolution_width = rgb_image.width,
+        .game_resolution_height = rgb_image.height,
+    };
+
+    // Useful when debugging to only work with a little bit of data
+    // const cropped_rgb_image = try cropImage(
+    //     rgb_image,
+    //     // Hard-coded values for the cropped image ("/home/eric/Downloads/36-1080-export-from-gimp.png")
+    //     1410,
+    //     877,
+    //     40,
+    //     26,
+    //     allocator,
+    // );
+    // defer cropped_rgb_image.deinit(allocator);
+    // const cropped_screenshot = Screenshot(RGBImage){
+    //     .image = cropped_rgb_image,
+    //     .region = .ammo_counter,
+    //     .pre_crop_width = full_screenshot.pre_crop_width,
+    //     .pre_crop_height = full_screenshot.pre_crop_height,
+    //     .game_resolution_width = full_screenshot.game_resolution_width,
+    //     .game_resolution_height = full_screenshot.game_resolution_height,
+    // };
+
+    var isolate_diagnostics = IsolateDiagnostics.init(allocator);
+    defer isolate_diagnostics.deinit(allocator);
     const ammo_cropped_digits = try isolateHaloAmmoCounter(
-        .{
-            .image = rgb_image,
-            .region = .full_screen,
-            // Since these are full screen images, the pre_crop_width and
-            // pre_crop_height are the same as the width and height
-            .pre_crop_width = rgb_image.width,
-            .pre_crop_height = rgb_image.height,
-            // These are 1:1 screenshots, so the game resolution is the same
-            // as the image resolution
-            .game_resolution_width = rgb_image.width,
-            .game_resolution_height = rgb_image.height,
-        },
-        null,
+        full_screenshot, //cropped_screenshot,
+        &isolate_diagnostics,
         allocator,
     );
     defer {
@@ -801,6 +830,25 @@ test "Find Halo ammo counter region" {
     }
 
     std.testing.expect(ammo_cropped_digits.len == 2) catch |err| {
+        // Debug: Show what happened during the isolation process
+        for (isolate_diagnostics.images.keys(), isolate_diagnostics.images.values(), 0..) |label, image, image_index| {
+            const debug_file_name = try std.fmt.allocPrint(allocator, "{s} - step{}: {s}.png", .{
+                image_file_stem_name,
+                image_index,
+                label,
+            });
+            defer allocator.free(debug_file_name);
+            const debug_full_file_path = try std.fs.path.join(allocator, &.{
+                "debug/test/",
+                debug_file_name,
+            });
+            defer allocator.free(debug_full_file_path);
+
+            try image.saveImageToFilePath(debug_full_file_path, allocator);
+            try printLabeledImage(debug_full_file_path, image, .kitty, allocator);
+        }
+
+        // Show the ammo counter digits that were found
         for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
             const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
             defer allocator.free(digit_label);

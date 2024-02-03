@@ -87,7 +87,8 @@ test "getExpectedDigitsFromFileName" {
 }
 
 pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNetworkData {
-    const screenshot_dir_path = "./screenshot-data/halo-infinite/4k/default/";
+    // const screenshot_dir_path = "./screenshot-data/halo-infinite/4k/default/";
+    const screenshot_dir_path = "./screenshot-data/halo-infinite/1080/default/";
     var iterable_dir = try std.fs.cwd().openIterableDir(screenshot_dir_path, .{});
     defer iterable_dir.close();
 
@@ -150,9 +151,11 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                         defer allocator.free(debug_full_file_path);
 
                         try image.saveImageToFilePath(debug_full_file_path, allocator);
+                        // try printLabeledImage(debug_file_name, image, .kitty, allocator);
                     }
                 }
 
+                // Show the ammo counter digits that were found
                 for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
                     const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
                     defer allocator.free(digit_label);

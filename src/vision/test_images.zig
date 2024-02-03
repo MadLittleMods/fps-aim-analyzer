@@ -2,6 +2,7 @@ const image_conversion = @import("image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
 const rgbPixelsfromHexArray = image_conversion.rgbPixelsfromHexArray;
 
+/// 8x8 mooshroom (cow) image
 pub const mooshroom_image = RGBImage{
     .width = 8,
     .height = 8,
@@ -28,7 +29,7 @@ pub const mooshroom_image = RGBImage{
     }),
 };
 
-// 16x16 test image via https://medium.com/hackernoon/how-tensorflows-tf-image-resize-stole-60-days-of-my-life-aba5eb093f35
+/// 16x16 test image via https://medium.com/hackernoon/how-tensorflows-tf-image-resize-stole-60-days-of-my-life-aba5eb093f35
 pub const test_square_image = RGBImage{
     .width = 16,
     .height = 16,
@@ -41,7 +42,7 @@ pub const test_square_image = RGBImage{
     ),
 };
 
-// 4x4 test checkerboard image
+/// 4x4 test checkerboard image
 pub const test_color_checkerboard_image = RGBImage{
     .width = 4,
     .height = 4,
@@ -50,5 +51,18 @@ pub const test_color_checkerboard_image = RGBImage{
         0x00ff00, 0xff0000, 0x0000ff, 0xff0000,
         0x0000ff, 0x00ff00, 0xff0000, 0xffffff,
         0x00ff00, 0x0000ff, 0xffffff, 0xff0000,
+    }),
+};
+
+pub const test_strip_image = RGBImage{
+    .width = 10,
+    .height = 6,
+    .pixels = &rgbPixelsfromHexArray(&.{
+        0xffff00, 0xffff00, 0x0000ff, 0xff7f00, 0x0000ff, 0x00ff00, 0xff7f00, 0xff7f00, 0xff7f00, 0xff7f00,
+        0xffff00, 0xffff00, 0x0000ff, 0xff7f00, 0x0000ff, 0x00ff00, 0xff7f00, 0xff7f00, 0xff7f00, 0xff7f00,
+        0x00ffff, 0x00ffff, 0x00ffff, 0xff0000, 0xff0000, 0xff0000, 0xff0000, 0xff0000, 0xff0000, 0xff0000,
+        0xff0000, 0xff0000, 0xff0000, 0xff0000, 0xff0000, 0xff0000, 0xff0000, 0x00ffff, 0x00ffff, 0x00ffff,
+        0xff7f00, 0xff7f00, 0xff7f00, 0xff7f00, 0x0000ff, 0x00ff00, 0xff7f00, 0x0000ff, 0xffff00, 0xffff00,
+        0xff7f00, 0xff7f00, 0xff7f00, 0xff7f00, 0x0000ff, 0x00ff00, 0xff7f00, 0x0000ff, 0xffff00, 0xffff00,
     }),
 };

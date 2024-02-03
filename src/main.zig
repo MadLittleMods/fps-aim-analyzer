@@ -1,5 +1,6 @@
 const std = @import("std");
 const x = @import("x");
+const zigimg = @import("zigimg");
 const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11//x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
@@ -10,6 +11,20 @@ const buffer_utils = @import("utils/buffer_utils.zig");
 const render_utils = @import("utils/render_utils.zig");
 const Dimensions = render_utils.Dimensions;
 const BoundingClientRect = render_utils.BoundingClientRect;
+
+// Make it possible to load big 4k screenshots with zigimg
+// (see https://github.com/zigimg/zigimg/issues/154#issuecomment-1889010856)
+pub const DefaultPngOptions = struct {
+    def_processors: zigimg.png.DefaultProcessors = .{},
+    gpa_allocator: std.heap.GeneralPurposeAllocator(.{}) = undefined,
+
+    const Self = @This();
+
+    pub fn get(self: *Self) zigimg.png.ReaderOptions {
+        self.gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
+        return .{ .temp_allocator = self.gpa_allocator.allocator(), .processors = self.def_processors.get() };
+    }
+};
 
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
