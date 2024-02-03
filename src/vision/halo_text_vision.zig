@@ -121,8 +121,8 @@ pub fn checkForChromaticAberrationConditionInHsvPixel(hsv_pixel: HSVPixel, condi
         ),
         .red => checkHsvPixelInRange(
             hsv_pixel,
-            // OpenCV: (0, 50, 130)
-            HSVPixel.init(0.0, 0.196078, 0.509803),
+            // OpenCV: (0, 50, 126)
+            HSVPixel.init(0.0, 0.196078, 0.494117),
             // OpenCV: (14, 185, 255)
             HSVPixel.init(0.077777, 0.725490, 1.0),
         ) or checkHsvPixelInRange(
@@ -311,185 +311,217 @@ const FindHaloChromaticAberrationTextTestCase = struct {
     height: usize,
 };
 
-test "findHaloChromaticAberrationText" {
-    const allocator = std.testing.allocator;
-    const rgb_image = try RGBImage.loadImageFromFilePath("screenshot-data/halo-infinite/1080/default/36.png", allocator);
-    defer rgb_image.deinit(allocator);
+fn _testFindHaloChromaticAberrationText(
+    rgb_image: RGBImage,
+    test_case: FindHaloChromaticAberrationTextTestCase,
+    allocator: std.mem.Allocator,
+) !void {
+    const cropped_image = try cropImage(
+        rgb_image,
+        test_case.x,
+        test_case.y,
+        test_case.width,
+        test_case.height,
+        allocator,
+    );
+    defer cropped_image.deinit(allocator);
 
-    const test_cases = [_]FindHaloChromaticAberrationTextTestCase{
-        // Three tests
-        //
-        .{
-            .label = "Top terminal of the three (horizontal)",
-            .x = 1424,
-            .y = 829,
-            .width = 4,
-            .height = 1,
-        },
-        .{
-            .label = "Top arm of the three (vertical)",
-            .x = 1428,
-            .y = 825,
-            .width = 1,
-            .height = 4,
-        },
-        .{
-            .label = "Top arm of the three with margin above (vertical)",
-            .x = 1428,
-            .y = 823,
-            .width = 1,
-            .height = 6,
-        },
-        .{
-            .label = "Top arm of the three with margin below (vertical)",
-            .x = 1428,
-            .y = 825,
-            .width = 1,
-            .height = 6,
-        },
-        .{
-            .label = "Top stress of the three (horizonal)",
-            .x = 1433,
-            .y = 832,
-            .width = 8,
-            .height = 1,
-        },
-        .{
-            .label = "Middle terminal of the three (vertical)",
-            .x = 1430,
-            .y = 831,
-            .width = 1,
-            .height = 8,
-        },
-        .{
-            .label = "Bottom stress of the three (horizonal)",
-            .x = 1434,
-            .y = 840,
-            .width = 6,
-            .height = 1,
-        },
-        .{
-            .label = "Bottom arm of the three (vertical)",
-            .x = 1430,
-            .y = 841,
-            .width = 1,
-            .height = 6,
-        },
-        // Six tests
-        //
-        .{
-            .label = "Top terminal of the six (horizontal)",
-            .x = 1451,
-            .y = 829,
-            .width = 6,
-            .height = 1,
-        },
-        .{
-            .label = "Top arm of the six (vertical)",
-            .x = 1448,
-            .y = 825,
-            .width = 1,
-            .height = 6,
-        },
-        .{
-            .label = "Top stress of the six (horizontal)",
-            .x = 1441,
-            .y = 829,
-            .width = 6,
-            .height = 1,
-        },
-        .{
-            .label = "Left-side of the bowl of the six (horizontal)",
-            .x = 1442,
-            .y = 838,
-            .width = 6,
-            .height = 1,
-        },
-        .{
-            .label = "Right-side of the bowl of the six (horizontal)",
-            .x = 1452,
-            .y = 841,
-            .width = 6,
-            .height = 1,
-        },
-        .{
-            .label = "Top-side of the bowl of the six (vertical)",
-            .x = 1448,
-            .y = 832,
-            .width = 1,
-            .height = 6,
-        },
-        .{
-            .label = "Bottom-side of the bowl of the six (vertical)",
-            .x = 1448,
-            .y = 842,
-            .width = 1,
-            .height = 6,
-        },
-    };
+    const hsv_image = try rgbToHsvImage(cropped_image, allocator);
+    defer hsv_image.deinit(allocator);
 
-    for (test_cases) |test_case| {
-        const cropped_image = try cropImage(
-            rgb_image,
-            test_case.x,
-            test_case.y,
-            test_case.width,
-            test_case.height,
-            allocator,
-        );
-        defer cropped_image.deinit(allocator);
+    // Function under test
+    const chromatic_pattern_hsv_img = try findHaloChromaticAberrationText(hsv_image, allocator);
+    defer chromatic_pattern_hsv_img.deinit(allocator);
 
-        const hsv_image = try rgbToHsvImage(cropped_image, allocator);
-        defer hsv_image.deinit(allocator);
-
-        // Function under test
-        const chromatic_pattern_hsv_img = try findHaloChromaticAberrationText(hsv_image, allocator);
-        defer chromatic_pattern_hsv_img.deinit(allocator);
-
-        // Get a binary version of the image so we can quickly check if any chromatic
-        // aberration was copied over (`findHaloChromaticAberrationText` only copies
-        // over pixels matching the chromatic aberration pattern are copied over)
-        const chromatic_pattern_binary_mask = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
-        defer chromatic_pattern_binary_mask.deinit(allocator);
-        // Check if any chromatic aberration was found and copied over
-        var found_chromatic_aberration = false;
-        outer: for (0..chromatic_pattern_binary_mask.height) |y| {
-            for (0..chromatic_pattern_binary_mask.width) |x| {
-                const pixel_index = (y * chromatic_pattern_binary_mask.width) + x;
-                const pixel = chromatic_pattern_binary_mask.pixels[pixel_index];
-                if (pixel.value) {
-                    found_chromatic_aberration = true;
-                    break :outer;
-                }
+    // Get a binary version of the image so we can quickly check if any chromatic
+    // aberration was copied over (`findHaloChromaticAberrationText` only copies
+    // over pixels matching the chromatic aberration pattern are copied over)
+    const chromatic_pattern_binary_mask = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
+    defer chromatic_pattern_binary_mask.deinit(allocator);
+    // Check if any chromatic aberration was found and copied over
+    var found_chromatic_aberration = false;
+    outer: for (0..chromatic_pattern_binary_mask.height) |y| {
+        for (0..chromatic_pattern_binary_mask.width) |x| {
+            const pixel_index = (y * chromatic_pattern_binary_mask.width) + x;
+            const pixel = chromatic_pattern_binary_mask.pixels[pixel_index];
+            if (pixel.value) {
+                found_chromatic_aberration = true;
+                break :outer;
             }
         }
+    }
 
-        // Return an error if no chromatic aberration was found and print out useful
-        // debugging information
-        if (!found_chromatic_aberration) {
-            // Print a nice image to give some better context on what failed
-            try printLabeledImage(
-                test_case.label,
-                cropped_image,
-                .full_block,
-                allocator,
-            );
+    // Return an error if no chromatic aberration was found and print out useful
+    // debugging information
+    if (!found_chromatic_aberration) {
+        // Print a nice image to give some better context on what failed
+        try printLabeledImage(
+            test_case.label,
+            cropped_image,
+            .full_block,
+            allocator,
+        );
 
-            // Print a list of pixels in the image and which conditions each pixel meets
-            for (hsv_image.pixels, 0..) |pixel, pixel_index| {
-                const condition_status_string = try _debugStringConditionsForPixel(pixel, allocator);
-                defer allocator.free(condition_status_string);
+        // Print a list of pixels in the image and which conditions each pixel meets
+        for (hsv_image.pixels, 0..) |pixel, pixel_index| {
+            const condition_status_string = try _debugStringConditionsForPixel(pixel, allocator);
+            defer allocator.free(condition_status_string);
 
-                std.debug.print("\n\t{d: >3}: HSV({d:.6}, {d:.6}, {d:.6}) {s}", .{
-                    pixel_index,
-                    pixel.h,
-                    pixel.s,
-                    pixel.v,
-                    condition_status_string,
-                });
-            }
+            std.debug.print("\n\t{d: >3}: HSV({d:.6}, {d:.6}, {d:.6}) {s}", .{
+                pixel_index,
+                pixel.h,
+                pixel.s,
+                pixel.v,
+                condition_status_string,
+            });
+        }
 
-            return error.UnableToFindChromaticAberration;
+        return error.UnableToFindChromaticAberration;
+    }
+}
+
+test "findHaloChromaticAberrationText" {
+    const allocator = std.testing.allocator;
+
+    {
+        const rgb_image = try RGBImage.loadImageFromFilePath("screenshot-data/halo-infinite/1080/default/36.png", allocator);
+        defer rgb_image.deinit(allocator);
+
+        const test_cases = [_]FindHaloChromaticAberrationTextTestCase{
+            // Three tests
+            //
+            .{
+                .label = "Top terminal of the three (horizontal)",
+                .x = 1424,
+                .y = 829,
+                .width = 4,
+                .height = 1,
+            },
+            .{
+                .label = "Top arm of the three (vertical)",
+                .x = 1428,
+                .y = 825,
+                .width = 1,
+                .height = 4,
+            },
+            .{
+                .label = "Top arm of the three with margin above (vertical)",
+                .x = 1428,
+                .y = 823,
+                .width = 1,
+                .height = 6,
+            },
+            .{
+                .label = "Top arm of the three with margin below (vertical)",
+                .x = 1428,
+                .y = 825,
+                .width = 1,
+                .height = 6,
+            },
+            .{
+                .label = "Top stress of the three (horizonal)",
+                .x = 1433,
+                .y = 832,
+                .width = 8,
+                .height = 1,
+            },
+            .{
+                .label = "Middle terminal of the three (vertical)",
+                .x = 1430,
+                .y = 831,
+                .width = 1,
+                .height = 8,
+            },
+            .{
+                .label = "Bottom stress of the three (horizonal)",
+                .x = 1434,
+                .y = 840,
+                .width = 6,
+                .height = 1,
+            },
+            .{
+                .label = "Bottom arm of the three (vertical)",
+                .x = 1430,
+                .y = 841,
+                .width = 1,
+                .height = 6,
+            },
+            // Six tests
+            //
+            .{
+                .label = "Top terminal of the six (horizontal)",
+                .x = 1451,
+                .y = 829,
+                .width = 6,
+                .height = 1,
+            },
+            .{
+                .label = "Top arm of the six (vertical)",
+                .x = 1448,
+                .y = 825,
+                .width = 1,
+                .height = 6,
+            },
+            .{
+                .label = "Top stress of the six (horizontal)",
+                .x = 1441,
+                .y = 829,
+                .width = 6,
+                .height = 1,
+            },
+            .{
+                .label = "Left-side of the bowl of the six (horizontal)",
+                .x = 1442,
+                .y = 838,
+                .width = 6,
+                .height = 1,
+            },
+            .{
+                .label = "Right-side of the bowl of the six (horizontal)",
+                .x = 1452,
+                .y = 841,
+                .width = 6,
+                .height = 1,
+            },
+            .{
+                .label = "Top-side of the bowl of the six (vertical)",
+                .x = 1448,
+                .y = 832,
+                .width = 1,
+                .height = 6,
+            },
+            .{
+                .label = "Bottom-side of the bowl of the six (vertical)",
+                .x = 1448,
+                .y = 842,
+                .width = 1,
+                .height = 6,
+            },
+        };
+
+        for (test_cases) |test_case| {
+            try _testFindHaloChromaticAberrationText(rgb_image, test_case, allocator);
+        }
+    }
+
+    {
+        const rgb_image = try RGBImage.loadImageFromFilePath("screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png", allocator);
+        defer rgb_image.deinit(allocator);
+
+        const test_cases = [_]FindHaloChromaticAberrationTextTestCase{
+            // 1(1) tests
+            //
+            .{
+                .label = "Bottom of second one (horizontal)",
+                .x = 1448,
+                .y = 899,
+                .width = 6,
+                .height = 1,
+            },
+        };
+
+        for (test_cases) |test_case| {
+            try _testFindHaloChromaticAberrationText(rgb_image, test_case, allocator);
         }
     }
 }
