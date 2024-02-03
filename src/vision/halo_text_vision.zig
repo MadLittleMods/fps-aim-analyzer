@@ -193,7 +193,7 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
 
     const total_pixels_in_image = hsv_image.width * hsv_image.height;
 
-    const buffer_size: usize = 6;
+    const BUFFER_SIZE: usize = 6;
 
     // Look for Chromatic Aberration in the rows
     for (0..hsv_image.height) |y| {
@@ -203,7 +203,7 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
             // Look at the next X pixels in the row
             const current_pixel_index = row_start_pixel_index + x;
             // Make sure to not over-run the end of the row
-            const buffer_end_pixel_index = @min(current_pixel_index + buffer_size, row_end_pixel_index);
+            const buffer_end_pixel_index = @min(current_pixel_index + BUFFER_SIZE, row_end_pixel_index);
             const pixel_buffer = hsv_image.pixels[current_pixel_index..buffer_end_pixel_index];
 
             // Check if the pixels in the buffer match the chromatic aberration pattern
@@ -226,13 +226,13 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
     }
 
     // Look for Chromatic Aberration in the columns
-    var column_pixel_buffer = try allocator.alloc(HSVPixel, buffer_size);
+    var column_pixel_buffer = try allocator.alloc(HSVPixel, BUFFER_SIZE);
     defer allocator.free(column_pixel_buffer);
     for (0..hsv_image.width) |x| {
         for (0..hsv_image.height) |y| {
             // Look at the next X pixels in the column
             var column_pixel_buffer_size: usize = 0;
-            for (0..buffer_size) |i| {
+            for (0..BUFFER_SIZE) |i| {
                 const current_pixel_index = ((y + i) * hsv_image.width) + x;
                 // Make sure to not over-run the end of the column
                 if (current_pixel_index >= total_pixels_in_image) {
@@ -677,37 +677,38 @@ pub fn isolateHaloAmmoCounter(
         defer chromatic_pattern_binary_mask.deinit(allocator);
 
         // Erode the mask to get rid of some of the smaller chromatic aberration captures
-        const erode_kernel = try getStructuringElement(
-            .cross,
-            3,
-            3,
-            allocator,
-        );
-        defer erode_kernel.deinit(allocator);
-        const chromatic_pattern_eroded_mask = try erode(
-            chromatic_pattern_binary_mask,
-            erode_kernel,
-            allocator,
-        );
-        defer chromatic_pattern_eroded_mask.deinit(allocator);
-        // Debug: After eroding
-        {
-            const eroded_chromatic_pattern_rgb_image = try maskImage(
-                resized_screenshot.image,
-                chromatic_pattern_eroded_mask,
-                allocator,
-            );
-            defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
-            // Debug: Pixels after eroding
-            if (diagnostics) |diag| {
-                try diag.addImage("eroded_chromatic_pattern_rgb_image", eroded_chromatic_pattern_rgb_image, allocator);
-            }
-        }
+        // const erode_kernel = try getStructuringElement(
+        //     .cross,
+        //     3,
+        //     3,
+        //     allocator,
+        // );
+        // defer erode_kernel.deinit(allocator);
+        // const chromatic_pattern_eroded_mask = try erode(
+        //     chromatic_pattern_binary_mask,
+        //     erode_kernel,
+        //     allocator,
+        // );
+        // defer chromatic_pattern_eroded_mask.deinit(allocator);
+        // // Debug: After eroding
+        // {
+        //     const eroded_chromatic_pattern_rgb_image = try maskImage(
+        //         resized_screenshot.image,
+        //         chromatic_pattern_eroded_mask,
+        //         allocator,
+        //     );
+        //     defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
+        //     // Debug: Pixels after eroding
+        //     if (diagnostics) |diag| {
+        //         try diag.addImage("eroded_chromatic_pattern_rgb_image", eroded_chromatic_pattern_rgb_image, allocator);
+        //     }
+        // }
+        const chromatic_pattern_eroded_mask = chromatic_pattern_binary_mask;
 
         // Create a horizontal kernel and dilate to connect text characters
         const dilate_kernel = try getStructuringElement(
             .rectangle,
-            9,
+            5,
             13,
             allocator,
         );
@@ -756,8 +757,12 @@ pub fn isolateHaloAmmoCounter(
         try diag.addImage("contour_traced_rgb_image", traced_rgb_image, allocator);
     }
 
-    const CHARACTER_MIN_WIDTH = 14;
+    // The "1" character is the skinniest character we expect to see in the ammo counter
+    const CHARACTER_MIN_WIDTH = 9;
+    // All of the characters are the same height
     const CHARACTER_MIN_HEIGHT = 21;
+    // The max spacing we will see is between "11" characters
+    const CHARACTER_MAX_SPACING = 10;
 
     // Find the bounding boxes around the contours that are big enough to be characters
     var num_ammo_characters: u4 = 0;
@@ -767,14 +772,19 @@ pub fn isolateHaloAmmoCounter(
         // Only consider bounding boxes that are big enough to be characters
         const is_character_sized_bounding_box = bounding_box.width > CHARACTER_MIN_WIDTH and
             bounding_box.height > CHARACTER_MIN_HEIGHT;
-        std.debug.print("\nis_character_sized_bounding_box={}, width {} > {}, height {} > {}", .{
+        const is_close_to_previous_character = num_ammo_characters == 0 or (num_ammo_characters > 0 and
+            (bounding_box.x - ammo_digit_bounding_boxes[num_ammo_characters - 1].right()) <= CHARACTER_MAX_SPACING);
+        std.debug.print("\nis_character_sized_bounding_box={}, width {} > {}, height {} > {} ---  is_close_to_previous_character={}, {} <= {}", .{
             is_character_sized_bounding_box,
             bounding_box.width,
             CHARACTER_MIN_WIDTH,
             bounding_box.height,
             CHARACTER_MIN_HEIGHT,
+            is_close_to_previous_character,
+            if (num_ammo_characters > 0) bounding_box.x - ammo_digit_bounding_boxes[num_ammo_characters - 1].right() else 0,
+            CHARACTER_MAX_SPACING,
         });
-        if (is_character_sized_bounding_box) {
+        if (is_character_sized_bounding_box and is_close_to_previous_character) {
             ammo_digit_bounding_boxes[num_ammo_characters] = bounding_box;
             num_ammo_characters += 1;
 
