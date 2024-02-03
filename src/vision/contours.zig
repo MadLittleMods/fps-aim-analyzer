@@ -529,17 +529,21 @@ pub fn traceContoursOnRgbImage(
     contours: []const []const ImagePoint,
     allocator: std.mem.Allocator,
 ) !RGBImage {
-    var output_rgb_image = rgb_image;
+    // We copy so that downstream usage won't have to conditionally `deinit()` based on
+    // whether there were any contours to trace.
+    const copy_pixels = try allocator.alloc(RGBPixel, rgb_image.pixels.len);
+    std.mem.copyForwards(RGBPixel, copy_pixels, rgb_image.pixels);
+
+    var output_rgb_image = RGBImage{
+        .width = rgb_image.width,
+        .height = rgb_image.height,
+        .pixels = copy_pixels,
+    };
     // Trace all of the contours onto the image and print it to give a holistic
     // picture of what's going on
     for (contours, 0..) |contour, contour_index| {
         const previous_rgb_image = output_rgb_image;
-        // Avoid freeing the image that was passed in
-        defer {
-            if (contour_index > 0) {
-                previous_rgb_image.deinit(allocator);
-            }
-        }
+        defer previous_rgb_image.deinit(allocator);
 
         output_rgb_image = try traceContourOnRgbImage(
             output_rgb_image,

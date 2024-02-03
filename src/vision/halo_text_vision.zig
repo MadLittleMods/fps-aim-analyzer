@@ -25,6 +25,14 @@ const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
 const decorateStringWithAnsiColor = print_utils.decorateStringWithAnsiColor;
 
+fn absoluteDifference(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    if (a > b) {
+        return a - b;
+    } else {
+        return b - a;
+    }
+}
+
 /// Basically representing the stage of cropping the process is at
 pub const ScreenshotRegion = enum {
     full_screen,
@@ -114,8 +122,8 @@ pub fn checkForChromaticAberrationConditionInHsvPixel(hsv_pixel: HSVPixel, condi
         ),
         .yellow => checkHsvPixelInRange(
             hsv_pixel,
-            // OpenCV: (14, 20, 157)
-            HSVPixel.init(0.077777, 0.078843, 0.615686),
+            // OpenCV: (20, 20, 157)
+            HSVPixel.init(0.111111, 0.078843, 0.615686),
             // OpenCV: (56, 195, 255)
             HSVPixel.init(0.311111, 0.764705, 1.0),
         ),
@@ -772,8 +780,8 @@ pub fn isolateHaloAmmoCounter(
         // Only consider bounding boxes that are big enough to be characters
         const is_character_sized_bounding_box = bounding_box.width > CHARACTER_MIN_WIDTH and
             bounding_box.height > CHARACTER_MIN_HEIGHT;
-        const is_close_to_previous_character = num_ammo_characters == 0 or (num_ammo_characters > 0 and
-            (bounding_box.x - ammo_digit_bounding_boxes[num_ammo_characters - 1].right()) <= CHARACTER_MAX_SPACING);
+        const is_close_to_previous_character = num_ammo_characters == 0 or
+            absoluteDifference(bounding_box.x, ammo_digit_bounding_boxes[num_ammo_characters - 1].right()) <= CHARACTER_MAX_SPACING;
         std.debug.print("\nis_character_sized_bounding_box={}, width {} > {}, height {} > {} ---  is_close_to_previous_character={}, {} <= {}", .{
             is_character_sized_bounding_box,
             bounding_box.width,
@@ -781,7 +789,9 @@ pub fn isolateHaloAmmoCounter(
             bounding_box.height,
             CHARACTER_MIN_HEIGHT,
             is_close_to_previous_character,
-            if (num_ammo_characters > 0) bounding_box.x - ammo_digit_bounding_boxes[num_ammo_characters - 1].right() else 0,
+            if (num_ammo_characters > 0) @as(isize, @intCast(
+                absoluteDifference(bounding_box.x, ammo_digit_bounding_boxes[num_ammo_characters - 1].right()),
+            )) else -1,
             CHARACTER_MAX_SPACING,
         });
         if (is_character_sized_bounding_box and is_close_to_previous_character) {
@@ -818,8 +828,8 @@ pub fn isolateHaloAmmoCounter(
 
 test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
-    // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
     const image_file_stem_name = std.fs.path.stem(image_file_path);
 
     const rgb_image = try RGBImage.loadImageFromFilePath(image_file_path, allocator);
