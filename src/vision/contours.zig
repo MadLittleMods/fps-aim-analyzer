@@ -574,7 +574,7 @@ pub fn traceContourOnRgbImage(
 
     for (contour_boundary) |contour_point| {
         const pixel_index = (contour_point.y * rgb_image.width) + contour_point.x;
-        const modifier: f32 = if (mutable_pixels[pixel_index].r == 1.0) 1.0 else 0.5;
+        const modifier: f32 = 1.0;
         mutable_pixels[pixel_index] = .{
             .r = tracing_color.r * modifier,
             .g = tracing_color.g * modifier,

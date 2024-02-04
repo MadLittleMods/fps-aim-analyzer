@@ -5,6 +5,7 @@ const image_conversion = @import("image_conversion.zig");
 const HSVPixel = image_conversion.HSVPixel;
 const HSVImage = image_conversion.HSVImage;
 const RGBImage = image_conversion.RGBImage;
+const BinaryImage = image_conversion.BinaryImage;
 const cropImage = image_conversion.cropImage;
 const maskImage = image_conversion.maskImage;
 const resizeImage = image_conversion.resizeImage;
@@ -62,6 +63,28 @@ pub fn Screenshot(comptime ImageType: type) type {
         /// Resolution height that the game is rendering at
         game_resolution_height: usize,
     };
+}
+
+// TODO: There is an optimization here where we could also take in the target coverage
+// and stop early if we find a bounding box that meets the coverage requirement. Or flip
+// the requirement and say when the target coverage is 90% for example, we could stop
+// early if we find 10% dead space first.
+fn calculateCoverageInBoundingBox(
+    binary_image: BinaryImage,
+    bounding_box: BoundingClientRect(usize),
+) f32 {
+    var active_count: usize = 0;
+    for (0..bounding_box.height) |bounding_y| {
+        const row_start_pixel_index = (bounding_box.top() + bounding_y) * binary_image.width;
+        for (0..bounding_box.width) |bounding_x| {
+            const current_pixel_index = row_start_pixel_index + (bounding_box.left() + bounding_x);
+            if (binary_image.pixels[current_pixel_index].value) {
+                active_count += 1;
+            }
+        }
+    }
+
+    return @as(f32, @floatFromInt(active_count)) / @as(f32, @floatFromInt(bounding_box.width * bounding_box.height));
 }
 
 pub const ChromaticAberrationCondition = enum {
@@ -122,8 +145,8 @@ pub fn checkForChromaticAberrationConditionInHsvPixel(hsv_pixel: HSVPixel, condi
         ),
         .yellow => checkHsvPixelInRange(
             hsv_pixel,
-            // OpenCV: (20, 20, 157)
-            HSVPixel.init(0.111111, 0.078843, 0.615686),
+            // OpenCV: (16, 20, 157)
+            HSVPixel.init(0.088888, 0.078843, 0.615686),
             // OpenCV: (56, 195, 255)
             HSVPixel.init(0.311111, 0.764705, 1.0),
         ),
@@ -135,8 +158,8 @@ pub fn checkForChromaticAberrationConditionInHsvPixel(hsv_pixel: HSVPixel, condi
             HSVPixel.init(0.077777, 0.725490, 1.0),
         ) or checkHsvPixelInRange(
             hsv_pixel,
-            // OpenCV: (155, 51, 138)
-            HSVPixel.init(0.861111, 0.2, 0.541176),
+            // OpenCV: (155, 51, 108)
+            HSVPixel.init(0.861111, 0.2, 0.423529),
             // OpenCV: (180, 202, 255)
             HSVPixel.init(1.0, 0.792156, 1.0),
         ),
@@ -397,7 +420,7 @@ test "findHaloChromaticAberrationText" {
 
         const test_cases = [_]FindHaloChromaticAberrationTextTestCase{
             // Three tests
-            //
+            // ----------------------------------------------
             .{
                 .label = "Top terminal of the three (horizontal)",
                 .x = 1424,
@@ -455,7 +478,7 @@ test "findHaloChromaticAberrationText" {
                 .height = 6,
             },
             // Six tests
-            //
+            // ----------------------------------------------
             .{
                 .label = "Top terminal of the six (horizontal)",
                 .x = 1451,
@@ -518,6 +541,27 @@ test "findHaloChromaticAberrationText" {
 
         const test_cases = [_]FindHaloChromaticAberrationTextTestCase{
             // 1(1) tests
+            //
+            .{
+                .label = "Bottom of second one (horizontal)",
+                .x = 1448,
+                .y = 899,
+                .width = 6,
+                .height = 1,
+            },
+        };
+
+        for (test_cases) |test_case| {
+            try _testFindHaloChromaticAberrationText(rgb_image, test_case, allocator);
+        }
+    }
+
+    {
+        const rgb_image = try RGBImage.loadImageFromFilePath("screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png", allocator);
+        defer rgb_image.deinit(allocator);
+
+        const test_cases = [_]FindHaloChromaticAberrationTextTestCase{
+            // 0(1) tests
             //
             .{
                 .label = "Bottom of second one (horizontal)",
@@ -716,7 +760,7 @@ pub fn isolateHaloAmmoCounter(
         // Create a horizontal kernel and dilate to connect text characters
         const dilate_kernel = try getStructuringElement(
             .rectangle,
-            5,
+            11,
             13,
             allocator,
         );
@@ -766,11 +810,16 @@ pub fn isolateHaloAmmoCounter(
     }
 
     // The "1" character is the skinniest character we expect to see in the ammo counter
+    // (9px wide). The other digits are 14px wide.
     const CHARACTER_MIN_WIDTH = 9;
     // All of the characters are the same height
     const CHARACTER_MIN_HEIGHT = 21;
     // The max spacing we will see is between "11" characters
     const CHARACTER_MAX_SPACING = 10;
+    // The amount of active pixels in the bounding box. Characters should be in big
+    // blocks of pixels with lots of coverage. This helps get rid of false-positives
+    // found elsewhere in the image.
+    const BOUNDING_BOX_COVERAGE = 0.835;
 
     // Find the bounding boxes around the contours that are big enough to be characters
     var num_ammo_characters: u4 = 0;
@@ -780,21 +829,34 @@ pub fn isolateHaloAmmoCounter(
         // Only consider bounding boxes that are big enough to be characters
         const is_character_sized_bounding_box = bounding_box.width > CHARACTER_MIN_WIDTH and
             bounding_box.height > CHARACTER_MIN_HEIGHT;
-        const is_close_to_previous_character = num_ammo_characters == 0 or
+        const is_horizontally_close_to_previous_character = num_ammo_characters == 0 or
             absoluteDifference(bounding_box.x, ammo_digit_bounding_boxes[num_ammo_characters - 1].right()) <= CHARACTER_MAX_SPACING;
-        std.debug.print("\nis_character_sized_bounding_box={}, width {} > {}, height {} > {} ---  is_close_to_previous_character={}, {} <= {}", .{
+        const has_enough_coverage = blk: {
+            const coverage = calculateCoverageInBoundingBox(chromatic_pattern_opened_mask, bounding_box);
+            break :blk coverage > BOUNDING_BOX_COVERAGE;
+        };
+
+        std.debug.print("\nis_character_sized_bounding_box={}, width {} > {}, height {} > {} --- " ++
+            "is_horizontally_close_to_previous_character={}, {} <= {} --- " ++
+            "has_enough_coverage={}, {d:.3} > {d:.3}", .{
             is_character_sized_bounding_box,
             bounding_box.width,
             CHARACTER_MIN_WIDTH,
             bounding_box.height,
             CHARACTER_MIN_HEIGHT,
-            is_close_to_previous_character,
+            is_horizontally_close_to_previous_character,
             if (num_ammo_characters > 0) @as(isize, @intCast(
                 absoluteDifference(bounding_box.x, ammo_digit_bounding_boxes[num_ammo_characters - 1].right()),
             )) else -1,
             CHARACTER_MAX_SPACING,
+            has_enough_coverage,
+            calculateCoverageInBoundingBox(chromatic_pattern_opened_mask, bounding_box),
+            BOUNDING_BOX_COVERAGE,
         });
-        if (is_character_sized_bounding_box and is_close_to_previous_character) {
+        if (is_character_sized_bounding_box and
+            is_horizontally_close_to_previous_character and
+            has_enough_coverage)
+        {
             ammo_digit_bounding_boxes[num_ammo_characters] = bounding_box;
             num_ammo_characters += 1;
 
@@ -828,8 +890,12 @@ pub fn isolateHaloAmmoCounter(
 
 test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
     const image_file_stem_name = std.fs.path.stem(image_file_path);
 
     const rgb_image = try RGBImage.loadImageFromFilePath(image_file_path, allocator);
@@ -881,7 +947,7 @@ test "Find Halo ammo counter region" {
         allocator.free(ammo_cropped_digits);
     }
 
-    std.testing.expect(ammo_cropped_digits.len == 2) catch |err| {
+    std.testing.expect(ammo_cropped_digits.len == 9) catch |err| {
         // Debug: Show what happened during the isolation process
         for (isolate_diagnostics.images.keys(), isolate_diagnostics.images.values(), 0..) |label, image, image_index| {
             const debug_file_name = try std.fmt.allocPrint(allocator, "{s} - step{}: {s}.png", .{
