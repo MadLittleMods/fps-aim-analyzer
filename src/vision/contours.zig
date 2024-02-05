@@ -667,6 +667,8 @@ pub fn mooreContourTracing(binary_image: BinaryImage, allocator: std.mem.Allocat
 }
 
 /// Find all contours in a binary image.
+///
+/// Starts from the bottom-left corner and scans upwards
 pub fn findContours(binary_image: BinaryImage, contour_method: ContourMethod, allocator: std.mem.Allocator) ![]const []const ImagePoint {
     var contours = std.ArrayList([]const ImagePoint).init(allocator);
     errdefer contours.deinit();

@@ -265,8 +265,8 @@ fn _testStructuringElement(
     );
 }
 
-/// The kernel slides through the image and only pixels that have neighbors matching the
-/// kernel are copied to the output/result.
+/// The kernel slides through the image and only pixels that have *all* neighbors matching the
+/// kernel (fit) are copied to the output/result.
 pub fn erode(
     binary_image: BinaryImage,
     /// Small-sized template/structuring element that is used to traverse an image. The
@@ -299,6 +299,8 @@ pub fn erode(
     };
 }
 
+/// The kernel slides through the image and only pixels that have some neighbors
+/// matching the kernel (hit) are copied to the output/result.
 pub fn dilate(
     binary_image: BinaryImage,
     /// Small-sized template/structuring element that is used to traverse an image. The
@@ -318,7 +320,9 @@ pub fn dilate(
         const row_start_pixel_index = y * binary_image.width;
         for (0..binary_image.width) |x| {
             const current_pixel_index = row_start_pixel_index + x;
-            if (checkPixelHit(x, y, binary_image, kernel)) {
+
+            const found_hit = checkPixelHit(x, y, binary_image, kernel);
+            if (found_hit) {
                 output_pixels[current_pixel_index] = BinaryPixel{ .value = true };
             }
         }
@@ -506,7 +510,7 @@ pub fn checkPixelHit(image_x: usize, image_y: usize, binary_image: BinaryImage, 
             const image_x_transposed = image_x + kernel_x - kernel_half_width;
             const image_pixel_index = image_row_start_pixel_index + image_x_transposed;
 
-            // If the kernel pixel is true, then the image pixel must also be true
+            // If the kernel pixel is true, then check for a hit in the image
             if (kernel.pixels[kernel_pixel_index].value and binary_image.pixels[image_pixel_index].value) {
                 // Hit
                 return true;
@@ -553,20 +557,19 @@ test "erode" {
     );
     defer eroded_binary_image.deinit(allocator);
 
-    const expected_eroded_pixels = binaryPixelsfromIntArray(&[_]u1{
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 1, 1, 0, 0, 0,
-        0, 0, 1, 1, 0, 0, 0, 0,
-        0, 0, 1, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-    });
     const expected_eroded_image = BinaryImage{
         .width = 8,
         .height = 8,
-        .pixels = &expected_eroded_pixels,
+        .pixels = &binaryPixelsfromIntArray(&[_]u1{
+            0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 1, 1, 0, 0, 0,
+            0, 0, 1, 1, 0, 0, 0, 0,
+            0, 0, 1, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+        }),
     };
 
     try expectImageEqual(
@@ -579,40 +582,96 @@ test "erode" {
 test "dilate" {
     const allocator = std.testing.allocator;
 
-    // Dilate with a cross structuring element
-    const cross_structuring_element = try getStructuringElement(
-        .cross,
-        3,
-        3,
-        allocator,
-    );
-    defer cross_structuring_element.deinit(allocator);
-    const dilated_binary_image = try dilate(
-        test_binary_image,
-        cross_structuring_element,
-        allocator,
-    );
-    defer dilated_binary_image.deinit(allocator);
+    {
+        // Dilate with a cross structuring element
+        const cross_structuring_element = try getStructuringElement(
+            .cross,
+            3,
+            3,
+            allocator,
+        );
+        defer cross_structuring_element.deinit(allocator);
+        const dilated_binary_image = try dilate(
+            test_binary_image,
+            cross_structuring_element,
+            allocator,
+        );
+        defer dilated_binary_image.deinit(allocator);
 
-    const expected_dilated_pixels = binaryPixelsfromIntArray(&[_]u1{
-        0, 0, 0, 1, 1, 1, 0, 0,
-        0, 0, 1, 1, 1, 1, 1, 0,
-        0, 1, 1, 1, 1, 1, 1, 0,
-        1, 1, 1, 1, 1, 1, 0, 0,
-        1, 1, 1, 1, 1, 0, 0, 0,
-        1, 1, 1, 1, 1, 0, 0, 0,
-        0, 1, 1, 1, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-    });
-    const expected_dilated_image = BinaryImage{
-        .width = 8,
-        .height = 8,
-        .pixels = &expected_dilated_pixels,
-    };
+        const expected_dilated_image = BinaryImage{
+            .width = 8,
+            .height = 8,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 1, 1, 1, 0, 0,
+                0, 0, 1, 1, 1, 1, 1, 0,
+                0, 1, 1, 1, 1, 1, 1, 0,
+                1, 1, 1, 1, 1, 1, 0, 0,
+                1, 1, 1, 1, 1, 0, 0, 0,
+                1, 1, 1, 1, 1, 0, 0, 0,
+                0, 1, 1, 1, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+            }),
+        };
 
-    try expectImageEqual(
-        dilated_binary_image,
-        expected_dilated_image,
-        allocator,
-    );
+        try expectImageEqual(
+            dilated_binary_image,
+            expected_dilated_image,
+            allocator,
+        );
+    }
+
+    {
+        // Dilate with a rect structuring element
+        const rect_structuring_element = try getStructuringElement(
+            .rectangle,
+            5,
+            5,
+            allocator,
+        );
+        defer rect_structuring_element.deinit(allocator);
+        const dilated_binary_image = try dilate(
+            BinaryImage{ .width = 12, .height = 12, .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            }) },
+            rect_structuring_element,
+            allocator,
+        );
+        defer dilated_binary_image.deinit(allocator);
+
+        const expected_dilated_image = BinaryImage{
+            .width = 12,
+            .height = 12,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+                0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+                0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+                0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+                0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+                0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            }),
+        };
+
+        try expectImageEqual(
+            dilated_binary_image,
+            expected_dilated_image,
+            allocator,
+        );
+    }
 }

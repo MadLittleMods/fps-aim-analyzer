@@ -821,7 +821,10 @@ pub fn isolateHaloAmmoCounter(
     // found elsewhere in the image.
     const BOUNDING_BOX_COVERAGE = 0.75;
 
-    // Find the bounding boxes around the contours that are big enough to be characters
+    // Find the bounding boxes around the contours that are big enough to be characters.
+    //
+    // We assume the list of contours is already sorted with the bottom-left most
+    // contours first (this is how `findContours` works right now so no need to sort).
     var num_ammo_characters: u4 = 0;
     var ammo_digit_bounding_boxes: [MAX_NUM_AMMO_CHARACTERS]BoundingClientRect(usize) = undefined;
     for (chromatic_contours) |contour| {
@@ -891,7 +894,7 @@ pub fn isolateHaloAmmoCounter(
 test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
-    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
@@ -899,7 +902,7 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/34.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
     const image_file_stem_name = std.fs.path.stem(image_file_path);
 
