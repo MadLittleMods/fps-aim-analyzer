@@ -138,8 +138,8 @@ pub fn checkForChromaticAberrationConditionInHsvPixel(hsv_pixel: HSVPixel, condi
         ),
         .cyan => checkHsvPixelInRange(
             hsv_pixel,
-            // OpenCV: (90, 34, 214)
-            HSVPixel.init(0.5, 0.133333, 0.839215),
+            // OpenCV: (88, 34, 214)
+            HSVPixel.init(0.488888, 0.133333, 0.839215),
             // OpenCV: (136, 255, 255)
             HSVPixel.init(0.755555, 1.0, 1.0),
         ),
@@ -419,7 +419,7 @@ test "findHaloChromaticAberrationText" {
         defer rgb_image.deinit(allocator);
 
         const test_cases = [_]FindHaloChromaticAberrationTextTestCase{
-            // Three tests
+            // (3)6 tests
             // ----------------------------------------------
             .{
                 .label = "Top terminal of the three (horizontal)",
@@ -477,7 +477,7 @@ test "findHaloChromaticAberrationText" {
                 .width = 1,
                 .height = 6,
             },
-            // Six tests
+            // 3(6) tests
             // ----------------------------------------------
             .{
                 .label = "Top terminal of the six (horizontal)",
@@ -760,7 +760,7 @@ pub fn isolateHaloAmmoCounter(
         // Create a horizontal kernel and dilate to connect text characters
         const dilate_kernel = try getStructuringElement(
             .rectangle,
-            11,
+            13,
             13,
             allocator,
         );
@@ -819,7 +819,7 @@ pub fn isolateHaloAmmoCounter(
     // The amount of active pixels in the bounding box. Characters should be in big
     // blocks of pixels with lots of coverage. This helps get rid of false-positives
     // found elsewhere in the image.
-    const BOUNDING_BOX_COVERAGE = 0.835;
+    const BOUNDING_BOX_COVERAGE = 0.80;
 
     // Find the bounding boxes around the contours that are big enough to be characters
     var num_ammo_characters: u4 = 0;
@@ -892,10 +892,14 @@ test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/34.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
     const image_file_stem_name = std.fs.path.stem(image_file_path);
 
     const rgb_image = try RGBImage.loadImageFromFilePath(image_file_path, allocator);
