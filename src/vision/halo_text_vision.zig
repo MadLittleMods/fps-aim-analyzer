@@ -819,7 +819,7 @@ pub fn isolateHaloAmmoCounter(
     // The amount of active pixels in the bounding box. Characters should be in big
     // blocks of pixels with lots of coverage. This helps get rid of false-positives
     // found elsewhere in the image.
-    const BOUNDING_BOX_COVERAGE = 0.80;
+    const BOUNDING_BOX_COVERAGE = 0.75;
 
     // Find the bounding boxes around the contours that are big enough to be characters
     var num_ammo_characters: u4 = 0;
@@ -898,7 +898,8 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/34.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
     const image_file_stem_name = std.fs.path.stem(image_file_path);
 
