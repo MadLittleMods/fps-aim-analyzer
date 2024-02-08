@@ -31,7 +31,7 @@ pub const ContourMethod = enum {
 };
 
 /// Image coordinate system that allows out of bounds coordinates.
-/// Top-left is (0, 0),bottom-right is (width, height).
+/// Top-left is (0, 0), bottom-right is (width, height).
 pub const CanvasPoint = struct {
     x: isize,
     y: isize,
@@ -52,7 +52,7 @@ pub const CanvasPoint = struct {
 };
 
 /// A coordinate that exists within an image.
-/// Top-left is (0, 0),bottom-right is (width, height).
+/// Top-left is (0, 0), bottom-right is (width, height).
 pub const ImagePoint = struct {
     x: usize,
     y: usize,

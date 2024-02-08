@@ -1,5 +1,12 @@
 const std = @import("std");
 
+pub fn Coordinate(comptime NumberType: type) type {
+    return struct {
+        x: NumberType,
+        y: NumberType,
+    };
+}
+
 pub const Dimensions = struct {
     width: i16,
     height: i16,

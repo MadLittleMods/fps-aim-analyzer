@@ -112,7 +112,9 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                 const ammo_cropped_digits = try isolateHaloAmmoCounter(
                     .{
                         .image = rgb_image,
-                        .region = .full_screen,
+                        .crop_region = .full_screen,
+                        .crop_region_x = 0,
+                        .crop_region_y = 0,
                         // Since these are full screen images, the pre_crop_width and
                         // pre_crop_height are the same as the width and height
                         .pre_crop_width = rgb_image.width,
