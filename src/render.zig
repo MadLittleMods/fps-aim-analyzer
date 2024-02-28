@@ -10,7 +10,7 @@ const image_conversion = @import("vision/image_conversion.zig");
 /// entire positive range of the unsigned integer type.
 fn GetEncompassingSignedInt(comptime unsigned_T: type) type {
     if (@typeInfo(unsigned_T).Int.signedness == .signed) {
-        @panic("This function only makes sense to use with unsigned integer types but you passed in a signed integer.");
+        @compileError("This function only makes sense to use with unsigned integer types but you passed in a signed integer.");
     }
 
     return @Type(.{
