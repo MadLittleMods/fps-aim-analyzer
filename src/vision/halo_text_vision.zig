@@ -100,12 +100,42 @@ fn calculateCoverageInBoundingBox(
     return @as(f32, @floatFromInt(active_count)) / @as(f32, @floatFromInt(bounding_box.width * bounding_box.height));
 }
 
+pub const HSVBounds = struct {
+    lower: HSVPixel,
+    upper: HSVPixel,
+};
+
 pub const ChromaticAberrationCondition = enum {
     blue,
     cyan,
     yellow,
     red,
 };
+
+pub const ChromaticAberrationConditionToBoundsMap = std.EnumArray(ChromaticAberrationCondition, []const HSVBounds).init(.{
+    .blue = &[_]HSVBounds{ .{
+        .lower = HSVPixel.init(0.5, 0.133333, 0.745098),
+        .upper = HSVPixel.init(0.844444, 1.0, 1.0),
+    }, .{
+        .lower = HSVPixel.init(0.57, 0.64, 0.49),
+        .upper = HSVPixel.init(0.66, 0.9, 0.745098),
+    } },
+    .cyan = &[_]HSVBounds{.{
+        .lower = HSVPixel.init(0.488888, 0.133333, 0.839215),
+        .upper = HSVPixel.init(0.755555, 1.0, 1.0),
+    }},
+    .yellow = &[_]HSVBounds{.{
+        .lower = HSVPixel.init(0.088888, 0.078843, 0.615686),
+        .upper = HSVPixel.init(0.311111, 0.835, 1.0),
+    }},
+    .red = &[_]HSVBounds{ .{
+        .lower = HSVPixel.init(0.0, 0.196078, 0.494117),
+        .upper = HSVPixel.init(0.077777, 0.792156, 1.0),
+    }, .{
+        .lower = HSVPixel.init(0.861111, 0.2, 0.423529),
+        .upper = HSVPixel.init(1.0, 0.792156, 1.0),
+    } },
+});
 
 const PossibleCondition = struct {
     next_unmet_condition: ?ChromaticAberrationCondition,
@@ -139,47 +169,17 @@ pub fn checkForChromaticAberrationConditionInHsvPixel(
     hsv_pixel: HSVPixel,
     condition: ChromaticAberrationCondition,
 ) bool {
-    return switch (condition) {
-        .blue => checkHsvPixelInRange(
+    for (ChromaticAberrationConditionToBoundsMap.get(condition)) |bounds| {
+        if (checkHsvPixelInRange(
             hsv_pixel,
-            // OpenCV:
-            //  - h: [0, 180]
-            //  - s: [0, 255]
-            //  - v: [0, 255]
-            //
-            // OpenCV: (90, 34, 190)
-            HSVPixel.init(0.5, 0.133333, 0.745098),
-            // OpenCV: (152, 255, 255)
-            HSVPixel.init(0.844444, 1.0, 1.0),
-        ),
-        .cyan => checkHsvPixelInRange(
-            hsv_pixel,
-            // OpenCV: (88, 34, 214)
-            HSVPixel.init(0.488888, 0.133333, 0.839215),
-            // OpenCV: (136, 255, 255)
-            HSVPixel.init(0.755555, 1.0, 1.0),
-        ),
-        .yellow => checkHsvPixelInRange(
-            hsv_pixel,
-            // OpenCV: (16, 20, 157)
-            HSVPixel.init(0.088888, 0.078843, 0.615686),
-            // OpenCV: (56, 195, 255)
-            HSVPixel.init(0.311111, 0.764705, 1.0),
-        ),
-        .red => checkHsvPixelInRange(
-            hsv_pixel,
-            // OpenCV: (0, 50, 126)
-            HSVPixel.init(0.0, 0.196078, 0.494117),
-            // OpenCV: (14, 185, 255)
-            HSVPixel.init(0.077777, 0.725490, 1.0),
-        ) or checkHsvPixelInRange(
-            hsv_pixel,
-            // OpenCV: (155, 51, 108)
-            HSVPixel.init(0.861111, 0.2, 0.423529),
-            // OpenCV: (180, 202, 255)
-            HSVPixel.init(1.0, 0.792156, 1.0),
-        ),
-    };
+            bounds.lower,
+            bounds.upper,
+        )) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /// Checks for a series of blue, cyan, yellow, red pixels in order within a buffer which
@@ -991,10 +991,14 @@ pub fn isolateHaloAmmoCounter(
             // Only consider bounding boxes that are big enough to be characters.
             //
             // TODO: We might also want to add the dilation padding to these expected measurements.
+            //
+            // TODO: We probably want have the minimum width be 2x characters long given
+            // the ammo is always padded with a zero up to two characters.
             const is_character_sized_bounding_box = bounding_box.width > CHARACTER_MIN_WIDTH and
                 bounding_box.height > CHARACTER_MIN_HEIGHT;
             // We assume that characters we're looking for have a lot of chromatic
-            // aberration as opposed errant false-positives.
+            // aberration as opposed errant false-positives which may have large
+            // bounding boxes but very little coverage inside.
             const has_enough_coverage = blk: {
                 const coverage = calculateCoverageInBoundingBox(chromatic_pattern_opened_mask, bounding_box);
                 break :blk coverage > BOUNDING_BOX_COVERAGE;
@@ -1035,7 +1039,16 @@ pub fn splitAmmoCounterRegionIntoDigits(
     diagnostics: ?*IsolateDiagnostics,
     allocator: std.mem.Allocator,
 ) ![]const RGBImage {
-    _ = diagnostics;
+    const hsv_image = try rgbToHsvImage(screenshot.image, allocator);
+    defer hsv_image.deinit(allocator);
+
+    // Find the chromatic aberration text
+    const chromatic_pattern_hsv_img = try findHaloChromaticAberrationText(hsv_image, allocator);
+    defer chromatic_pattern_hsv_img.deinit(allocator);
+    // Debug: Pixels after finding chromatic aberration pattern
+    if (diagnostics) |diag| {
+        try diag.addImage("digits_chromatic_pattern_hsv_img", chromatic_pattern_hsv_img, allocator);
+    }
 
     const ammo_cropped_digits = try allocator.alloc(RGBImage, 1);
 
