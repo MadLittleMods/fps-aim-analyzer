@@ -830,9 +830,12 @@ pub fn normalizeHaloScreenshot(
     return resized_screenshot;
 }
 
-// The target normalized resolution we want to work with in all of our detection methods
-// (for consistent UI character size)
+/// The target normalized resolution we want to work with in all of our detection methods
+/// (for consistent UI character size)
 const DESIRED_GAME_RESOLUTION_HEIGHT: f32 = 1080;
+/// The minimum resolution the game needs to be rendered at to have enough detail for
+/// our detection methods to work.
+const MIN_GAME_RESOLUTION_HEIGHT: f32 = 720;
 /// We only expect 2-3 characters in the ammo counter most of the time. 4 characters
 /// seems possible and 5 doesn't seem like it will happen at all.
 pub const MAX_NUM_AMMO_CHARACTERS = 5;
@@ -853,13 +856,13 @@ const CHARACTER_MIN_SPACING = 4;
 const BOUNDING_BOX_COVERAGE = 0.75;
 
 /// Should be big enough to connect ammo characters together
-const DILATE_WIDTH: usize = 13;
+const CHARACTER_DILATE_WIDTH: usize = 13;
 /// Should be big enough to connect various pieces of detected chromatic aberration from a character together vertically
-const DILATE_HEIGHT: usize = 13;
+const CHARACTER_DILATE_HEIGHT: usize = 13;
 comptime {
     const dilate_width_min_size = (2 * @divTrunc(CHARACTER_MAX_SPACING, 2)) + 1;
     comptime_assert(
-        DILATE_WIDTH > dilate_width_min_size,
+        CHARACTER_DILATE_WIDTH > dilate_width_min_size,
         "Dilate width size is too small and we will probably have problems connecting characters together. " ++
             "Characters can be spaced {}px apart. Since the dilate kernel is centered around a given pixel it will only " ++
             "extend out by half of the kernel width in each direction. So the dilate kernel should be at least {}px wide " ++
@@ -877,9 +880,34 @@ pub fn isolateHaloAmmoCounter(
     allocator: std.mem.Allocator,
 ) !?Screenshot(RGBImage) {
     assert(
-        screenshot.game_resolution_height == DESIRED_GAME_RESOLUTION_HEIGHT,
-        "The screenshot must be scaled so the UI is equivalent to {}p resolution",
-        .{DESIRED_GAME_RESOLUTION_HEIGHT},
+        screenshot.game_resolution_height > MIN_GAME_RESOLUTION_HEIGHT,
+        "The screenshot must be rendered >= {d}p resolution to have enough detail for us to parse" ++
+            "(game resolution: {d}x{d})",
+        .{
+            MIN_GAME_RESOLUTION_HEIGHT,
+            screenshot.game_resolution_height,
+            screenshot.game_resolution_width,
+            screenshot.game_resolution_height,
+        },
+    );
+    assert(
+        screenshot.pre_crop_height == DESIRED_GAME_RESOLUTION_HEIGHT,
+        "The screenshot must be scaled so the UI is equivalent to {d}p resolution but saw {d}p " ++
+            "(you probably need to use `normalizeHaloScreenshot`)" ++
+            "(pre-crop resolution: {d}x{d}) (game resolution: {d}x{d}) (image crop: {s} {d}x{d}) (image resolution: {d}x{d})",
+        .{
+            DESIRED_GAME_RESOLUTION_HEIGHT,
+            screenshot.pre_crop_height,
+            screenshot.pre_crop_width,
+            screenshot.pre_crop_height,
+            screenshot.game_resolution_width,
+            screenshot.game_resolution_height,
+            @tagName(screenshot.crop_region),
+            screenshot.crop_region_x,
+            screenshot.crop_region_y,
+            screenshot.image.width,
+            screenshot.image.height,
+        },
     );
 
     const hsv_image = try rgbToHsvImage(screenshot.image, allocator);
@@ -932,8 +960,8 @@ pub fn isolateHaloAmmoCounter(
         // Create a horizontal kernel and dilate to connect text characters
         const dilate_kernel = try getStructuringElement(
             .rectangle,
-            DILATE_WIDTH,
-            DILATE_HEIGHT,
+            CHARACTER_DILATE_WIDTH,
+            CHARACTER_DILATE_HEIGHT,
             allocator,
         );
         defer dilate_kernel.deinit(allocator);
@@ -1119,13 +1147,13 @@ pub fn findHaloAmmoDigits(
 test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/34.png";
-    // const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
@@ -1206,7 +1234,12 @@ test "Find Halo ammo counter region" {
                 defer allocator.free(debug_full_file_path);
 
                 try image.saveImageToFilePath(debug_full_file_path, allocator);
-                try printLabeledImage(debug_full_file_path, image, .kitty, allocator);
+                // For small images, make it easier to pixel peep
+                if (image.width < 200 and image.height < 200) {
+                    try printLabeledImage(debug_full_file_path, image, .half_block, allocator);
+                } else {
+                    try printLabeledImage(debug_full_file_path, image, .kitty, allocator);
+                }
             }
 
             // Show the ammo counter digits that were found
@@ -1237,7 +1270,7 @@ fn futureAmmoHeuristicBoundingClientRect(ammo_counter_bounding_box: BoundingClie
     const HORIZONTAL_PADDING_LEFT = (NUM_PADDING_CHARACTERS * (CHARACTER_MAX_WIDTH + CHARACTER_MAX_SPACING));
 
     // The amount of vertical slop just to capture some surroundings around the characters
-    const VERTICAL_PADDING = @divTrunc(DILATE_HEIGHT, 2);
+    const VERTICAL_PADDING = @divTrunc(CHARACTER_DILATE_HEIGHT, 2);
     const MIN_HEIGHT = CHARACTER_MIN_HEIGHT + (2 * VERTICAL_PADDING);
 
     return BoundingClientRect(usize){
