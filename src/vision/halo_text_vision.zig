@@ -182,39 +182,68 @@ pub fn checkForChromaticAberrationConditionInHsvPixel(
     return false;
 }
 
+pub const PatternSearchResult = struct {
+    found_pattern: bool,
+    start_index: usize,
+    end_index: usize,
+};
+
 /// Checks for a series of blue, cyan, yellow, red pixels in order within a buffer which
 /// indicates the chromatic aberration text in Halo.
-pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPixel) bool {
+pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPixel) PatternSearchResult {
     // We want to check to see that the following conditions are met in order
     var conditions = std.EnumArray(ChromaticAberrationCondition, bool).initDefault(false, .{});
     const num_conditions = @typeInfo(ChromaticAberrationCondition).Enum.fields.len;
 
+    var start_pattern_pixel_index: usize = 0;
+    var end_pattern_pixel_index: usize = 0;
+
     // There aren't enough pixel values to meet all of the conditions so we can stop early
     if (hsv_pixel_buffer.len < num_conditions) {
-        return false;
+        return .{
+            .found_pattern = false,
+            .start_index = start_pattern_pixel_index,
+            .end_index = end_pattern_pixel_index,
+        };
     }
 
     for (hsv_pixel_buffer, 0..) |hsv_pixel, pixel_index| {
         const possible_condition = _findNextUnmetCondition(conditions);
         const optional_next_unmet_condition = possible_condition.next_unmet_condition;
         const num_conditions_left = possible_condition.num_conditions_left;
+        const is_first_condition = num_conditions_left == num_conditions;
 
         // We've met all the conditions (no more conditions) so we can stop early
         if (optional_next_unmet_condition == null) {
-            return true;
+            return .{
+                .found_pattern = true,
+                .start_index = start_pattern_pixel_index,
+                .end_index = end_pattern_pixel_index,
+            };
         }
 
         // There aren't enough pixel values left to meet all of the conditions so we can
         // stop early
         if (hsv_pixel_buffer.len - pixel_index < num_conditions_left) {
-            return false;
+            return .{
+                .found_pattern = false,
+                .start_index = start_pattern_pixel_index,
+                .end_index = end_pattern_pixel_index,
+            };
         }
 
         if (optional_next_unmet_condition) |next_unmet_condition| {
-            conditions.set(next_unmet_condition, checkForChromaticAberrationConditionInHsvPixel(
+            const found_condition = checkForChromaticAberrationConditionInHsvPixel(
                 hsv_pixel,
                 next_unmet_condition,
-            ));
+            );
+            conditions.set(next_unmet_condition, found_condition);
+
+            // Keep track where the pattern starts and ends in the buffer
+            if (found_condition and is_first_condition) {
+                start_pattern_pixel_index = pixel_index;
+            }
+            end_pattern_pixel_index = pixel_index;
         } else {
             @panic("Programmer error: We should have checked whether `optional_next_unmet_condition` " ++
                 "was null before this point and return early because there are no more conditions to meet. " ++
@@ -226,11 +255,19 @@ pub fn checkForChromaticAberrationInPixelBuffer(hsv_pixel_buffer: []const HSVPix
     var condition_iterator = conditions.iterator();
     while (condition_iterator.next()) |entry| {
         if (!entry.value.*) {
-            return false;
+            return .{
+                .found_pattern = false,
+                .start_index = start_pattern_pixel_index,
+                .end_index = end_pattern_pixel_index,
+            };
         }
     }
 
-    return true;
+    return .{
+        .found_pattern = true,
+        .start_index = start_pattern_pixel_index,
+        .end_index = end_pattern_pixel_index,
+    };
 }
 
 pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.Allocator) !HSVImage {
@@ -246,7 +283,9 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
     for (0..hsv_image.height) |y| {
         const row_start_pixel_index = y * hsv_image.width;
         const row_end_pixel_index = row_start_pixel_index + hsv_image.width;
-        for (0..hsv_image.width) |x| {
+
+        var x: usize = 0;
+        while (x < hsv_image.width) {
             // Look at the next X pixels in the row
             const current_pixel_index = row_start_pixel_index + x;
             // Make sure to not over-run the end of the row
@@ -254,20 +293,25 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
             const pixel_buffer = hsv_image.pixels[current_pixel_index..buffer_end_pixel_index];
 
             // Check if the pixels in the buffer match the chromatic aberration pattern
-            const has_chromatic_aberration = checkForChromaticAberrationInPixelBuffer(pixel_buffer);
-            if (has_chromatic_aberration) {
+            const chromatic_aberration_buffer_results = checkForChromaticAberrationInPixelBuffer(pixel_buffer);
+            if (chromatic_aberration_buffer_results.found_pattern) {
                 // Copy the pixels that match the chromatic aberration pattern from the buffer into the output
+                const start_index = current_pixel_index + chromatic_aberration_buffer_results.start_index;
+                const end_index = current_pixel_index + chromatic_aberration_buffer_results.end_index + 1;
                 @memcpy(
-                    output_hsv_pixels[current_pixel_index..buffer_end_pixel_index],
-                    hsv_image.pixels[current_pixel_index..buffer_end_pixel_index],
+                    output_hsv_pixels[start_index..end_index],
+                    hsv_image.pixels[start_index..end_index],
                 );
 
-                // TODO: There is a slight optimization we could additionally do by
-                //       skipping over the pixels that we know are part of the chromatic
-                //       aberration pattern. For example, if we find a match at index
-                //       10, we know that *at least* the next 4 pixels are exclusively
-                //       part of the this pattern. We could even skip to the pixel where
-                //       the last condition was met.
+                // This is a slight optimization we do by skipping over the pixels that
+                // we know are part of the chromatic aberration pattern. For example, if
+                // we find a match at index 10, we know that *at least* the next 4
+                // pixels are exclusively part of the this pattern. We even skip to the
+                // pixel where the last condition was met.
+                const pattern_length = end_index - start_index;
+                x += pattern_length;
+            } else {
+                x += 1;
             }
         }
     }
@@ -292,10 +336,12 @@ pub fn findHaloChromaticAberrationText(hsv_image: HSVImage, allocator: std.mem.A
             const pixel_buffer = column_pixel_buffer[0..column_pixel_buffer_size];
 
             // Check if the pixels in the buffer match the chromatic aberration pattern
-            const has_chromatic_aberration = checkForChromaticAberrationInPixelBuffer(pixel_buffer);
-            if (has_chromatic_aberration) {
+            const chromatic_aberration_buffer_results = checkForChromaticAberrationInPixelBuffer(pixel_buffer);
+            if (chromatic_aberration_buffer_results.found_pattern) {
                 // Copy the pixels that match the chromatic aberration pattern from the buffer into the output
-                for (0..column_pixel_buffer_size) |i| {
+                const start = chromatic_aberration_buffer_results.start_index;
+                const end = chromatic_aberration_buffer_results.end_index + 1;
+                for (start..end) |i| {
                     const current_pixel_index = ((y + i) * hsv_image.width) + x;
                     output_hsv_pixels[current_pixel_index] = hsv_image.pixels[current_pixel_index];
                 }
@@ -885,7 +931,6 @@ pub fn isolateHaloAmmoCounter(
             "(game resolution: {d}x{d})",
         .{
             MIN_GAME_RESOLUTION_HEIGHT,
-            screenshot.game_resolution_height,
             screenshot.game_resolution_width,
             screenshot.game_resolution_height,
         },
