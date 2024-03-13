@@ -882,20 +882,23 @@ const DESIRED_GAME_RESOLUTION_HEIGHT: f32 = 1080;
 /// The minimum resolution the game needs to be rendered at to have enough detail for
 /// our detection methods to work.
 const MIN_GAME_RESOLUTION_HEIGHT: f32 = 720;
+/// The ammo counter is 0-padded to two characters ("01", "03", "00", etc)
+pub const MIN_NUM_AMMO_CHARACTERS = 2;
 /// We only expect 2-3 characters in the ammo counter most of the time. 4 characters
 /// seems possible and 5 doesn't seem like it will happen at all.
 pub const MAX_NUM_AMMO_CHARACTERS = 5;
 /// The "1" character (9px wide) is the skinniest character we expect to see in the
 /// ammo counter. The other digits are 14px wide. (at 1080p resolution)
 const CHARACTER_MIN_WIDTH = 9;
-const CHARACTER_MAX_WIDTH = 14;
+// "4" character seems to be the widest (18px wide) (at 1080p resolution)
+const CHARACTER_MAX_WIDTH = 18;
 // All of the characters are the same height (21px tall) (at 1080p resolution)
-const CHARACTER_MIN_HEIGHT = 21;
+const CHARACTER_MIN_HEIGHT = 22;
 /// The max spacing we will see is between "11" characters.
 /// Characters are centered in their position. (at 1080p resolution)
 const CHARACTER_MAX_SPACING = 10;
-/// The min spacing we will see is between any other character like "36" (at 1080p resolution)
-const CHARACTER_MIN_SPACING = 4;
+/// The min spacing we will see is between "44" (at 1080p resolution)
+const CHARACTER_MIN_SPACING = 1;
 /// The amount of active pixels in the bounding box. Characters should be in big
 /// blocks of pixels with lots of coverage. This helps get rid of false-positives
 /// found elsewhere in the image.
@@ -1107,6 +1110,11 @@ pub fn isolateHaloAmmoCounter(
     };
 }
 
+pub const Boundary = struct {
+    start_index: usize,
+    end_index: usize,
+};
+
 pub fn splitAmmoCounterRegionIntoDigits(
     screenshot: Screenshot(RGBImage),
     diagnostics: ?*IsolateDiagnostics,
@@ -1123,17 +1131,84 @@ pub fn splitAmmoCounterRegionIntoDigits(
         try diag.addImage("digits_chromatic_pattern_hsv_img", chromatic_pattern_hsv_img, allocator);
     }
 
-    const ammo_cropped_digits = try allocator.alloc(RGBImage, 1);
+    // Scan each column of the image where each digit starts and ends horizontally
+    var number_of_boundaries: usize = 0;
+    var character_boundary_accumulator: [MAX_NUM_AMMO_CHARACTERS]Boundary = undefined;
+    var in_character = false;
+    for (0..chromatic_pattern_hsv_img.width) |x| {
+        const is_column_active = column_blk: for (0..chromatic_pattern_hsv_img.height) |y| {
+            const pixel_index = (y * chromatic_pattern_hsv_img.width) + x;
+            const pixel = chromatic_pattern_hsv_img.pixels[pixel_index];
+            const is_pixel_active = pixel.h > 0.0 or pixel.s > 0.0 or pixel.v > 0.0;
+            if (is_pixel_active) {
+                break :column_blk is_pixel_active;
+            }
+        } else {
+            break :column_blk false;
+        };
 
-    // TODO: Actually split and not just pass-through
-    const copy_pixels = try allocator.alloc(RGBPixel, screenshot.image.pixels.len);
-    std.mem.copyForwards(RGBPixel, copy_pixels, screenshot.image.pixels);
+        if (is_column_active) {
+            if (!in_character) {
+                character_boundary_accumulator[number_of_boundaries].start_index = x;
+                in_character = true;
+            }
+        } else {
+            // Smear over any small gaps in the characters by making sure we have
+            // enough width to be the smallest character we expect
+            if (in_character) {
+                const found_width = (x - character_boundary_accumulator[number_of_boundaries].start_index) + 1;
+                if (found_width >= CHARACTER_MIN_WIDTH) {
+                    character_boundary_accumulator[number_of_boundaries].end_index = x;
+                    in_character = false;
+                    number_of_boundaries += 1;
+                }
+            }
+        }
+    }
 
-    ammo_cropped_digits[0] = RGBImage{
-        .width = screenshot.image.width,
-        .height = screenshot.image.height,
-        .pixels = copy_pixels,
-    };
+    // Sanity check that we found enough characters
+    if (number_of_boundaries < MIN_NUM_AMMO_CHARACTERS) {
+        std.log.err("Unable to detect enough characters in ammo counter. Found {d} characters but we expect at least {d}", .{
+            number_of_boundaries,
+            MIN_NUM_AMMO_CHARACTERS,
+        });
+        return error.NotAbleToDetectEnoughCharactersInAmmoCounter;
+    }
+
+    const ammo_cropped_digits = try allocator.alloc(RGBImage, number_of_boundaries);
+
+    const capture_width = CHARACTER_MAX_WIDTH + 8;
+    const capture_height = CHARACTER_MIN_HEIGHT + 6;
+
+    for (0..number_of_boundaries) |boundary_index| {
+        const found_start_x_index = character_boundary_accumulator[boundary_index].start_index;
+        const found_width = (character_boundary_accumulator[boundary_index].end_index - character_boundary_accumulator[boundary_index].start_index) + 1;
+
+        if (found_width < CHARACTER_MIN_WIDTH) {
+            std.log.err("Found character width {d}px should be >= {d}px.", .{
+                found_width,
+                CHARACTER_MIN_WIDTH,
+            });
+            return error.DetectedCharacterWidthTooSmall;
+        }
+
+        if (found_width > capture_width) {
+            std.log.err("Found character width {d}px should be <= {d}px.", .{
+                found_width,
+                CHARACTER_MAX_WIDTH,
+            });
+            return error.DetectedCharacterWidthTooBig;
+        }
+
+        ammo_cropped_digits[boundary_index] = try cropImage(
+            screenshot.image,
+            found_start_x_index - ((capture_width - found_width) / 2),
+            (@max(capture_height, screenshot.image.height) - @min(capture_height, screenshot.image.height)) / 2,
+            capture_width,
+            @min(capture_height, screenshot.image.height),
+            allocator,
+        );
+    }
 
     return ammo_cropped_digits;
 }
@@ -1196,9 +1271,9 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
-    // const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/34.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
