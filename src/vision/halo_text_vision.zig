@@ -1290,10 +1290,10 @@ pub fn findHaloAmmoDigits(
 test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
-    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/34.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";

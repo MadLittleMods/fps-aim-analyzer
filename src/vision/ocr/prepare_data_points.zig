@@ -93,7 +93,7 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
     defer iterable_dir.close();
 
     var it = iterable_dir.iterate();
-    while (try it.next()) |entry| {
+    file_blk: while (try it.next()) |entry| {
         switch (entry.kind) {
             .file, .sym_link => {
                 const full_file_path = try std.fs.path.join(allocator, &.{
@@ -103,6 +103,19 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                 defer allocator.free(full_file_path);
                 std.log.debug("entry.name={s} {s}", .{ entry.name, full_file_path });
                 const file_stem_name = std.fs.path.stem(entry.name);
+
+                const expected_digits = try getExpectedDigitsFromFileName(entry.name);
+                // TODO: Handle zero ("0") digits
+                for (expected_digits) |expected_digit| {
+                    if (expected_digit == 0) {
+                        continue :file_blk;
+                    }
+                }
+                // TODO: Handle red digits
+                // (string includes/contains substring)
+                if (std.mem.indexOf(u8, entry.name, "(red)")) |_| {
+                    continue :file_blk;
+                }
 
                 const rgb_image = try RGBImage.loadImageFromFilePath(full_file_path, allocator);
                 defer rgb_image.deinit(allocator);
@@ -135,8 +148,6 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                         }
                         allocator.free(ammo_cropped_digits);
                     }
-
-                    const expected_digits = try getExpectedDigitsFromFileName(entry.name);
 
                     if (ammo_cropped_digits.len != expected_digits.len) {
                         // Debug: Show what happened during the isolation process
