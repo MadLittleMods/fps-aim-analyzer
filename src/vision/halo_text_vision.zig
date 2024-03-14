@@ -5,6 +5,7 @@ const comptime_assert = assertions.comptime_assert;
 const render_utils = @import("../utils/render_utils.zig");
 const Coordinate = render_utils.Coordinate;
 const BoundingClientRect = render_utils.BoundingClientRect;
+const findIntersection = render_utils.findIntersection;
 const image_conversion = @import("image_conversion.zig");
 const HSVPixel = image_conversion.HSVPixel;
 const HSVImage = image_conversion.HSVImage;
@@ -1200,14 +1201,36 @@ pub fn splitAmmoCounterRegionIntoDigits(
             return error.DetectedCharacterWidthTooBig;
         }
 
-        ammo_cropped_digits[boundary_index] = try cropImage(
-            screenshot.image,
-            found_start_x_index - ((capture_width - found_width) / 2),
-            (@max(capture_height, screenshot.image.height) - @min(capture_height, screenshot.image.height)) / 2,
-            capture_width,
-            @min(capture_height, screenshot.image.height),
-            allocator,
-        );
+        const screenshot_box = BoundingClientRect(isize){
+            .x = 0,
+            .y = 0,
+            .width = @as(isize, @intCast(screenshot.image.width)),
+            .height = @as(isize, @intCast(screenshot.image.height)),
+        };
+        const capture_box = BoundingClientRect(isize){
+            .x = @as(isize, @intCast(found_start_x_index)) - @divTrunc(@as(isize, @intCast(capture_width - found_width)), 2),
+            .y = @divTrunc(@as(isize, @intCast(screenshot.image.height)) - @as(isize, @intCast(capture_height)), 2),
+            .width = @as(isize, @intCast(capture_width)),
+            .height = @as(isize, @intCast(capture_height)),
+        };
+        const maybe_overlap_box = findIntersection(screenshot_box, capture_box);
+
+        if (maybe_overlap_box) |actual_capture_box| {
+            ammo_cropped_digits[boundary_index] = try cropImage(
+                screenshot.image,
+                @as(usize, @intCast(actual_capture_box.x)),
+                @as(usize, @intCast(actual_capture_box.y)),
+                @as(usize, @intCast(actual_capture_box.width)),
+                @as(usize, @intCast(actual_capture_box.height)),
+                allocator,
+            );
+        } else {
+            std.log.err("Expected capture overlap but didn't find any ({any} {any}). This is probably programmer error.", .{
+                screenshot_box,
+                capture_box,
+            });
+            return error.ExpectedCaptureOverlap;
+        }
     }
 
     return ammo_cropped_digits;
@@ -1270,8 +1293,8 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
-    // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/34.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
@@ -1320,60 +1343,64 @@ test "Find Halo ammo counter region" {
 
     var isolate_diagnostics = IsolateDiagnostics.init(allocator);
     defer isolate_diagnostics.deinit(allocator);
-    const maybe_results = try findHaloAmmoDigits(
-        full_screenshot, //cropped_screenshot,
-        &isolate_diagnostics,
-        allocator,
-    );
-    if (maybe_results) |find_results| {
-        const ammo_cropped_digits = find_results.digit_images;
-        defer {
-            for (ammo_cropped_digits) |ammo_cropped_digit| {
-                ammo_cropped_digit.deinit(allocator);
+    _ = blk: {
+        const maybe_results = findHaloAmmoDigits(
+            full_screenshot, //cropped_screenshot,
+            &isolate_diagnostics,
+            allocator,
+        ) catch |err| break :blk err;
+        if (maybe_results) |find_results| {
+            const ammo_cropped_digits = find_results.digit_images;
+            defer {
+                for (ammo_cropped_digits) |ammo_cropped_digit| {
+                    ammo_cropped_digit.deinit(allocator);
+                }
+                allocator.free(ammo_cropped_digits);
             }
-            allocator.free(ammo_cropped_digits);
+
+            std.testing.expect(
+                // TODO: remove me in favor of actual expectation
+                false,
+                // ammo_cropped_digits.len == 2
+            ) catch |err| {
+                // Show the ammo counter digits that were found
+                for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
+                    const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
+                    defer allocator.free(digit_label);
+                    try printLabeledImage(digit_label, ammo_cropped_digit, .half_block, allocator);
+                }
+
+                break :blk err;
+            };
+        } else {
+            break :blk error.UnableToFindAmmoCounter;
+        }
+    } catch |err| {
+        // Debug: Show what happened during the isolation process
+        for (isolate_diagnostics.images.keys(), isolate_diagnostics.images.values(), 0..) |label, image, image_index| {
+            const debug_file_name = try std.fmt.allocPrint(allocator, "{s} - step{}: {s}.png", .{
+                image_file_stem_name,
+                image_index,
+                label,
+            });
+            defer allocator.free(debug_file_name);
+            const debug_full_file_path = try std.fs.path.join(allocator, &.{
+                "debug/test/",
+                debug_file_name,
+            });
+            defer allocator.free(debug_full_file_path);
+
+            try image.saveImageToFilePath(debug_full_file_path, allocator);
+            // For small images, make it easier to pixel peep
+            if (image.width < 200 and image.height < 200) {
+                try printLabeledImage(debug_full_file_path, image, .half_block, allocator);
+            } else {
+                try printLabeledImage(debug_full_file_path, image, .kitty, allocator);
+            }
         }
 
-        std.testing.expect(
-            // TODO: remove me in favor of actual expectation
-            false,
-            // ammo_cropped_digits.len == 2
-        ) catch |err| {
-            // Debug: Show what happened during the isolation process
-            for (isolate_diagnostics.images.keys(), isolate_diagnostics.images.values(), 0..) |label, image, image_index| {
-                const debug_file_name = try std.fmt.allocPrint(allocator, "{s} - step{}: {s}.png", .{
-                    image_file_stem_name,
-                    image_index,
-                    label,
-                });
-                defer allocator.free(debug_file_name);
-                const debug_full_file_path = try std.fs.path.join(allocator, &.{
-                    "debug/test/",
-                    debug_file_name,
-                });
-                defer allocator.free(debug_full_file_path);
-
-                try image.saveImageToFilePath(debug_full_file_path, allocator);
-                // For small images, make it easier to pixel peep
-                if (image.width < 200 and image.height < 200) {
-                    try printLabeledImage(debug_full_file_path, image, .half_block, allocator);
-                } else {
-                    try printLabeledImage(debug_full_file_path, image, .kitty, allocator);
-                }
-            }
-
-            // Show the ammo counter digits that were found
-            for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
-                const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
-                defer allocator.free(digit_label);
-                try printLabeledImage(digit_label, ammo_cropped_digit, .half_block, allocator);
-            }
-
-            return err;
-        };
-    } else {
-        return error.UnableToFindAmmoCounter;
-    }
+        return err;
+    };
 }
 
 /// Given the results of looking for ammo a frame, where to look for ammo in the next frame

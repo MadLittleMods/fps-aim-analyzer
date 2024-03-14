@@ -5,7 +5,7 @@ const image_conversion = @import("../image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
 const halo_text_vision = @import("../halo_text_vision.zig");
 const MAX_NUM_AMMO_CHARACTERS = halo_text_vision.MAX_NUM_AMMO_CHARACTERS;
-const isolateHaloAmmoCounter = halo_text_vision.isolateHaloAmmoCounter;
+const findHaloAmmoDigits = halo_text_vision.findHaloAmmoDigits;
 const IsolateDiagnostics = halo_text_vision.IsolateDiagnostics;
 const print_utils = @import("../../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
@@ -109,7 +109,7 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
 
                 var isolate_diagnostics = IsolateDiagnostics.init(allocator);
                 defer isolate_diagnostics.deinit(allocator);
-                const ammo_cropped_digits = try isolateHaloAmmoCounter(
+                const maybe_results = try findHaloAmmoDigits(
                     .{
                         .image = rgb_image,
                         .crop_region = .full_screen,
@@ -127,41 +127,44 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                     &isolate_diagnostics,
                     allocator,
                 );
-                defer {
-                    for (ammo_cropped_digits) |ammo_cropped_digit| {
-                        ammo_cropped_digit.deinit(allocator);
+                if (maybe_results) |find_results| {
+                    const ammo_cropped_digits = find_results.digit_images;
+                    defer {
+                        for (ammo_cropped_digits) |ammo_cropped_digit| {
+                            ammo_cropped_digit.deinit(allocator);
+                        }
+                        allocator.free(ammo_cropped_digits);
                     }
-                    allocator.free(ammo_cropped_digits);
-                }
 
-                const expected_digits = try getExpectedDigitsFromFileName(entry.name);
+                    const expected_digits = try getExpectedDigitsFromFileName(entry.name);
 
-                if (ammo_cropped_digits.len != expected_digits.len) {
-                    // Debug: Show what happened during the isolation process
-                    for (isolate_diagnostics.images.keys(), isolate_diagnostics.images.values(), 0..) |label, image, image_index| {
-                        const debug_file_name = try std.fmt.allocPrint(allocator, "{s} - step{}: {s}.png", .{
-                            file_stem_name,
-                            image_index,
-                            label,
-                        });
-                        defer allocator.free(debug_file_name);
-                        const debug_full_file_path = try std.fs.path.join(allocator, &.{
-                            "debug/",
-                            screenshot_dir_path,
-                            debug_file_name,
-                        });
-                        defer allocator.free(debug_full_file_path);
+                    if (ammo_cropped_digits.len != expected_digits.len) {
+                        // Debug: Show what happened during the isolation process
+                        for (isolate_diagnostics.images.keys(), isolate_diagnostics.images.values(), 0..) |label, image, image_index| {
+                            const debug_file_name = try std.fmt.allocPrint(allocator, "{s} - step{}: {s}.png", .{
+                                file_stem_name,
+                                image_index,
+                                label,
+                            });
+                            defer allocator.free(debug_file_name);
+                            const debug_full_file_path = try std.fs.path.join(allocator, &.{
+                                "debug/",
+                                screenshot_dir_path,
+                                debug_file_name,
+                            });
+                            defer allocator.free(debug_full_file_path);
 
-                        try image.saveImageToFilePath(debug_full_file_path, allocator);
-                        // try printLabeledImage(debug_file_name, image, .kitty, allocator);
+                            try image.saveImageToFilePath(debug_full_file_path, allocator);
+                            // try printLabeledImage(debug_file_name, image, .kitty, allocator);
+                        }
                     }
-                }
 
-                // Show the ammo counter digits that were found
-                for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
-                    const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
-                    defer allocator.free(digit_label);
-                    try printLabeledImage(digit_label, ammo_cropped_digit, .half_block, allocator);
+                    // Show the ammo counter digits that were found
+                    for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
+                        const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
+                        defer allocator.free(digit_label);
+                        try printLabeledImage(digit_label, ammo_cropped_digit, .half_block, allocator);
+                    }
                 }
             },
             else => continue,
