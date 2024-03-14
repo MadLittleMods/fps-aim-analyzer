@@ -12,6 +12,7 @@ const HSVImage = image_conversion.HSVImage;
 const RGBImage = image_conversion.RGBImage;
 const RGBPixel = image_conversion.RGBPixel;
 const BinaryImage = image_conversion.BinaryImage;
+const BinaryPixel = image_conversion.BinaryPixel;
 const cropImage = image_conversion.cropImage;
 const maskImage = image_conversion.maskImage;
 const resizeImage = image_conversion.resizeImage;
@@ -1010,12 +1011,29 @@ pub fn isolateHaloAmmoCounter(
         const chromatic_pattern_eroded_mask = chromatic_pattern_binary_mask;
 
         // Create a horizontal kernel and dilate to connect text characters
-        const dilate_kernel = try getStructuringElement(
-            .rectangle,
-            CHARACTER_DILATE_WIDTH,
-            CHARACTER_DILATE_HEIGHT,
-            allocator,
-        );
+        //
+        // TODO: Create the kernel once outside of the function
+        const dilate_kernel = blk: {
+            const rectangle_pixels = try allocator.alloc(BinaryPixel, CHARACTER_DILATE_WIDTH * CHARACTER_DILATE_HEIGHT);
+            @memset(rectangle_pixels, BinaryPixel{ .value = true });
+
+            // Bias the kernel to the right by turning off the pixels on the left-side.
+            // This way we can connect characters together without accidentally
+            // connecting other things we didn't mean to.
+            const kernel_pixels = rectangle_pixels;
+            for (0..5) |x| {
+                for (0..CHARACTER_DILATE_HEIGHT) |y| {
+                    const pixel_index = (y * CHARACTER_DILATE_WIDTH) + x;
+                    kernel_pixels[pixel_index] = .{ .value = false };
+                }
+            }
+
+            break :blk BinaryImage{
+                .width = CHARACTER_DILATE_WIDTH,
+                .height = CHARACTER_DILATE_HEIGHT,
+                .pixels = kernel_pixels,
+            };
+        };
         defer dilate_kernel.deinit(allocator);
         const chromatic_pattern_dilated_mask = try dilate(
             chromatic_pattern_eroded_mask,
@@ -1294,7 +1312,7 @@ test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
-    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
@@ -1303,7 +1321,6 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/34.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
-    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - cliffhanger camo marker2.png";
@@ -1311,7 +1328,7 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/17 - streets.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/24 - streets2.png";
-    const image_file_path = "screenshot-data/halo-infinite/4k/default/25 - streets burger.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/25 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker wall.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/66 - dredge sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/100 - dredge hammer.png";
