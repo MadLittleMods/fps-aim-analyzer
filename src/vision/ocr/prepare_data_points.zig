@@ -87,8 +87,8 @@ test "getExpectedDigitsFromFileName" {
 }
 
 pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNetworkData {
-    const screenshot_dir_path = "./screenshot-data/halo-infinite/4k/default/";
-    // const screenshot_dir_path = "./screenshot-data/halo-infinite/1080/default/";
+    // const screenshot_dir_path = "./screenshot-data/halo-infinite/4k/default/";
+    const screenshot_dir_path = "./screenshot-data/halo-infinite/1080/default/";
     var iterable_dir = try std.fs.cwd().openIterableDir(screenshot_dir_path, .{});
     defer iterable_dir.close();
 

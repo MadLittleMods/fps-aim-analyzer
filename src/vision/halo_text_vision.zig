@@ -115,7 +115,7 @@ pub const ChromaticAberrationCondition = enum {
 
 pub const ChromaticAberrationConditionToBoundsMap = std.EnumArray(ChromaticAberrationCondition, []const HSVBounds).init(.{
     .blue = &[_]HSVBounds{ .{
-        .lower = HSVPixel.init(0.5, 0.133333, 0.745098),
+        .lower = HSVPixel.init(0.5, 0.31, 0.745098),
         .upper = HSVPixel.init(0.844444, 1.0, 1.0),
     }, .{
         .lower = HSVPixel.init(0.57, 0.3, 0.49),
@@ -125,16 +125,19 @@ pub const ChromaticAberrationConditionToBoundsMap = std.EnumArray(ChromaticAberr
         .lower = HSVPixel.init(0.488888, 0.133333, 0.775),
         .upper = HSVPixel.init(0.755555, 1.0, 1.0),
     }},
-    .yellow = &[_]HSVBounds{.{
-        .lower = HSVPixel.init(0.088888, 0.078843, 0.5),
-        .upper = HSVPixel.init(0.311111, 0.835, 1.0),
-    }},
+    .yellow = &[_]HSVBounds{ .{
+        .lower = HSVPixel.init(0.1, 0.078843, 0.5),
+        .upper = HSVPixel.init(0.3975, 0.835, 1.0),
+    }, .{
+        .lower = HSVPixel.init(0.311111, 0.078843, 0.75),
+        .upper = HSVPixel.init(0.438, 0.3, 1.0),
+    } },
     .red = &[_]HSVBounds{ .{
         .lower = HSVPixel.init(0.0, 0.196078, 0.275),
-        .upper = HSVPixel.init(0.077777, 0.792156, 1.0),
+        .upper = HSVPixel.init(0.086, 0.835, 1.0),
     }, .{
         .lower = HSVPixel.init(0.861111, 0.196078, 0.275),
-        .upper = HSVPixel.init(1.0, 0.792156, 1.0),
+        .upper = HSVPixel.init(1.0, 0.835, 1.0),
     } },
 });
 
@@ -906,7 +909,7 @@ const CHARACTER_MIN_SPACING = 1;
 const BOUNDING_BOX_COVERAGE = 0.75;
 
 /// Should be big enough to connect ammo characters together
-const CHARACTER_DILATE_WIDTH: usize = 13;
+const CHARACTER_DILATE_WIDTH: usize = 15;
 /// Should be big enough to connect various pieces of detected chromatic aberration from a character together vertically
 const CHARACTER_DILATE_HEIGHT: usize = 13;
 comptime {
@@ -978,33 +981,33 @@ pub fn isolateHaloAmmoCounter(
         defer chromatic_pattern_binary_mask.deinit(allocator);
 
         // Erode the mask to get rid of some of the smaller chromatic aberration captures
-        // const erode_kernel = try getStructuringElement(
-        //     .cross,
-        //     3,
-        //     3,
-        //     allocator,
-        // );
-        // defer erode_kernel.deinit(allocator);
-        // const chromatic_pattern_eroded_mask = try erode(
-        //     chromatic_pattern_binary_mask,
-        //     erode_kernel,
-        //     allocator,
-        // );
-        // defer chromatic_pattern_eroded_mask.deinit(allocator);
-        // // Debug: After eroding
-        // {
-        //     const eroded_chromatic_pattern_rgb_image = try maskImage(
-        //         resized_screenshot.image,
-        //         chromatic_pattern_eroded_mask,
-        //         allocator,
-        //     );
-        //     defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
-        //     // Debug: Pixels after eroding
-        //     if (diagnostics) |diag| {
-        //         try diag.addImage("eroded_chromatic_pattern_rgb_image", eroded_chromatic_pattern_rgb_image, allocator);
-        //     }
-        // }
-        const chromatic_pattern_eroded_mask = chromatic_pattern_binary_mask;
+        const erode_kernel = try getStructuringElement(
+            .cross,
+            3,
+            3,
+            allocator,
+        );
+        defer erode_kernel.deinit(allocator);
+        const chromatic_pattern_eroded_mask = try erode(
+            chromatic_pattern_binary_mask,
+            erode_kernel,
+            allocator,
+        );
+        defer chromatic_pattern_eroded_mask.deinit(allocator);
+        // Debug: After eroding
+        {
+            const eroded_chromatic_pattern_rgb_image = try maskImage(
+                screenshot.image,
+                chromatic_pattern_eroded_mask,
+                allocator,
+            );
+            defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
+            // Debug: Pixels after eroding
+            if (diagnostics) |diag| {
+                try diag.addImage("eroded_chromatic_pattern_rgb_image", eroded_chromatic_pattern_rgb_image, allocator);
+            }
+        }
+        // const chromatic_pattern_eroded_mask = chromatic_pattern_binary_mask;
 
         // Create a horizontal kernel and dilate to connect text characters
         const dilate_kernel = try getStructuringElement(
@@ -1067,11 +1070,11 @@ pub fn isolateHaloAmmoCounter(
             const bounding_box = boundingRect(contour);
             // Only consider bounding boxes that are big enough to be characters.
             //
-            // TODO: We might also want to add the dilation padding to these expected measurements.
+            // We look for 2x characters because the ammo is always padded with a zero
+            // up to two characters.
             //
-            // TODO: We probably want have the minimum width be 2x characters long given
-            // the ammo is always padded with a zero up to two characters.
-            const is_character_sized_bounding_box = bounding_box.width > CHARACTER_MIN_WIDTH and
+            // TODO: We might also want to add the dilation padding to these expected measurements.
+            const is_character_sized_bounding_box = bounding_box.width > (2 * CHARACTER_MIN_WIDTH) and
                 bounding_box.height > CHARACTER_MIN_HEIGHT;
             // We assume that characters we're looking for have a lot of chromatic
             // aberration as opposed errant false-positives which may have large
@@ -1290,18 +1293,25 @@ pub fn findHaloAmmoDigits(
 test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/108 - argyle sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/211 - argyle sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/34.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge.png";
-    const image_file_path = "screenshot-data/halo-infinite/4k/default/100 - dredge hammer2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/25 - streets burger.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker wall.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/66 - dredge sentinel beam.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/100 - dredge hammer2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/125 - dredge sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/149 - dredge sentinel beam.png";
     const image_file_stem_name = std.fs.path.stem(image_file_path);
