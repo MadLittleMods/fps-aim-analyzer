@@ -87,8 +87,8 @@ test "getExpectedDigitsFromFileName" {
 }
 
 pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNetworkData {
-    // const screenshot_dir_path = "./screenshot-data/halo-infinite/4k/default/";
-    const screenshot_dir_path = "./screenshot-data/halo-infinite/1080/default/";
+    const screenshot_dir_path = "./screenshot-data/halo-infinite/4k/default/";
+    // const screenshot_dir_path = "./screenshot-data/halo-infinite/1080/default/";
     var iterable_dir = try std.fs.cwd().openIterableDir(screenshot_dir_path, .{});
     defer iterable_dir.close();
 
@@ -105,12 +105,17 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                 const file_stem_name = std.fs.path.stem(entry.name);
 
                 const expected_digits = try getExpectedDigitsFromFileName(entry.name);
-                // TODO: Handle zero ("0") digits
-                for (expected_digits) |expected_digit| {
-                    if (expected_digit == 0) {
-                        continue :file_blk;
-                    }
+
+                // TODO: Handle special "no ammo" cases
+                if (expected_digits.len == 0) {
+                    continue :file_blk;
                 }
+
+                // TODO: Handle zero ("0") padded digits
+                if (expected_digits[0] == 0) {
+                    continue :file_blk;
+                }
+
                 // TODO: Handle red digits
                 // (string includes/contains substring)
                 if (std.mem.indexOf(u8, entry.name, "(red)")) |_| {

@@ -118,22 +118,22 @@ pub const ChromaticAberrationConditionToBoundsMap = std.EnumArray(ChromaticAberr
         .lower = HSVPixel.init(0.5, 0.133333, 0.745098),
         .upper = HSVPixel.init(0.844444, 1.0, 1.0),
     }, .{
-        .lower = HSVPixel.init(0.57, 0.64, 0.49),
+        .lower = HSVPixel.init(0.57, 0.3, 0.49),
         .upper = HSVPixel.init(0.66, 0.9, 0.745098),
     } },
     .cyan = &[_]HSVBounds{.{
-        .lower = HSVPixel.init(0.488888, 0.133333, 0.839215),
+        .lower = HSVPixel.init(0.488888, 0.133333, 0.775),
         .upper = HSVPixel.init(0.755555, 1.0, 1.0),
     }},
     .yellow = &[_]HSVBounds{.{
-        .lower = HSVPixel.init(0.088888, 0.078843, 0.615686),
+        .lower = HSVPixel.init(0.088888, 0.078843, 0.5),
         .upper = HSVPixel.init(0.311111, 0.835, 1.0),
     }},
     .red = &[_]HSVBounds{ .{
-        .lower = HSVPixel.init(0.0, 0.196078, 0.494117),
+        .lower = HSVPixel.init(0.0, 0.196078, 0.275),
         .upper = HSVPixel.init(0.077777, 0.792156, 1.0),
     }, .{
-        .lower = HSVPixel.init(0.861111, 0.2, 0.423529),
+        .lower = HSVPixel.init(0.861111, 0.196078, 0.275),
         .upper = HSVPixel.init(1.0, 0.792156, 1.0),
     } },
 });
@@ -1290,7 +1290,7 @@ pub fn findHaloAmmoDigits(
 test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
@@ -1300,6 +1300,10 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge.png";
+    const image_file_path = "screenshot-data/halo-infinite/4k/default/100 - dredge hammer2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/125 - dredge sentinel beam.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/149 - dredge sentinel beam.png";
     const image_file_stem_name = std.fs.path.stem(image_file_path);
 
     const rgb_image = try RGBImage.loadImageFromFilePath(image_file_path, allocator);
