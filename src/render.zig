@@ -137,6 +137,7 @@ pub fn createResources(
     const max_screenshots_shown = state.max_screenshots_shown;
     const margin = state.margin;
 
+    // TODO: Pass in an allocator to use for the arena allocator
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_allocator.deinit();
     const allocator = arena_allocator.allocator();

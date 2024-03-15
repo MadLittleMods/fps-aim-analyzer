@@ -1156,7 +1156,11 @@ pub fn splitAmmoCounterRegionIntoDigits(
     // Scan each column of the image where each digit starts and ends horizontally
     var number_of_boundaries: usize = 0;
     var character_boundary_accumulator: [MAX_NUM_AMMO_CHARACTERS]Boundary = undefined;
+    // Track whether we're currently in the middle of a character
     var in_character = false;
+    // Track the last column/x position we found an active pixel in the character
+    var last_x_in_character: usize = 0;
+    const ALLOWED_GAP = 1;
     for (0..chromatic_pattern_hsv_img.width) |x| {
         const is_column_active = column_blk: for (0..chromatic_pattern_hsv_img.height) |y| {
             const pixel_index = (y * chromatic_pattern_hsv_img.width) + x;
@@ -1171,21 +1175,82 @@ pub fn splitAmmoCounterRegionIntoDigits(
 
         if (is_column_active) {
             if (!in_character) {
-                character_boundary_accumulator[number_of_boundaries].start_index = x;
+                // Find how big the previous boundary is
+                const previous_boundary_index: usize = blk: {
+                    if (number_of_boundaries > 0) {
+                        break :blk number_of_boundaries - 1;
+                    }
+                    break :blk 0;
+                };
+                const previous_boundary_found_width = (character_boundary_accumulator[previous_boundary_index].end_index - character_boundary_accumulator[previous_boundary_index].start_index) + 1;
+
+                // If the gap is small enough and the width is still less than the max
+                // width we expect a character to be, then we can go back and extend the
+                // previous boundary. (ex. `screenshot-data/halo-infinite/4k/default/100
+                // - dredge hammer2.png`)
+                if (previous_boundary_found_width < CHARACTER_MAX_WIDTH and x - last_x_in_character <= (ALLOWED_GAP + 1)) {
+                    // Go back to the previous boundary and extend it
+                    if (number_of_boundaries > 0) {
+                        number_of_boundaries -= 1;
+                    }
+                    character_boundary_accumulator[number_of_boundaries].end_index = x;
+                }
+                // Otherwise, start a new boundary
+                else {
+                    character_boundary_accumulator[number_of_boundaries].start_index = x;
+                }
+
                 in_character = true;
             }
         } else {
             // Smear over any small gaps in the characters by making sure we have
-            // enough width to be the smallest character we expect
+            // enough width to be the smallest character we expect.
             if (in_character) {
-                const found_width = (x - character_boundary_accumulator[number_of_boundaries].start_index) + 1;
+                const previous_active_x = x - 1;
+                const found_width = (previous_active_x - character_boundary_accumulator[number_of_boundaries].start_index) + 1;
                 if (found_width >= CHARACTER_MIN_WIDTH) {
-                    character_boundary_accumulator[number_of_boundaries].end_index = x;
+                    character_boundary_accumulator[number_of_boundaries].end_index = previous_active_x;
                     in_character = false;
                     number_of_boundaries += 1;
                 }
+
+                last_x_in_character = previous_active_x;
             }
         }
+    }
+
+    // Debug: Pixels after finding chromatic aberration pattern
+    if (diagnostics) |diag| {
+        const copy_pixels = try allocator.alloc(HSVPixel, chromatic_pattern_hsv_img.pixels.len);
+        std.mem.copyForwards(HSVPixel, copy_pixels, chromatic_pattern_hsv_img.pixels);
+
+        for (0..number_of_boundaries) |boundary_index| {
+            const start_index = character_boundary_accumulator[boundary_index].start_index;
+            const end_index = character_boundary_accumulator[boundary_index].end_index;
+
+            const first_row_index = 0;
+            const top_start_pixel_index = (first_row_index * chromatic_pattern_hsv_img.width) + start_index;
+            const top_end_pixel_index = (first_row_index * chromatic_pattern_hsv_img.width) + end_index;
+
+            const last_row_index = chromatic_pattern_hsv_img.height - 1;
+            const bottom_start_pixel_index = (last_row_index * chromatic_pattern_hsv_img.width) + start_index;
+            const bottom_end_pixel_index = (last_row_index * chromatic_pattern_hsv_img.width) + end_index;
+
+            copy_pixels[top_start_pixel_index] = .{ .h = 0.3333, .s = 1.0, .v = 1.0 };
+            copy_pixels[bottom_start_pixel_index] = .{ .h = 0.3333, .s = 1.0, .v = 1.0 };
+
+            copy_pixels[top_end_pixel_index] = .{ .h = 0.0, .s = 1.0, .v = 1.0 };
+            copy_pixels[bottom_end_pixel_index] = .{ .h = 0.0, .s = 1.0, .v = 1.0 };
+        }
+
+        const marked_hsv_image = HSVImage{
+            .width = chromatic_pattern_hsv_img.width,
+            .height = chromatic_pattern_hsv_img.height,
+            .pixels = copy_pixels,
+        };
+        defer marked_hsv_image.deinit(allocator);
+
+        try diag.addImage("digits_chromatic_pattern_with_boundaries", marked_hsv_image, allocator);
     }
 
     // Sanity check that we found enough characters
@@ -1198,6 +1263,13 @@ pub fn splitAmmoCounterRegionIntoDigits(
     }
 
     const ammo_cropped_digits = try allocator.alloc(RGBImage, number_of_boundaries);
+    var num_digits_allocated: usize = 0;
+    errdefer {
+        for (0..num_digits_allocated) |boundary_index| {
+            ammo_cropped_digits[boundary_index].deinit(allocator);
+        }
+        allocator.free(ammo_cropped_digits);
+    }
 
     const capture_width = CHARACTER_MAX_WIDTH + 8;
     const capture_height = CHARACTER_MIN_HEIGHT + 6;
@@ -1245,6 +1317,7 @@ pub fn splitAmmoCounterRegionIntoDigits(
                 @as(usize, @intCast(actual_capture_box.height)),
                 allocator,
             );
+            num_digits_allocated += 1;
         } else {
             std.log.err("Expected capture overlap but didn't find any ({any} {any}). This is probably programmer error.", .{
                 screenshot_box,
@@ -1312,7 +1385,7 @@ test "Find Halo ammo counter region" {
     const allocator = std.testing.allocator;
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden needler.png";
-    const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/12 - forbidden sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/44 - argyle plasma rifle.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/01 - forbidden skewer.png";
@@ -1324,7 +1397,10 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - cliffhanger camo marker2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - streets2.png";
+    const image_file_path = "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/16% - cliffhanger stalker.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/17 - streets.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/24 - streets2.png";
