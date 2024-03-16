@@ -150,6 +150,15 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                 if (std.mem.indexOf(u8, entry.name, "camo marker")) |_| {
                     continue :file_blk;
                 }
+                // TODO: Handle dim ammo counter when switching weapons
+                if (std.mem.indexOf(u8, entry.name, "12 - cliffhanger switching weapons.png")) |_| {
+                    continue :file_blk;
+                }
+                if (
+                // TODO: Handle more false positive patterns
+                std.mem.indexOf(u8, entry.name, "screenshot-data/halo-infinite/4k/default/18 - streets burger.png")) |_| {
+                    continue :file_blk;
+                }
 
                 const rgb_image = try RGBImage.loadImageFromFilePath(full_file_path, allocator);
                 defer rgb_image.deinit(allocator);

@@ -910,7 +910,7 @@ const CHARACTER_MIN_SPACING = 1;
 const BOUNDING_BOX_COVERAGE = 0.75;
 
 /// Should be big enough to connect ammo characters together
-const CHARACTER_DILATE_WIDTH: usize = 17;
+const CHARACTER_DILATE_WIDTH: usize = 19;
 /// Should be big enough to connect various pieces of detected chromatic aberration from a character together vertically
 const CHARACTER_DILATE_HEIGHT: usize = 13;
 comptime {
@@ -1012,6 +1012,10 @@ pub fn isolateHaloAmmoCounter(
 
         // Create a horizontal kernel and dilate to connect text characters
         //
+        // Tricky connecting examples:
+        // - `screenshot-data/halo-infinite/4k/default/11 - streets2.png`
+        // - `screenshot-data/halo-infinite/4k/default/18 - streets burger.png`
+        //
         // TODO: Create the kernel once outside of the function
         const dilate_kernel = blk: {
             const rectangle_pixels = try allocator.alloc(BinaryPixel, CHARACTER_DILATE_WIDTH * CHARACTER_DILATE_HEIGHT);
@@ -1019,7 +1023,7 @@ pub fn isolateHaloAmmoCounter(
 
             // Bias the kernel to the right by turning off the pixels on the left-side.
             // This way we can connect characters together without accidentally
-            // connecting other things we didn't mean to.
+            // connecting other things we didn't mean to on the other side.
             const kernel_pixels = rectangle_pixels;
             for (0..5) |x| {
                 for (0..CHARACTER_DILATE_HEIGHT) |y| {
@@ -1027,6 +1031,10 @@ pub fn isolateHaloAmmoCounter(
                     kernel_pixels[pixel_index] = .{ .value = false };
                 }
             }
+            // Only a single line jutting out from the left-side of the kernel
+            // const center_y = CHARACTER_DILATE_HEIGHT / 2;
+            // const start_pixel_index = (center_y * CHARACTER_DILATE_WIDTH) + 0;
+            // @memset(kernel_pixels[start_pixel_index..(start_pixel_index + 5)], .{ .value = true });
 
             break :blk BinaryImage{
                 .width = CHARACTER_DILATE_WIDTH,
@@ -1205,6 +1213,8 @@ pub fn splitAmmoCounterRegionIntoDigits(
         } else {
             // Smear over any small gaps in the characters by making sure we have
             // enough width to be the smallest character we expect.
+            //
+            // This also helps only pick up things that are big enough to be characters
             if (in_character) {
                 const previous_active_x = x - 1;
                 const found_width = (previous_active_x - character_boundary_accumulator[number_of_boundaries].start_index) + 1;
@@ -1397,8 +1407,8 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - cliffhanger camo marker2.png";
-    // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - streets2.png";
-    const image_file_path = "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png";
+    const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - streets2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/16% - cliffhanger stalker.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/17 - streets.png";
