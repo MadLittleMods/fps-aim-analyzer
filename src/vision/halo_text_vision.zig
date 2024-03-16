@@ -135,9 +135,9 @@ pub const ChromaticAberrationConditionToBoundsMap = std.EnumArray(ChromaticAberr
     } },
     .red = &[_]HSVBounds{ .{
         .lower = HSVPixel.init(0.0, 0.196078, 0.275),
-        .upper = HSVPixel.init(0.086, 0.835, 1.0),
+        .upper = HSVPixel.init(0.11, 0.835, 1.0),
     }, .{
-        .lower = HSVPixel.init(0.861111, 0.196078, 0.275),
+        .lower = HSVPixel.init(0.777, 0.196078, 0.275),
         .upper = HSVPixel.init(1.0, 0.835, 1.0),
     } },
 });
@@ -1407,18 +1407,21 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - cliffhanger camo marker2.png";
-    const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - streets2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - streets2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/16% - cliffhanger stalker.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/17 - streets.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets burger.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets blue.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/24 - streets2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/25 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker wall.png";
+    const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/66 - dredge sentinel beam.png";
-    // const image_file_path = "screenshot-data/halo-infinite/4k/default/100 - dredge hammer.png";
-    // const image_file_path = "screenshot-data/halo-infinite/4k/default/100 - dredge hammer2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/90% - dredge hammer.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/100% - dredge hammer2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/125 - dredge sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/149 - dredge sentinel beam.png";
     const image_file_stem_name = std.fs.path.stem(image_file_path);
