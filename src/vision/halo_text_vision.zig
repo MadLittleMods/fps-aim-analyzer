@@ -654,6 +654,9 @@ pub const IsolateDiagnostics = struct {
     }
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        for (self.images.keys()) |key_string| {
+            allocator.free(key_string);
+        }
         for (self.images.values()) |image| {
             image.deinit(allocator);
         }
@@ -661,8 +664,15 @@ pub const IsolateDiagnostics = struct {
     }
 
     pub fn addImage(self: *@This(), label: []const u8, image: anytype, allocator: std.mem.Allocator) !void {
+        // We make a copy of things so the caller can free the memory they pass in and
+        // the downstream user can use the diagnostics without worrying about anything.
+        const label_copy = try allocator.alloc(u8, label.len);
+        @memcpy(label_copy, label);
+
+        // (making a copy)
         const rgb_image = try convertToRgbImage(image, allocator);
-        try self.images.put(label, rgb_image);
+
+        try self.images.put(label_copy, rgb_image);
     }
 };
 
@@ -1067,6 +1077,12 @@ pub fn isolateHaloAmmoCounter(
         allocator.free(chromatic_contours);
     }
     // Debug: ...
+    var traced_rgb_image: RGBImage = undefined;
+    defer {
+        if (diagnostics) |_| {
+            traced_rgb_image.deinit(allocator);
+        }
+    }
     if (diagnostics) |diag| {
         // Debug: Pixels after opening (erode/dilate)
         const opened_chromatic_pattern_rgb_image = try maskImage(
@@ -1078,12 +1094,12 @@ pub fn isolateHaloAmmoCounter(
         try diag.addImage("opened_chromatic_pattern_rgb_image", opened_chromatic_pattern_rgb_image, allocator);
 
         // Debug: Trace contours
-        const traced_rgb_image = try traceContoursOnRgbImage(
+        traced_rgb_image = try traceContoursOnRgbImage(
             opened_chromatic_pattern_rgb_image,
             chromatic_contours,
             allocator,
         );
-        defer traced_rgb_image.deinit(allocator);
+        errdefer traced_rgb_image.deinit(allocator);
         try diag.addImage("contour_traced_rgb_image", traced_rgb_image, allocator);
     }
 
@@ -1091,8 +1107,12 @@ pub fn isolateHaloAmmoCounter(
     //
     // We assume the list of contours is already sorted with the bottom-left most
     // contours first (this is how `findContours` works right now so no need to sort).
+    var contour_index_to_relevance_map = std.AutoHashMap(usize, f32).init(allocator);
+    defer contour_index_to_relevance_map.deinit();
     var ammo_counter_bounding_box = blk_bounding_box: {
-        for (chromatic_contours) |contour| {
+        const chromatic_pattern_binary_img = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
+
+        for (chromatic_contours, 0..) |contour, contour_index| {
             const bounding_box = boundingRect(contour);
             // Only consider bounding boxes that are big enough to be characters.
             //
@@ -1102,21 +1122,86 @@ pub fn isolateHaloAmmoCounter(
             // TODO: We might also want to add the dilation padding to these expected measurements.
             const is_character_sized_bounding_box = bounding_box.width > (2 * CHARACTER_MAX_WIDTH) and
                 bounding_box.height > CHARACTER_MIN_HEIGHT;
+
+            if (!is_character_sized_bounding_box) {
+                try contour_index_to_relevance_map.put(contour_index, 0);
+                continue;
+            }
+
             // We assume that characters we're looking for have a lot of chromatic
             // aberration as opposed errant false-positives which may have large
             // bounding boxes but very little coverage inside.
-            const has_enough_coverage = blk: {
-                const coverage = calculateCoverageInBoundingBox(chromatic_pattern_opened_mask, bounding_box);
-                break :blk coverage > BOUNDING_BOX_COVERAGE;
-            };
+            const chromatic_coverage = calculateCoverageInBoundingBox(chromatic_pattern_binary_img, bounding_box);
+            const bounding_box_coverage = calculateCoverageInBoundingBox(chromatic_pattern_opened_mask, bounding_box);
 
-            if (is_character_sized_bounding_box and has_enough_coverage) {
-                break :blk_bounding_box bounding_box;
+            const bounding_box_coverage_score = blk: {
+                if (BOUNDING_BOX_COVERAGE > bounding_box_coverage) {
+                    break :blk 0;
+                }
+
+                break :blk (bounding_box_coverage - BOUNDING_BOX_COVERAGE) / (1.0 - BOUNDING_BOX_COVERAGE);
+            };
+            const coverage_score: f32 = chromatic_coverage * bounding_box_coverage_score;
+
+            // More left, more better
+            const left_score: f32 = @as(f32, @floatFromInt(screenshot.image.width - bounding_box.left())) /
+                @as(f32, @floatFromInt(screenshot.image.width));
+            // More bottom, more better
+            const bottom_score: f32 = 1.0 - (@as(f32, @floatFromInt((screenshot.image.height - bounding_box.bottom()))) /
+                @as(f32, @floatFromInt(screenshot.image.height)));
+            // More bottom, is better than more left
+            const positional_score: f32 = ((0.5 * left_score) * bottom_score);
+
+            const resultant_score: f32 = coverage_score + positional_score;
+            try contour_index_to_relevance_map.put(contour_index, resultant_score);
+
+            // Debug: ...
+            if (diagnostics) |diag| {
+                if (resultant_score > 0) {
+                    const bounding_box_cropped_image = try cropImage(
+                        traced_rgb_image,
+                        bounding_box.x,
+                        bounding_box.y,
+                        bounding_box.width,
+                        bounding_box.height,
+                        allocator,
+                    );
+                    defer bounding_box_cropped_image.deinit(allocator);
+
+                    const score_label = try std.fmt.allocPrint(allocator, "contour_bounding_box_{d}: score: {d:.2} (coverage: {d:.2} <- chromatic: {d:.2}, bounding_box: {d:.2}) (positional: {d:.2} <- left: {d:.2}, bottom: {d:.2})", .{
+                        contour_index,
+                        resultant_score,
+                        coverage_score,
+                        chromatic_coverage,
+                        bounding_box_coverage,
+                        positional_score,
+                        left_score,
+                        bottom_score,
+                    });
+                    defer allocator.free(score_label);
+                    try diag.addImage(score_label, bounding_box_cropped_image, allocator);
+                }
             }
-        } else {
-            // None of the contours matched our criteria
-            return null;
         }
+
+        // Find the contour index with the highest relevance score
+        var relevance_iterator = contour_index_to_relevance_map.iterator();
+        var max_relevance: f32 = 0.0;
+        var corresponding_contour_index: usize = 0;
+        while (relevance_iterator.next()) |relevance_entry| {
+            if (relevance_entry.value_ptr.* > max_relevance) {
+                max_relevance = relevance_entry.value_ptr.*;
+                corresponding_contour_index = relevance_entry.key_ptr.*;
+            }
+        }
+
+        // If we're returning something, it needs to be at-least slightly relevant
+        if (max_relevance > 0) {
+            break :blk_bounding_box boundingRect(chromatic_contours[corresponding_contour_index]);
+        }
+
+        // None of the contours matched our criteria
+        return null;
     };
 
     const ammo_cropped_image = try cropImage(
@@ -1411,14 +1496,17 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - streets nairobi.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/16% - cliffhanger stalker.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/17 - streets.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets blue.png";
+    const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets kenya.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/24 - streets2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/25 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker wall.png";
-    const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/41% - cliffhanger stalker.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/66 - dredge sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/90% - dredge hammer.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/100% - dredge hammer2.png";
