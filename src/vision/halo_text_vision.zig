@@ -911,6 +911,8 @@ pub const MAX_NUM_AMMO_CHARACTERS = 5;
 const CHARACTER_MIN_WIDTH = 9;
 // "4" character seems to be the widest (18px wide) (at 1080p resolution)
 const CHARACTER_MAX_WIDTH = 18;
+// Like a "3" or "6" (at 1080p resolution)
+const CHARACTER_TYPICAL_WIDTH = 16;
 // All of the characters are the same height (21px tall) (at 1080p resolution)
 const CHARACTER_MIN_HEIGHT = 22;
 /// The max spacing we will see is between "11" characters.
@@ -1320,7 +1322,14 @@ pub fn splitAmmoCounterRegionIntoDigits(
                 // width we expect a character to be, then we can go back and extend the
                 // previous boundary. (ex. `screenshot-data/halo-infinite/4k/default/100
                 // - dredge hammer2.png`)
-                if (previous_boundary_found_width < CHARACTER_MAX_WIDTH and x - last_x_in_character <= (ALLOWED_GAP + 1)) {
+                //
+                // TODO: Using `CHARACTER_TYPICAL_WIDTH` here instead of
+                // `CHARACTER_MAX_WIDTH` to account for cases like
+                // `screenshot-data/halo-infinite/4k/default/26 - streets.png` where we
+                // detect chromatic aberration that almost touches the next character.
+                if (previous_boundary_found_width < CHARACTER_TYPICAL_WIDTH and
+                    x - last_x_in_character <= (ALLOWED_GAP + 1))
+                {
                     // Go back to the previous boundary and extend it
                     if (number_of_boundaries > 0) {
                         number_of_boundaries -= 1;
@@ -1537,6 +1546,7 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - dredge2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - streets nairobi.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/13 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/16% - cliffhanger stalker.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/17 - streets.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets burger.png";
@@ -1544,9 +1554,10 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets kenya.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/24 - streets2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/25 - streets burger.png";
+    const image_file_path = "screenshot-data/halo-infinite/4k/default/26 - streets.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker wall.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png";
-    const image_file_path = "screenshot-data/halo-infinite/4k/default/41% - cliffhanger stalker.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/41% - cliffhanger stalker.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/66 - dredge sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/90% - dredge hammer.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/100% - dredge hammer2.png";
