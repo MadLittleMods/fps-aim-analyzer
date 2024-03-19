@@ -522,6 +522,21 @@ test "getPixelIndexClamped" {
     try std.testing.expectEqual(@as(usize, 24), getPixelIndexClamped(image, 6, 6));
 }
 
+/// Black/blank out the image
+pub fn blackOutPixels(pixel_slice: anytype) void {
+    const PixelType = std.meta.Child(@TypeOf(pixel_slice));
+    switch (PixelType) {
+        RGBPixel => @memset(pixel_slice, RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 }),
+        HSVPixel => @memset(pixel_slice, HSVPixel{ .h = 0.0, .s = 0.0, .v = 0.0 }),
+        GrayscalePixel => @memset(pixel_slice, GrayscalePixel{ .value = 0.0 }),
+        BinaryPixel => @memset(pixel_slice, BinaryPixel{ .value = false }),
+        else => {
+            @compileLog("PixelType=", @typeName(PixelType));
+            @compileError("maskImage: Unsupported pixel type");
+        },
+    }
+}
+
 pub fn cropImage(
     image: anytype,
     x: usize,
@@ -564,17 +579,7 @@ pub fn maskImage(
     const PixelType = std.meta.Child(@TypeOf(image.pixels));
     var output_pixels = try allocator.alloc(PixelType, image.pixels.len);
     errdefer allocator.free(output_pixels);
-    // Black/blank out the image
-    switch (PixelType) {
-        RGBPixel => @memset(output_pixels, RGBPixel{ .r = 0.0, .g = 0.0, .b = 0.0 }),
-        HSVPixel => @memset(output_pixels, RGBPixel{ .h = 0.0, .s = 0.0, .v = 0.0 }),
-        GrayscalePixel => @memset(output_pixels, RGBPixel{ .value = 0.0 }),
-        BinaryPixel => @memset(output_pixels, RGBPixel{ .value = false }),
-        else => {
-            @compileLog("PixelType=", @typeName(PixelType));
-            @compileError("maskImage: Unsupported pixel type");
-        },
-    }
+    blackOutPixels(output_pixels);
 
     // Copy over the pixels that are in the mask
     for (0..mask.height) |y| {
@@ -595,6 +600,281 @@ pub fn maskImage(
 }
 
 pub const resizeImage = image_resizing.resizeImage;
+
+pub const AnchorOriginX = enum {
+    left,
+    center,
+    right,
+};
+
+pub const AnchorOriginY = enum {
+    top,
+    center,
+    bottom,
+};
+
+/// A over B at the given position
+///
+/// Note: Black is considered transparent
+pub fn overlayImage(
+    image_a: anytype,
+    image_b: @TypeOf(image_a),
+    image_position_x: usize,
+    image_position_y: usize,
+    image_origin_x: AnchorOriginX,
+    image_origin_y: AnchorOriginY,
+    allocator: std.mem.Allocator,
+) !@TypeOf(image_a) {
+    const PixelType = std.meta.Child(@TypeOf(image_a.pixels));
+    const output_pixels = try allocator.alloc(PixelType, image_b.pixels.len);
+    @memcpy(output_pixels, image_b.pixels);
+
+    var image_offset_x: usize = switch (image_origin_x) {
+        .left => 0,
+        .center => image_a.width / 2,
+        .right => image_a.width - 1,
+    };
+    var image_offset_y: usize = switch (image_origin_y) {
+        .top => 0,
+        .center => image_a.height / 2,
+        .bottom => image_a.height - 1,
+    };
+
+    for (0..image_a.height) |y| {
+        const row_start_pixel_index_a = y * image_a.width;
+
+        // Avoid signed integer math and underflow by checking if we would be out of
+        // bounds manually
+        var y_b = y + image_position_y;
+        if (y_b < image_offset_y) {
+            continue;
+        }
+        y_b -= image_offset_y;
+        const row_start_pixel_index_b = y_b * image_b.width;
+
+        for (0..image_a.width) |x| {
+            const current_pixel_index_a = row_start_pixel_index_a + x;
+
+            // Avoid signed integer math and underflow by checking if we would be out of
+            // bounds manually
+            var x_b = x + image_position_x;
+            if (x_b < image_offset_x) {
+                continue;
+            }
+            x_b -= image_offset_x;
+
+            const current_pixel_index_b = row_start_pixel_index_b + (x_b);
+
+            switch (@TypeOf(image_a)) {
+                RGBImage => {
+                    const is_black = image_a.pixels[current_pixel_index_a].r == 0.0 and
+                        image_a.pixels[current_pixel_index_a].g == 0.0 and
+                        image_a.pixels[current_pixel_index_a].b == 0.0;
+
+                    output_pixels[current_pixel_index_b] = RGBPixel{
+                        .r = if (is_black) output_pixels[current_pixel_index_b].r else image_a.pixels[current_pixel_index_a].r,
+                        .g = if (is_black) output_pixels[current_pixel_index_b].g else image_a.pixels[current_pixel_index_a].g,
+                        .b = if (is_black) output_pixels[current_pixel_index_b].b else image_a.pixels[current_pixel_index_a].b,
+                    };
+                },
+                // GrayscaleImage => {
+                //     output_pixels[current_pixel_index_b] = @min(1.0, output_pixels[current_pixel_index_b] + image_a.pixels[current_pixel_index_a]);
+                // },
+                BinaryImage => {
+                    const is_black = image_a.pixels[current_pixel_index_a].value == false;
+
+                    output_pixels[current_pixel_index_b].value = if (is_black) output_pixels[current_pixel_index_b].value else image_a.pixels[current_pixel_index_a].value;
+                },
+                else => {
+                    @compileLog("ImageType=", @typeName(@TypeOf(image_a)));
+                    @compileError("Unable to overlay image with that type");
+                },
+            }
+        }
+    }
+
+    return .{
+        .width = image_b.width,
+        .height = image_b.height,
+        .pixels = output_pixels,
+    };
+}
+
+test "overlayImage" {
+    const allocator = std.testing.allocator;
+
+    const image_blank = BinaryImage{
+        .width = 7,
+        .height = 7,
+        .pixels = &binaryPixelsfromIntArray(&[_]u1{
+            0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0,
+        }),
+    };
+
+    const image_small_cross = BinaryImage{
+        .width = 3,
+        .height = 3,
+        .pixels = &binaryPixelsfromIntArray(&[_]u1{
+            0, 1, 0,
+            1, 1, 1,
+            0, 1, 0,
+        }),
+    };
+
+    // Same size image overlay
+    {
+        const image_a = BinaryImage{
+            .width = 7,
+            .height = 7,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 1, 0, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+                1, 1, 1, 1, 1, 1, 1,
+                0, 0, 0, 1, 0, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+            }),
+        };
+
+        const image_b = BinaryImage{
+            .width = 7,
+            .height = 7,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                1, 1, 0, 0, 0, 0, 0,
+                1, 1, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+            }),
+        };
+
+        const result_image = try overlayImage(
+            image_a,
+            image_b,
+            0,
+            0,
+            .left,
+            .top,
+            allocator,
+        );
+        defer result_image.deinit(allocator);
+
+        const expected_image = BinaryImage{
+            .width = 7,
+            .height = 7,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                1, 1, 0, 1, 0, 0, 0,
+                1, 1, 0, 1, 0, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+                1, 1, 1, 1, 1, 1, 1,
+                0, 0, 0, 1, 0, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+            }),
+        };
+
+        try expectImageEqual(result_image, expected_image, allocator);
+    }
+
+    // Test center positioning
+    {
+        const result_image = try overlayImage(
+            image_small_cross,
+            image_blank,
+            3,
+            3,
+            .center,
+            .center,
+            allocator,
+        );
+        defer result_image.deinit(allocator);
+
+        const expected_image = BinaryImage{
+            .width = 7,
+            .height = 7,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+                0, 0, 1, 1, 1, 0, 0,
+                0, 0, 0, 1, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+            }),
+        };
+
+        try expectImageEqual(result_image, expected_image, allocator);
+    }
+
+    // Test out of bounds (overdraw)
+    {
+        const result_image = try overlayImage(
+            image_small_cross,
+            image_blank,
+            0,
+            0,
+            .center,
+            .center,
+            allocator,
+        );
+        defer result_image.deinit(allocator);
+
+        const expected_image = BinaryImage{
+            .width = 7,
+            .height = 7,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                1, 1, 0, 0, 0, 0, 0,
+                1, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+            }),
+        };
+
+        try expectImageEqual(result_image, expected_image, allocator);
+    }
+
+    // Test bottom-right positioning
+    {
+        const result_image = try overlayImage(
+            image_small_cross,
+            image_blank,
+            3,
+            3,
+            .right,
+            .bottom,
+            allocator,
+        );
+        defer result_image.deinit(allocator);
+
+        const expected_image = BinaryImage{
+            .width = 7,
+            .height = 7,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 1, 0, 0, 0, 0,
+                0, 1, 1, 1, 0, 0, 0,
+                0, 0, 1, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0,
+            }),
+        };
+
+        try expectImageEqual(result_image, expected_image, allocator);
+    }
+}
 
 // Before the hue (h) is scaled, it has a range of [-1, 5) that we need to scale to
 // [0, 360) if we want degrees or [0, 1) if we want it normalized.

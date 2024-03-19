@@ -21,6 +21,10 @@ const rgbToHsvImage = image_conversion.rgbToHsvImage;
 const hsvToRgbImage = image_conversion.hsvToRgbImage;
 const hsvToBinaryImage = image_conversion.hsvToBinaryImage;
 const checkHsvPixelInRange = image_conversion.checkHsvPixelInRange;
+const draw_utils = @import("../utils/draw_utils.zig");
+const drawRectangleOnImage = draw_utils.drawRectangleOnImage;
+const drawEllipseOnImage = draw_utils.drawEllipseOnImage;
+const drawCrossOnImage = draw_utils.drawCrossOnImage;
 const morphological_operations = @import("morphological_operations.zig");
 const getStructuringElement = morphological_operations.getStructuringElement;
 const erode = morphological_operations.erode;
@@ -918,6 +922,11 @@ const CHARACTER_MIN_SPACING = 1;
 /// blocks of pixels with lots of coverage. This helps get rid of false-positives
 /// found elsewhere in the image.
 const BOUNDING_BOX_COVERAGE = 0.75;
+/// We find the average point of all of the chromatic abberation UI being displayed and
+/// only consider bounding boxes that are within this specified proximity to the
+/// midpoint.
+const MIDPOINT_PROXIMITY_X = 250;
+const MIDPOINT_PROXIMITY_Y = 75;
 
 /// Should be big enough to connect ammo characters together
 const CHARACTER_DILATE_WIDTH: usize = 19;
@@ -1103,17 +1112,93 @@ pub fn isolateHaloAmmoCounter(
         try diag.addImage("contour_traced_rgb_image", traced_rgb_image, allocator);
     }
 
+    // Calculate the bounding boxes and the total area of all of the bounding boxes
+    const bounding_boxes = try allocator.alloc(BoundingClientRect(usize), chromatic_contours.len);
+    var total_bound_box_area: usize = 0.0;
+    for (chromatic_contours, 0..) |contour, contour_index| {
+        const bounding_box = boundingRect(contour);
+        bounding_boxes[contour_index] = bounding_box;
+
+        total_bound_box_area += bounding_box.width * bounding_box.height;
+    }
+
+    // Weighted average of the bounding box centers, weighted by the area of the bounding box
+    //
+    // We use the midpoint as a heuristic that the ammo counter should be within a
+    // certain range of it.
+    var total_x: usize = 0.0;
+    var total_y: usize = 0.0;
+    for (bounding_boxes) |bounding_box| {
+        const center_x = bounding_box.centerX();
+        const center_y = bounding_box.centerY();
+
+        const area = bounding_box.width * bounding_box.height;
+        const weight = area;
+
+        total_x += center_x * weight;
+        total_y += center_y * weight;
+    }
+    const midpoint_x = total_x / total_bound_box_area;
+    const midpoint_y = total_y / total_bound_box_area;
+    // Create a bounding box around the midpoint to use as a heuristic to find the ammo counter
+    const midpoint_proximity_bounding_box = BoundingClientRect(usize){
+        .x = midpoint_x - MIDPOINT_PROXIMITY_X,
+        .y = midpoint_y - MIDPOINT_PROXIMITY_Y,
+        .width = (MIDPOINT_PROXIMITY_X * 2) + 1,
+        .height = (MIDPOINT_PROXIMITY_Y * 2) + 1,
+    };
+    // Debug: ...
+    if (diagnostics) |diag| {
+        const circle_marked_image = try drawEllipseOnImage(
+            traced_rgb_image,
+            11,
+            11,
+            1,
+            RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 },
+            midpoint_x,
+            midpoint_y,
+            .center,
+            .center,
+            allocator,
+        );
+        defer circle_marked_image.deinit(allocator);
+
+        const cross_marked_image = try drawCrossOnImage(
+            circle_marked_image,
+            11,
+            11,
+            RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 },
+            midpoint_x,
+            midpoint_y,
+            .center,
+            .center,
+            allocator,
+        );
+        defer cross_marked_image.deinit(allocator);
+
+        const rectangle_boundary_image = try drawRectangleOnImage(
+            cross_marked_image,
+            midpoint_proximity_bounding_box.width,
+            midpoint_proximity_bounding_box.height,
+            2,
+            RGBPixel{ .r = 1.0, .g = 0.0, .b = 0.0 },
+            midpoint_proximity_bounding_box.left(),
+            midpoint_proximity_bounding_box.top(),
+            .left,
+            .top,
+            allocator,
+        );
+        defer rectangle_boundary_image.deinit(allocator);
+
+        try diag.addImage("midpoint_boundary", rectangle_boundary_image, allocator);
+    }
+
     // Find the bounding box around the contours that is big enough to be one or more characters.
     //
     // We assume the list of contours is already sorted with the bottom-left most
     // contours first (this is how `findContours` works right now so no need to sort).
-    var contour_index_to_relevance_map = std.AutoHashMap(usize, f32).init(allocator);
-    defer contour_index_to_relevance_map.deinit();
     var ammo_counter_bounding_box = blk_bounding_box: {
-        const chromatic_pattern_binary_img = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
-
-        for (chromatic_contours, 0..) |contour, contour_index| {
-            const bounding_box = boundingRect(contour);
+        for (bounding_boxes) |bounding_box| {
             // Only consider bounding boxes that are big enough to be characters.
             //
             // We look for 2x characters because the ammo is always padded with a zero
@@ -1122,86 +1207,35 @@ pub fn isolateHaloAmmoCounter(
             // TODO: We might also want to add the dilation padding to these expected measurements.
             const is_character_sized_bounding_box = bounding_box.width > (2 * CHARACTER_MAX_WIDTH) and
                 bounding_box.height > CHARACTER_MIN_HEIGHT;
-
             if (!is_character_sized_bounding_box) {
-                try contour_index_to_relevance_map.put(contour_index, 0);
                 continue;
             }
 
             // We assume that characters we're looking for have a lot of chromatic
             // aberration as opposed errant false-positives which may have large
             // bounding boxes but very little coverage inside.
-            const chromatic_coverage = calculateCoverageInBoundingBox(chromatic_pattern_binary_img, bounding_box);
-            const bounding_box_coverage = calculateCoverageInBoundingBox(chromatic_pattern_opened_mask, bounding_box);
-
-            const bounding_box_coverage_score = blk: {
-                if (BOUNDING_BOX_COVERAGE > bounding_box_coverage) {
-                    break :blk 0;
-                }
-
-                break :blk (bounding_box_coverage - BOUNDING_BOX_COVERAGE) / (1.0 - BOUNDING_BOX_COVERAGE);
+            const has_enough_coverage = blk: {
+                const coverage = calculateCoverageInBoundingBox(chromatic_pattern_opened_mask, bounding_box);
+                break :blk coverage > BOUNDING_BOX_COVERAGE;
             };
-            const coverage_score: f32 = chromatic_coverage * bounding_box_coverage_score;
-
-            // More left, more better
-            const left_score: f32 = @as(f32, @floatFromInt(screenshot.image.width - bounding_box.left())) /
-                @as(f32, @floatFromInt(screenshot.image.width));
-            // More bottom, more better
-            const bottom_score: f32 = 1.0 - (@as(f32, @floatFromInt((screenshot.image.height - bounding_box.bottom()))) /
-                @as(f32, @floatFromInt(screenshot.image.height)));
-            // More bottom, is better than more left
-            const positional_score: f32 = ((0.5 * left_score) * bottom_score);
-
-            const resultant_score: f32 = coverage_score + positional_score;
-            try contour_index_to_relevance_map.put(contour_index, resultant_score);
-
-            // Debug: ...
-            if (diagnostics) |diag| {
-                if (resultant_score > 0) {
-                    const bounding_box_cropped_image = try cropImage(
-                        traced_rgb_image,
-                        bounding_box.x,
-                        bounding_box.y,
-                        bounding_box.width,
-                        bounding_box.height,
-                        allocator,
-                    );
-                    defer bounding_box_cropped_image.deinit(allocator);
-
-                    const score_label = try std.fmt.allocPrint(allocator, "contour_bounding_box_{d}: score: {d:.2} (coverage: {d:.2} <- chromatic: {d:.2}, bounding_box: {d:.2}) (positional: {d:.2} <- left: {d:.2}, bottom: {d:.2})", .{
-                        contour_index,
-                        resultant_score,
-                        coverage_score,
-                        chromatic_coverage,
-                        bounding_box_coverage,
-                        positional_score,
-                        left_score,
-                        bottom_score,
-                    });
-                    defer allocator.free(score_label);
-                    try diag.addImage(score_label, bounding_box_cropped_image, allocator);
-                }
+            if (!has_enough_coverage) {
+                continue;
             }
-        }
 
-        // Find the contour index with the highest relevance score
-        var relevance_iterator = contour_index_to_relevance_map.iterator();
-        var max_relevance: f32 = 0.0;
-        var corresponding_contour_index: usize = 0;
-        while (relevance_iterator.next()) |relevance_entry| {
-            if (relevance_entry.value_ptr.* > max_relevance) {
-                max_relevance = relevance_entry.value_ptr.*;
-                corresponding_contour_index = relevance_entry.key_ptr.*;
+            // Make sure the bounding box is within the proximity of the midpoint of the
+            // rest of the chromatic abberation that we detected. This way we can avoid
+            // false-positives like the text from picking up equipment which is also
+            // appears on the left (ex. `screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png`)
+            const intersection = findIntersection(bounding_box, midpoint_proximity_bounding_box);
+            if (intersection == null) {
+                continue;
             }
-        }
 
-        // If we're returning something, it needs to be at-least slightly relevant
-        if (max_relevance > 0) {
-            break :blk_bounding_box boundingRect(chromatic_contours[corresponding_contour_index]);
+            break :blk_bounding_box bounding_box;
+        } else {
+            // None of the contours matched our criteria
+            return null;
         }
-
-        // None of the contours matched our criteria
-        return null;
     };
 
     const ammo_cropped_image = try cropImage(
@@ -1501,11 +1535,11 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/17 - streets.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets blue.png";
-    const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets kenya.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets kenya.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/24 - streets2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/25 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker wall.png";
-    // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png";
+    const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/41% - cliffhanger stalker.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/66 - dredge sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/90% - dredge hammer.png";

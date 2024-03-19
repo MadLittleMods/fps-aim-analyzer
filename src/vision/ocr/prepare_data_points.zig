@@ -150,14 +150,24 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                 if (std.mem.indexOf(u8, entry.name, "camo marker")) |_| {
                     continue :file_blk;
                 }
-                // TODO: Handle dim ammo counter when switching weapons
-                if (std.mem.indexOf(u8, entry.name, "12 - cliffhanger switching weapons.png")) |_| {
-                    continue :file_blk;
-                }
-                if (
-                // TODO: Handle more false positive patterns
-                std.mem.indexOf(u8, entry.name, "screenshot-data/halo-infinite/4k/default/18 - streets burger.png")) |_| {
-                    continue :file_blk;
+
+                const files_to_ignore = [_][]const u8{
+                    // TODO: Handle dim ammo counter when switching weapons
+                    "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png",
+                    // TODO: Handle more false positive patterns
+                    "screenshot-data/halo-infinite/4k/default/18 - streets burger.png",
+                    // TODO: Handle really weird UI margins
+                    "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin.png",
+                    "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin2.png",
+                    "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin3.png",
+                    "screenshot-data/halo-infinite/4k/default/35 - the pit threat seeker 100 UI margin.png",
+                    "screenshot-data/halo-infinite/4k/default/36 - the pit 100 UI margin2.png",
+                    "screenshot-data/halo-infinite/4k/default/36 - the pit threat seeker 100 UI margin.png",
+                };
+                for (files_to_ignore) |file_to_ignore| {
+                    if (std.mem.indexOf(u8, full_file_path, file_to_ignore)) |_| {
+                        continue :file_blk;
+                    }
                 }
 
                 const rgb_image = try RGBImage.loadImageFromFilePath(full_file_path, allocator);
