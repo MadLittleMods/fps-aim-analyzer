@@ -1114,6 +1114,7 @@ pub fn isolateHaloAmmoCounter(
 
     // Calculate the bounding boxes and the total area of all of the bounding boxes
     const bounding_boxes = try allocator.alloc(BoundingClientRect(usize), chromatic_contours.len);
+    defer allocator.free(bounding_boxes);
     var total_bound_box_area: usize = 0.0;
     for (chromatic_contours, 0..) |contour, contour_index| {
         const bounding_box = boundingRect(contour);
@@ -1240,9 +1241,13 @@ pub fn isolateHaloAmmoCounter(
 
     const ammo_cropped_image = try cropImage(
         screenshot.image,
-        ammo_counter_bounding_box.x,
+        // Center the extra width
+        ammo_counter_bounding_box.x - 3,
         ammo_counter_bounding_box.y,
-        ammo_counter_bounding_box.width,
+        // Expand the bounding box just a little bit to account for our detection not
+        // being perfect allow the "1" character in a "41" for example to be split if
+        // room allows.
+        ammo_counter_bounding_box.width + 6,
         ammo_counter_bounding_box.height,
         allocator,
     );
@@ -1337,6 +1342,7 @@ pub fn splitAmmoCounterRegionIntoDigits(
             if (in_character) {
                 const previous_active_x = x - 1;
                 const found_width = (previous_active_x - character_boundary_accumulator[number_of_boundaries].start_index) + 1;
+
                 if (found_width >= CHARACTER_MIN_WIDTH) {
                     character_boundary_accumulator[number_of_boundaries].end_index = previous_active_x;
                     in_character = false;
@@ -1346,12 +1352,6 @@ pub fn splitAmmoCounterRegionIntoDigits(
                 last_x_in_character = previous_active_x;
             }
         }
-    }
-
-    // Finish the last character if we're still in one
-    if (in_character) {
-        character_boundary_accumulator[number_of_boundaries].end_index = (chromatic_pattern_hsv_img.width - 1);
-        number_of_boundaries += 1;
     }
 
     // Debug: Pixels after finding chromatic aberration pattern
