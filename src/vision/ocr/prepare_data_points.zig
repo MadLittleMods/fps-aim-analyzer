@@ -155,7 +155,13 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNet
                     // TODO: Handle dim ammo counter when switching weapons
                     "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png",
                     // TODO: Handle more false positive patterns
+                    "screenshot-data/halo-infinite/4k/default/13 - streets burger.png",
+                    "screenshot-data/halo-infinite/4k/default/16 - streets burger.png",
                     "screenshot-data/halo-infinite/4k/default/18 - streets burger.png",
+                    "screenshot-data/halo-infinite/4k/default/21 - streets burger.png",
+                    "screenshot-data/halo-infinite/4k/default/23 - streets burger.png",
+                    "screenshot-data/halo-infinite/4k/default/25 - streets burger.png",
+                    "screenshot-data/halo-infinite/4k/default/27 - streets burger.png",
                     // TODO: Handle really weird UI margins
                     "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin.png",
                     "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin2.png",

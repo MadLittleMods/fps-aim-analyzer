@@ -1348,6 +1348,12 @@ pub fn splitAmmoCounterRegionIntoDigits(
         }
     }
 
+    // Finish the last character if we're still in one
+    if (in_character) {
+        character_boundary_accumulator[number_of_boundaries].end_index = (chromatic_pattern_hsv_img.width - 1);
+        number_of_boundaries += 1;
+    }
+
     // Debug: Pixels after finding chromatic aberration pattern
     if (diagnostics) |diag| {
         const copy_pixels = try allocator.alloc(HSVPixel, chromatic_pattern_hsv_img.pixels.len);
@@ -1539,8 +1545,8 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/24 - streets2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/25 - streets burger.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker wall.png";
-    const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png";
-    // const image_file_path = "screenshot-data/halo-infinite/4k/default/41% - cliffhanger stalker.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png";
+    const image_file_path = "screenshot-data/halo-infinite/4k/default/41% - cliffhanger stalker.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/66 - dredge sentinel beam.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/90% - dredge hammer.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/100% - dredge hammer2.png";
