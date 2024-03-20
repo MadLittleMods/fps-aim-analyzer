@@ -111,166 +111,236 @@ test "getExpectedCharactersFromFileName" {
 }
 
 pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !NeuralNetworkData {
-    const screenshot_dir_path = "./screenshot-data/halo-infinite/4k/default/";
-    // const screenshot_dir_path = "./screenshot-data/halo-infinite/1080/default/";
-    var iterable_dir = try std.fs.cwd().openIterableDir(screenshot_dir_path, .{});
-    defer iterable_dir.close();
+    const screenshot_directories = [_][]const u8{
+        "./screenshot-data/halo-infinite/1080/default/",
+        "./screenshot-data/halo-infinite/1080/black/",
+        "./screenshot-data/halo-infinite/1080/white/",
+        "./screenshot-data/halo-infinite/1080/red/",
+        "./screenshot-data/halo-infinite/4k/default/",
+        "./screenshot-data/halo-infinite/4k/black/",
+        "./screenshot-data/halo-infinite/4k/white/",
+    };
 
-    var it = iterable_dir.iterate();
-    file_blk: while (try it.next()) |entry| {
-        switch (entry.kind) {
-            .file, .sym_link => {
-                const full_file_path = try std.fs.path.join(allocator, &.{
-                    screenshot_dir_path,
-                    entry.name,
-                });
-                defer allocator.free(full_file_path);
-                std.log.debug("entry.name={s} {s}", .{ entry.name, full_file_path });
-                const file_stem_name = std.fs.path.stem(entry.name);
+    for (screenshot_directories) |screenshot_dir_path| {
+        // Generate a small prefix string, ex. "4k default", that we can use when saving
+        // the individual digit images in one big directory.
+        const directory_descriptor_string = blk: {
+            // `./screenshot-data/halo-infinite/4k/white/` -> `4k/white`
+            const relative_path = try std.fs.path.relative(
+                allocator,
+                "./screenshot-data/halo-infinite/",
+                screenshot_dir_path,
+            );
+            defer allocator.free(relative_path);
+            var split_iterator = std.mem.splitScalar(u8, relative_path, std.fs.path.sep);
 
-                const expected_characters = try getExpectedCharactersFromFileName(entry.name, allocator);
-                defer allocator.free(expected_characters);
-
-                // TODO: Handle special "no ammo" cases
-                if (expected_characters.len == 0) {
-                    continue :file_blk;
+            // We just assume there are only two directory descriptors (the resolution
+            // and the type of image like "default" or "black")
+            const descriptors = try allocator.alloc([]const u8, 2);
+            defer allocator.free(descriptors);
+            var descriptor_index: usize = 0;
+            while (split_iterator.next()) |descriptor| : (descriptor_index += 1) {
+                // Make sure we don't have more than two directory descriptors that we expect
+                if (descriptor_index >= descriptors.len) {
+                    std.log.err("Expected at most {d} directory descriptors, but found more with this given path {s}", .{
+                        descriptors.len,
+                        screenshot_dir_path,
+                    });
+                    return error.TooManyDirectoryDescriptors;
                 }
 
-                // TODO: Handle zero ("0") padded digits
-                if (expected_characters[0] == '0') {
-                    continue :file_blk;
-                }
+                descriptors[descriptor_index] = descriptor;
+            }
 
-                // TODO: Handle red digits
-                // (string includes/contains substring)
-                if (std.mem.indexOf(u8, entry.name, "(red)")) |_| {
-                    continue :file_blk;
-                }
-                // TODO: Handle obstructed digits
-                if (std.mem.indexOf(u8, entry.name, "camo marker")) |_| {
-                    continue :file_blk;
-                }
+            // Combine the descriptors into a space separated string
+            const directory_descriptor_string = try std.mem.join(
+                allocator,
+                " ",
+                descriptors,
+            );
 
-                const files_to_ignore = [_][]const u8{
-                    // TODO: Handle dim ammo counter when switching weapons
-                    "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png",
-                    // TODO: Handle more false positive patterns
-                    "screenshot-data/halo-infinite/4k/default/13 - streets burger.png",
-                    "screenshot-data/halo-infinite/4k/default/16 - streets burger.png",
-                    "screenshot-data/halo-infinite/4k/default/18 - streets burger.png",
-                    "screenshot-data/halo-infinite/4k/default/21 - streets burger.png",
-                    "screenshot-data/halo-infinite/4k/default/23 - streets burger.png",
-                    "screenshot-data/halo-infinite/4k/default/25 - streets burger.png",
-                    "screenshot-data/halo-infinite/4k/default/27 - streets burger.png",
-                    // TODO: Handle really weird UI margins
-                    "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin.png",
-                    "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin2.png",
-                    "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin3.png",
-                    "screenshot-data/halo-infinite/4k/default/35 - the pit threat seeker 100 UI margin.png",
-                    "screenshot-data/halo-infinite/4k/default/36 - the pit 100 UI margin2.png",
-                    "screenshot-data/halo-infinite/4k/default/36 - the pit threat seeker 100 UI margin.png",
-                };
-                for (files_to_ignore) |file_to_ignore| {
-                    if (std.mem.indexOf(u8, full_file_path, file_to_ignore)) |_| {
+            break :blk directory_descriptor_string;
+        };
+        defer allocator.free(directory_descriptor_string);
+
+        var iterable_dir = try std.fs.cwd().openIterableDir(screenshot_dir_path, .{});
+        defer iterable_dir.close();
+
+        var it = iterable_dir.iterate();
+        file_blk: while (try it.next()) |entry| {
+            switch (entry.kind) {
+                .file, .sym_link => {
+                    const full_file_path = try std.fs.path.join(allocator, &.{
+                        screenshot_dir_path,
+                        entry.name,
+                    });
+                    defer allocator.free(full_file_path);
+                    std.log.debug("entry.name={s} {s}", .{ entry.name, full_file_path });
+                    const file_stem_name = std.fs.path.stem(entry.name);
+
+                    const expected_characters = try getExpectedCharactersFromFileName(entry.name, allocator);
+                    defer allocator.free(expected_characters);
+
+                    // TODO: Handle special "no ammo" cases
+                    if (expected_characters.len == 0) {
                         continue :file_blk;
                     }
-                }
 
-                const rgb_image = try RGBImage.loadImageFromFilePath(full_file_path, allocator);
-                defer rgb_image.deinit(allocator);
+                    // TODO: Handle zero ("0") padded digits
+                    if (expected_characters[0] == '0') {
+                        continue :file_blk;
+                    }
 
-                var isolate_diagnostics = IsolateDiagnostics.init(allocator);
-                defer isolate_diagnostics.deinit(allocator);
+                    // TODO: Handle red digits
+                    // (string includes/contains substring)
+                    if (std.mem.indexOf(u8, entry.name, "(red)")) |_| {
+                        continue :file_blk;
+                    }
+                    // TODO: Handle obstructed digits
+                    if (std.mem.indexOf(u8, entry.name, "camo marker")) |_| {
+                        continue :file_blk;
+                    }
 
-                _ = blk: {
-                    const maybe_results = findHaloAmmoDigits(
-                        .{
-                            .image = rgb_image,
-                            .crop_region = .full_screen,
-                            .crop_region_x = 0,
-                            .crop_region_y = 0,
-                            // Since these are full screen images, the pre_crop_width and
-                            // pre_crop_height are the same as the width and height
-                            .pre_crop_width = rgb_image.width,
-                            .pre_crop_height = rgb_image.height,
-                            // These are 1:1 screenshots, so the game resolution is the same
-                            // as the image resolution
-                            .game_resolution_width = rgb_image.width,
-                            .game_resolution_height = rgb_image.height,
-                        },
-                        &isolate_diagnostics,
-                        allocator,
-                    ) catch |err| break :blk err;
-                    if (maybe_results) |find_results| {
-                        const ammo_cropped_digits = find_results.digit_images;
-                        defer {
-                            for (ammo_cropped_digits) |ammo_cropped_digit| {
-                                ammo_cropped_digit.deinit(allocator);
-                            }
-                            allocator.free(ammo_cropped_digits);
+                    const files_to_ignore = [_][]const u8{
+                        // TODO: Handle dim ammo counter when switching weapons
+                        "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png",
+                        // TODO: Handle more false positive patterns
+                        "screenshot-data/halo-infinite/4k/default/13 - streets burger.png",
+                        "screenshot-data/halo-infinite/4k/default/16 - streets burger.png",
+                        "screenshot-data/halo-infinite/4k/default/18 - streets burger.png",
+                        "screenshot-data/halo-infinite/4k/default/21 - streets burger.png",
+                        "screenshot-data/halo-infinite/4k/default/23 - streets burger.png",
+                        "screenshot-data/halo-infinite/4k/default/25 - streets burger.png",
+                        "screenshot-data/halo-infinite/4k/default/27 - streets burger.png",
+                        // TODO: Handle really weird UI margins
+                        "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin.png",
+                        "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin2.png",
+                        "screenshot-data/halo-infinite/4k/default/35 - the pit 100 UI margin3.png",
+                        "screenshot-data/halo-infinite/4k/default/35 - the pit threat seeker 100 UI margin.png",
+                        "screenshot-data/halo-infinite/4k/default/36 - the pit 100 UI margin2.png",
+                        "screenshot-data/halo-infinite/4k/default/36 - the pit threat seeker 100 UI margin.png",
+                    };
+                    for (files_to_ignore) |file_to_ignore| {
+                        if (std.mem.indexOf(u8, full_file_path, file_to_ignore)) |_| {
+                            continue :file_blk;
                         }
-                        // Show the ammo counter digits that were found
-                        for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
-                            const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
-                            defer allocator.free(digit_label);
-                            try printLabeledImage(digit_label, ammo_cropped_digit, .half_block, allocator);
-                        }
+                    }
 
-                        const number_of_number_digits: usize = digit_blk: {
-                            var num: usize = 0;
-                            for (expected_characters) |expected_character| {
-                                switch (expected_character) {
-                                    '0'...'9' => num += 1,
-                                    else => num += 0,
+                    const rgb_image = try RGBImage.loadImageFromFilePath(full_file_path, allocator);
+                    defer rgb_image.deinit(allocator);
+
+                    var isolate_diagnostics = IsolateDiagnostics.init(allocator);
+                    defer isolate_diagnostics.deinit(allocator);
+
+                    _ = blk: {
+                        const maybe_results = findHaloAmmoDigits(
+                            .{
+                                .image = rgb_image,
+                                .crop_region = .full_screen,
+                                .crop_region_x = 0,
+                                .crop_region_y = 0,
+                                // Since these are full screen images, the pre_crop_width and
+                                // pre_crop_height are the same as the width and height
+                                .pre_crop_width = rgb_image.width,
+                                .pre_crop_height = rgb_image.height,
+                                // These are 1:1 screenshots, so the game resolution is the same
+                                // as the image resolution
+                                .game_resolution_width = rgb_image.width,
+                                .game_resolution_height = rgb_image.height,
+                            },
+                            &isolate_diagnostics,
+                            allocator,
+                        ) catch |err| break :blk err;
+                        if (maybe_results) |find_results| {
+                            const ammo_cropped_digits = find_results.digit_images;
+                            defer {
+                                for (ammo_cropped_digits) |ammo_cropped_digit| {
+                                    ammo_cropped_digit.deinit(allocator);
                                 }
+                                allocator.free(ammo_cropped_digits);
                             }
-                            break :digit_blk num;
-                        };
+                            // Show the ammo counter digits that were found
+                            for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
+                                const digit_label = try std.fmt.allocPrint(allocator, "Digit {}", .{digit_index});
+                                defer allocator.free(digit_label);
+                                try printLabeledImage(digit_label, ammo_cropped_digit, .half_block, allocator);
+                            }
 
-                        const matches_number_digits = ammo_cropped_digits.len == number_of_number_digits;
-                        const matches_expected_characters = ammo_cropped_digits.len == expected_characters.len;
+                            const expected_number_of_number_digits: usize = digit_blk: {
+                                var num: usize = 0;
+                                for (expected_characters) |expected_character| {
+                                    switch (expected_character) {
+                                        '0'...'9' => num += 1,
+                                        else => num += 0,
+                                    }
+                                }
+                                break :digit_blk num;
+                            };
 
-                        // Let's just be lenient. If we find just the numbers we're
-                        // looking for, good enough, if we find all characters,  that's
-                        // also fine.
-                        if (!(matches_number_digits or matches_expected_characters)) {
-                            std.log.err("Expected {} (only numbers) or {} (all) digits, but found {}", .{
-                                number_of_number_digits,
-                                expected_characters.len,
-                                ammo_cropped_digits.len,
+                            const matches_number_digits = ammo_cropped_digits.len == expected_number_of_number_digits;
+                            const matches_expected_characters = ammo_cropped_digits.len == expected_characters.len;
+
+                            // Let's just be lenient. If we find just the numbers we're
+                            // looking for, good enough, if we find all characters,  that's
+                            // also fine.
+                            if (!(matches_number_digits or matches_expected_characters)) {
+                                std.log.err("Expected {} (only numbers) or {} (all) digits, but found {}", .{
+                                    expected_number_of_number_digits,
+                                    expected_characters.len,
+                                    ammo_cropped_digits.len,
+                                });
+                                break :blk error.FoundIncorrectNumberOfDigits;
+                            }
+
+                            // Save out all of the digits invidually so they're
+                            // available to review and train on
+                            for (ammo_cropped_digits, 0..) |ammo_cropped_digit, digit_index| {
+                                const expected_character = expected_characters[digit_index];
+
+                                const digit_file_name = try std.fmt.allocPrint(allocator, "{c} - {s} - {s}", .{
+                                    expected_character,
+                                    directory_descriptor_string,
+                                    entry.name,
+                                });
+                                defer allocator.free(digit_file_name);
+                                const digit_file_path = try std.fs.path.join(allocator, &.{
+                                    "./train/",
+                                    digit_file_name,
+                                });
+                                defer allocator.free(digit_file_path);
+                                try ammo_cropped_digit.saveImageToFilePath(digit_file_path, allocator);
+                            }
+                        }
+                    } catch |err| {
+                        // Debug: Show what happened during the isolation process
+                        for (isolate_diagnostics.images.keys(), isolate_diagnostics.images.values(), 0..) |label, image, image_index| {
+                            const debug_file_name = try std.fmt.allocPrint(allocator, "{s} - step{}: {s}.png", .{
+                                file_stem_name,
+                                image_index,
+                                label,
                             });
-                            break :blk error.FoundIncorrectNumberOfDigits;
-                        }
-                    }
-                } catch |err| {
-                    // Debug: Show what happened during the isolation process
-                    for (isolate_diagnostics.images.keys(), isolate_diagnostics.images.values(), 0..) |label, image, image_index| {
-                        const debug_file_name = try std.fmt.allocPrint(allocator, "{s} - step{}: {s}.png", .{
-                            file_stem_name,
-                            image_index,
-                            label,
-                        });
-                        defer allocator.free(debug_file_name);
-                        const debug_full_file_path = try std.fs.path.join(allocator, &.{
-                            "debug/",
-                            screenshot_dir_path,
-                            debug_file_name,
-                        });
-                        defer allocator.free(debug_full_file_path);
+                            defer allocator.free(debug_file_name);
+                            const debug_full_file_path = try std.fs.path.join(allocator, &.{
+                                "debug/",
+                                screenshot_dir_path,
+                                debug_file_name,
+                            });
+                            defer allocator.free(debug_full_file_path);
 
-                        try image.saveImageToFilePath(debug_full_file_path, allocator);
-                        // For small images, make it easier to pixel peep
-                        if (image.width < 200 and image.height < 200) {
-                            try printLabeledImage(debug_full_file_path, image, .half_block, allocator);
-                        } else {
-                            try printLabeledImage(debug_full_file_path, image, .kitty, allocator);
+                            try image.saveImageToFilePath(debug_full_file_path, allocator);
+                            // For small images, make it easier to pixel peep
+                            if (image.width < 200 and image.height < 200) {
+                                try printLabeledImage(debug_full_file_path, image, .half_block, allocator);
+                            } else {
+                                try printLabeledImage(debug_full_file_path, image, .kitty, allocator);
+                            }
                         }
-                    }
 
-                    return err;
-                };
-            },
-            else => continue,
+                        return err;
+                    };
+                },
+                else => continue,
+            }
         }
     }
 
