@@ -1,9 +1,17 @@
 const std = @import("std");
 const neural_networks = @import("zig-neural-networks");
 
-const checkpoint_file_name_prefix: []const u8 = "mnist_neural_network_checkpoint_epoch_";
 const json_file_suffix = ".json";
 const bytes_per_mb: usize = 1024 * 1024;
+
+fn projectRootpath(allocator: std.mem.Allocator) ![]const u8 {
+    const source_path = std.fs.path.dirname(@src().file) orelse ".";
+    const project_root_path = try std.fs.path.resolvePosix(allocator, &[_][]const u8{
+        source_path, "../../",
+    });
+
+    return project_root_path;
+}
 
 /// Saves the the current state of the neural network to a JSON checkpoint file in the
 /// root of the project.
@@ -13,14 +21,12 @@ const bytes_per_mb: usize = 1024 * 1024;
 /// parse JSON.
 pub fn saveNeuralNetworkCheckpoint(
     neural_network: *neural_networks.NeuralNetwork,
+    checkpoint_file_name_prefix: []const u8,
     current_epoch_index: usize,
     allocator: std.mem.Allocator,
 ) !void {
     // Figure out the path to save the file to in the root directory of the project
-    const source_path = std.fs.path.dirname(@src().file) orelse ".";
-    const project_root_path = try std.fs.path.resolvePosix(allocator, &[_][]const u8{
-        source_path, "../",
-    });
+    const project_root_path = try projectRootpath(allocator);
     defer allocator.free(project_root_path);
     const file_path = try std.fmt.allocPrint(
         allocator,
@@ -60,12 +66,10 @@ const CheckpointFileInfo = struct {
 
 /// Finds the latest checkpoint file in the root of the project.
 pub fn findLatestNeuralNetworkCheckpoint(
+    checkpoint_file_name_prefix: []const u8,
     allocator: std.mem.Allocator,
 ) !CheckpointFileInfo {
-    const source_path = std.fs.path.dirname(@src().file) orelse ".";
-    const project_root_path = try std.fs.path.resolvePosix(allocator, &[_][]const u8{
-        source_path, "../",
-    });
+    const project_root_path = try projectRootpath(allocator);
     defer allocator.free(project_root_path);
     var iter_dir = try std.fs.cwd().openIterableDir(project_root_path, .{});
     defer iter_dir.close();

@@ -17,19 +17,7 @@ pub const std_options = struct {
     };
 };
 
-// Make it possible to load big 4k screenshots with zigimg
-// (see https://github.com/zigimg/zigimg/issues/154#issuecomment-1889010856)
-pub const DefaultPngOptions = struct {
-    def_processors: zigimg.png.DefaultProcessors = .{},
-    gpa_allocator: std.heap.GeneralPurposeAllocator(.{}) = undefined,
-
-    const Self = @This();
-
-    pub fn get(self: *Self) zigimg.png.ReaderOptions {
-        self.gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-        return .{ .temp_allocator = self.gpa_allocator.allocator(), .processors = self.def_processors.get() };
-    }
-};
+const checkpoint_file_name_prefix: []const u8 = "neural_network_checkpoint_epoch_";
 
 const BATCH_SIZE: u32 = 100;
 const LEARN_RATE: f64 = 0.05;
@@ -42,6 +30,16 @@ pub fn main() !void {
         .ok => {},
         .leak => std.log.err("GPA allocator: Memory leak detected", .{}),
     };
+
+    // Argument parsing
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+    // `zig build run-train_ocr -- --resume-training-from-last-checkpoint`
+    const should_resume = for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--resume-training-from-last-checkpoint")) {
+            break true;
+        }
+    } else false;
 
     // Getting the training/testing data ready
     // =======================================
@@ -69,22 +67,27 @@ pub fn main() !void {
         // It's nicer to have a fixed seed so we can reproduce the same results.
         123,
     );
+    defer custom_noise_layer.deinit(allocator);
     var dense_layer1 = try neural_networks.DenseLayer.init(
         CHARACTER_CAPTURE_WIDTH * CHARACTER_CAPTURE_HEIGHT,
         100,
         allocator,
     );
+    defer dense_layer1.deinit(allocator);
     var activation_layer1 = try neural_networks.ActivationLayer.init(neural_networks.ActivationFunction{
         .elu = .{},
     });
+    defer activation_layer1.deinit(allocator);
     var dense_layer2 = try neural_networks.DenseLayer.init(
         100,
         @typeInfo(prepare_data_points.DigitLabel).Enum.fields.len,
         allocator,
     );
+    defer dense_layer2.deinit(allocator);
     var activation_layer2 = try neural_networks.ActivationLayer.init(neural_networks.ActivationFunction{
         .soft_max = .{},
     });
+    defer activation_layer2.deinit(allocator);
 
     var base_layers = [_]neural_networks.Layer{
         dense_layer1.layer(),
@@ -92,33 +95,72 @@ pub fn main() !void {
         dense_layer2.layer(),
         activation_layer2.layer(),
     };
-    var training_layers = [_]neural_networks.Layer{
+
+    var starting_epoch_index: u32 = 0;
+    var opt_parsed_neural_network: ?std.json.Parsed(neural_networks.NeuralNetwork) = null;
+    var neural_network_for_testing = blk: {
+        if (should_resume) {
+            const checkpoint_file_info = try save_load_utils.findLatestNeuralNetworkCheckpoint(
+                checkpoint_file_name_prefix,
+                allocator,
+            );
+            defer allocator.free(checkpoint_file_info.file_path);
+            starting_epoch_index = checkpoint_file_info.epoch_index;
+
+            const parsed_neural_network = try save_load_utils.loadNeuralNetworkCheckpoint(
+                checkpoint_file_info.file_path,
+                allocator,
+            );
+            opt_parsed_neural_network = parsed_neural_network;
+            break :blk parsed_neural_network.value;
+        }
+
+        break :blk try neural_networks.NeuralNetwork.initFromLayers(
+            &base_layers,
+            neural_networks.CostFunction{ .cross_entropy = .{} },
+        );
+    };
+    defer if (opt_parsed_neural_network) |parsed_neural_network| {
+        // Since parsing uses an arena allocator internally, we can just rely on their
+        // `deinit()` method to cleanup everything.
+        parsed_neural_network.deinit();
+    } else {
+        neural_network_for_testing.deinit(allocator);
+    };
+
+    var training_specific_layers = [_]neural_networks.Layer{
         // The CustomNoiseLayer should only be used during training to reduce overfitting.
         // It doesn't make sense to run during testing because we don't want to skew our
         // inputs at all.
         custom_noise_layer.layer(),
-    } ++ base_layers;
-    defer for (&training_layers) |*layer| {
-        layer.deinit(allocator);
     };
 
+    // Combine the layers specific for training with the layers for testing to create
+    // the final network.
+    var training_layers = try allocator.alloc(
+        neural_networks.Layer,
+        neural_network_for_testing.layers.len + training_specific_layers.len,
+    );
+    var training_layer_index: usize = 0;
+    for (training_specific_layers) |layer| {
+        training_layers[training_layer_index] = layer;
+        training_layer_index += 1;
+    }
+    for (neural_network_for_testing.layers) |layer| {
+        training_layers[training_layer_index] = layer;
+        training_layer_index += 1;
+    }
     var neural_network_for_training = try neural_networks.NeuralNetwork.initFromLayers(
-        &training_layers,
+        training_layers,
         neural_networks.CostFunction{ .cross_entropy = .{} },
     );
     defer neural_network_for_training.deinit(allocator);
-
-    var neural_network_for_testing = try neural_networks.NeuralNetwork.initFromLayers(
-        &base_layers,
-        neural_networks.CostFunction{ .cross_entropy = .{} },
-    );
-    defer neural_network_for_testing.deinit(allocator);
 
     try train(
         &neural_network_for_training,
         &neural_network_for_testing,
         neural_network_data,
-        0,
+        starting_epoch_index,
         allocator,
     );
 }
@@ -202,23 +244,26 @@ pub fn train(
             }
         }
 
-        // Do a full cost break-down with all of the test points after each epoch
-        const cost = try neural_network_for_testing.cost_many(neural_network_data.testing_data_points, allocator);
-        const accuracy = try neural_network_for_testing.getAccuracyAgainstTestingDataPoints(
-            neural_network_data.testing_data_points,
-            allocator,
-        );
-        std.log.debug("epoch end {d: <3} {s: >18} -> cost {d}, accuracy with *ALL* test points {d}", .{
-            current_epoch_index,
-            "",
-            cost,
-            accuracy,
-        });
+        if (current_epoch_index % 100 == 0 and current_epoch_index > 0) {
+            // Do a full cost break-down with all of the test points after each epoch
+            const cost = try neural_network_for_testing.cost_many(neural_network_data.testing_data_points, allocator);
+            const accuracy = try neural_network_for_testing.getAccuracyAgainstTestingDataPoints(
+                neural_network_data.testing_data_points,
+                allocator,
+            );
+            std.log.debug("epoch end {d: <3} {s: >18} -> cost {d}, accuracy with *ALL* test points {d}", .{
+                current_epoch_index,
+                "",
+                cost,
+                accuracy,
+            });
 
-        try save_load_utils.saveNeuralNetworkCheckpoint(
-            neural_network_for_testing,
-            current_epoch_index,
-            allocator,
-        );
+            try save_load_utils.saveNeuralNetworkCheckpoint(
+                neural_network_for_testing,
+                checkpoint_file_name_prefix,
+                current_epoch_index,
+                allocator,
+            );
+        }
     }
 }
