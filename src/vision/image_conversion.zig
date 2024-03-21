@@ -677,9 +677,11 @@ pub fn overlayImage(
                         .b = if (is_black) output_pixels[current_pixel_index_b].b else image_a.pixels[current_pixel_index_a].b,
                     };
                 },
-                // GrayscaleImage => {
-                //     output_pixels[current_pixel_index_b] = @min(1.0, output_pixels[current_pixel_index_b] + image_a.pixels[current_pixel_index_a]);
-                // },
+                GrayscaleImage => {
+                    const is_black = image_a.pixels[current_pixel_index_a].value == 0.0;
+
+                    output_pixels[current_pixel_index_b].value = if (is_black) output_pixels[current_pixel_index_b].value else image_a.pixels[current_pixel_index_a].value;
+                },
                 BinaryImage => {
                     const is_black = image_a.pixels[current_pixel_index_a].value == false;
 

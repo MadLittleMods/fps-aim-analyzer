@@ -929,6 +929,8 @@ const BOUNDING_BOX_COVERAGE = 0.75;
 /// midpoint.
 const MIDPOINT_PROXIMITY_X = 250;
 const MIDPOINT_PROXIMITY_Y = 75;
+pub const CHARACTER_CAPTURE_WIDTH = CHARACTER_MAX_WIDTH + 8;
+pub const CHARACTER_CAPTURE_HEIGHT = CHARACTER_MIN_HEIGHT + 6;
 
 /// Should be big enough to connect ammo characters together
 const CHARACTER_DILATE_WIDTH: usize = 19;
@@ -1415,9 +1417,6 @@ pub fn splitAmmoCounterRegionIntoDigits(
         allocator.free(ammo_cropped_digits);
     }
 
-    const capture_width = CHARACTER_MAX_WIDTH + 8;
-    const capture_height = CHARACTER_MIN_HEIGHT + 6;
-
     for (0..number_of_boundaries) |boundary_index| {
         const found_start_x_index = character_boundary_accumulator[boundary_index].start_index;
         const found_width = (character_boundary_accumulator[boundary_index].end_index - character_boundary_accumulator[boundary_index].start_index) + 1;
@@ -1430,7 +1429,7 @@ pub fn splitAmmoCounterRegionIntoDigits(
             return error.DetectedCharacterWidthTooSmall;
         }
 
-        if (found_width > capture_width) {
+        if (found_width > CHARACTER_CAPTURE_WIDTH) {
             std.log.err("Found character width {d}px should be <= {d}px.", .{
                 found_width,
                 CHARACTER_MAX_WIDTH,
@@ -1445,10 +1444,10 @@ pub fn splitAmmoCounterRegionIntoDigits(
             .height = @as(isize, @intCast(screenshot.image.height)),
         };
         const capture_box = BoundingClientRect(isize){
-            .x = @as(isize, @intCast(found_start_x_index)) - @divTrunc(@as(isize, @intCast(capture_width - found_width)), 2),
-            .y = @divTrunc(@as(isize, @intCast(screenshot.image.height)) - @as(isize, @intCast(capture_height)), 2),
-            .width = @as(isize, @intCast(capture_width)),
-            .height = @as(isize, @intCast(capture_height)),
+            .x = @as(isize, @intCast(found_start_x_index)) - @divTrunc(@as(isize, @intCast(CHARACTER_CAPTURE_WIDTH - found_width)), 2),
+            .y = @divTrunc(@as(isize, @intCast(screenshot.image.height)) - @as(isize, @intCast(CHARACTER_CAPTURE_HEIGHT)), 2),
+            .width = @as(isize, @intCast(CHARACTER_CAPTURE_WIDTH)),
+            .height = @as(isize, @intCast(CHARACTER_CAPTURE_HEIGHT)),
         };
         const maybe_overlap_box = findIntersection(screenshot_box, capture_box);
 
