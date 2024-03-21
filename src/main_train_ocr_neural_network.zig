@@ -1,12 +1,20 @@
 const std = @import("std");
 const neural_networks = @import("zig-neural-networks");
+const argmax = neural_networks.argmax;
+const argmaxOneHotEncodedValue = neural_networks.argmaxOneHotEncodedValue;
 const zigimg = @import("zigimg");
 const prepare_data_points = @import("vision/ocr/prepare_data_points.zig");
 const save_load_utils = @import("vision/ocr/save_load_utils.zig");
 const CustomNoiseLayer = @import("vision/ocr/CustomNoiseLayer.zig");
+const image_conversion = @import("vision/image_conversion.zig");
+const GrayscaleImage = image_conversion.GrayscaleImage;
+const GrayscalePixel = image_conversion.GrayscalePixel;
+const convertToRgbImage = image_conversion.convertToRgbImage;
 const halo_text_vision = @import("vision/halo_text_vision.zig");
 const CHARACTER_CAPTURE_WIDTH = halo_text_vision.CHARACTER_CAPTURE_WIDTH;
 const CHARACTER_CAPTURE_HEIGHT = halo_text_vision.CHARACTER_CAPTURE_HEIGHT;
+const print_utils = @import("./utils/print_utils.zig");
+const printLabeledImage = print_utils.printLabeledImage;
 
 // Set the logging levels
 pub const std_options = struct {
@@ -37,6 +45,11 @@ pub fn main() !void {
     // `zig build run-train_ocr -- --resume-training-from-last-checkpoint`
     const should_resume = for (args) |arg| {
         if (std.mem.eql(u8, arg, "--resume-training-from-last-checkpoint")) {
+            break true;
+        }
+    } else false;
+    const display_failing_test_points = for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--display-failing-test-points")) {
             break true;
         }
     } else false;
@@ -96,6 +109,7 @@ pub fn main() !void {
         activation_layer2.layer(),
     };
 
+    // Create the neural network
     var starting_epoch_index: u32 = 0;
     var opt_parsed_neural_network: ?std.json.Parsed(neural_networks.NeuralNetwork) = null;
     var neural_network_for_testing = blk: {
@@ -128,41 +142,116 @@ pub fn main() !void {
         neural_network_for_testing.deinit(allocator);
     };
 
-    var training_specific_layers = [_]neural_networks.Layer{
-        // The CustomNoiseLayer should only be used during training to reduce overfitting.
-        // It doesn't make sense to run during testing because we don't want to skew our
-        // inputs at all.
-        custom_noise_layer.layer(),
-    };
-
     // Combine the layers specific for training with the layers for testing to create
     // the final network.
-    var training_layers = try allocator.alloc(
-        neural_networks.Layer,
-        neural_network_for_testing.layers.len + training_specific_layers.len,
-    );
-    var training_layer_index: usize = 0;
-    for (training_specific_layers) |layer| {
-        training_layers[training_layer_index] = layer;
-        training_layer_index += 1;
-    }
-    for (neural_network_for_testing.layers) |layer| {
-        training_layers[training_layer_index] = layer;
-        training_layer_index += 1;
-    }
+    var training_layers = blk: {
+        var training_specific_layers = [_]neural_networks.Layer{
+            // The CustomNoiseLayer should only be used during training to reduce
+            // overfitting. It doesn't make sense to run during testing because we don't
+            // want to skew our inputs at all.
+            custom_noise_layer.layer(),
+        };
+
+        const training_layers = try allocator.alloc(
+            neural_networks.Layer,
+            neural_network_for_testing.layers.len + training_specific_layers.len,
+        );
+
+        var training_layer_index: usize = 0;
+        for (training_specific_layers) |layer| {
+            training_layers[training_layer_index] = layer;
+            training_layer_index += 1;
+        }
+        for (neural_network_for_testing.layers) |layer| {
+            training_layers[training_layer_index] = layer;
+            training_layer_index += 1;
+        }
+
+        break :blk training_layers;
+    };
+
     var neural_network_for_training = try neural_networks.NeuralNetwork.initFromLayers(
         training_layers,
         neural_networks.CostFunction{ .cross_entropy = .{} },
     );
     defer neural_network_for_training.deinit(allocator);
 
-    try train(
-        &neural_network_for_training,
-        &neural_network_for_testing,
-        neural_network_data,
-        starting_epoch_index,
+    if (display_failing_test_points) {
+        try displayFailingTestPoints(
+            &neural_network_for_testing,
+            neural_network_data,
+            starting_epoch_index,
+            allocator,
+        );
+    } else {
+        try train(
+            &neural_network_for_training,
+            &neural_network_for_testing,
+            neural_network_data,
+            starting_epoch_index,
+            allocator,
+        );
+    }
+}
+
+pub fn displayFailingTestPoints(
+    neural_network_for_testing: *neural_networks.NeuralNetwork,
+    neural_network_data: prepare_data_points.NeuralNetworkData,
+    current_epoch_index: u32,
+    allocator: std.mem.Allocator,
+) !void {
+    // Do a full cost break-down with all of the test points after each epoch
+    const cost = try neural_network_for_testing.cost_many(neural_network_data.testing_data_points, allocator);
+    const accuracy = try neural_network_for_testing.getAccuracyAgainstTestingDataPoints(
+        neural_network_data.testing_data_points,
         allocator,
     );
+    std.log.debug("epoch end {d: <3} {s: >18} -> cost {d}, accuracy with *ALL* test points {d}", .{
+        current_epoch_index,
+        "",
+        cost,
+        accuracy,
+    });
+
+    for (neural_network_data.testing_data_points, 0..) |*testing_data_point, testing_data_point_index| {
+        const outputs = try neural_network_for_testing.calculateOutputs(
+            testing_data_point.inputs,
+            allocator,
+        );
+        defer allocator.free(outputs);
+        // argmax
+        const max_output_index = argmax(outputs);
+
+        // Assume one-hot encoded expected outputs
+        const max_expected_outputs_index = try argmaxOneHotEncodedValue(testing_data_point.expected_outputs);
+
+        if (max_output_index == max_expected_outputs_index) {
+            continue;
+        }
+
+        const grayscale_pixels = try allocator.alloc(GrayscalePixel, testing_data_point.inputs.len);
+        defer allocator.free(grayscale_pixels);
+        for (testing_data_point.inputs, 0..) |input, input_index| {
+            grayscale_pixels[input_index] = GrayscalePixel{
+                .value = @floatCast(input),
+            };
+        }
+
+        const grayscale_image = GrayscaleImage{
+            .width = CHARACTER_CAPTURE_WIDTH,
+            .height = CHARACTER_CAPTURE_HEIGHT,
+            .pixels = grayscale_pixels,
+        };
+        const rgb_image = try convertToRgbImage(grayscale_image, allocator);
+        defer rgb_image.deinit(allocator);
+        const label = try std.fmt.allocPrint(allocator, "Wrong: Testing data point {} (expected: {s}) (predicted: {s})", .{
+            testing_data_point_index,
+            @tagName(@as(prepare_data_points.DigitLabel, @enumFromInt(max_expected_outputs_index))),
+            @tagName(@as(prepare_data_points.DigitLabel, @enumFromInt(max_output_index))),
+        });
+        defer allocator.free(label);
+        try printLabeledImage(label, rgb_image, .half_block, allocator);
+    }
 }
 
 /// Runs the training loop so the neural network can learn, and prints out progress
