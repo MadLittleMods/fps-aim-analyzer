@@ -3,6 +3,8 @@ const neural_networks = @import("zig-neural-networks");
 const argmax = neural_networks.argmax;
 const argmaxOneHotEncodedValue = neural_networks.argmaxOneHotEncodedValue;
 const zigimg = @import("zigimg");
+const process_screenshot_data = @import("vision/ocr/process_screenshot_data.zig");
+const processScreenshotData = process_screenshot_data.processScreenshotData;
 const prepare_data_points = @import("vision/ocr/prepare_data_points.zig");
 const save_load_utils = @import("vision/ocr/save_load_utils.zig");
 const CustomNoiseLayer = @import("vision/ocr/CustomNoiseLayer.zig");
@@ -42,12 +44,19 @@ pub fn main() !void {
     // Argument parsing
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
+    // `zig build run-train_ocr -- --preprocess-screenshot-data`
+    const should_preprocess_screenshot_data = for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--preprocess-screenshot-data")) {
+            break true;
+        }
+    } else false;
     // `zig build run-train_ocr -- --resume-training-from-last-checkpoint`
     const should_resume = for (args) |arg| {
         if (std.mem.eql(u8, arg, "--resume-training-from-last-checkpoint")) {
             break true;
         }
     } else false;
+    // `zig build run-train_ocr -- --display-failing-test-points`
     const display_failing_test_points = for (args) |arg| {
         if (std.mem.eql(u8, arg, "--display-failing-test-points")) {
             break true;
@@ -169,6 +178,7 @@ pub fn main() !void {
 
         break :blk training_layers;
     };
+    defer allocator.free(training_layers);
 
     var neural_network_for_training = try neural_networks.NeuralNetwork.initFromLayers(
         training_layers,
@@ -176,7 +186,9 @@ pub fn main() !void {
     );
     defer neural_network_for_training.deinit(allocator);
 
-    if (display_failing_test_points) {
+    if (should_preprocess_screenshot_data) {
+        try process_screenshot_data.processScreenshotData(allocator);
+    } else if (display_failing_test_points) {
         try displayFailingTestPoints(
             &neural_network_for_testing,
             neural_network_data,

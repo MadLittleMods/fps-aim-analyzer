@@ -11,6 +11,7 @@ const HSVPixel = image_conversion.HSVPixel;
 const HSVImage = image_conversion.HSVImage;
 const RGBImage = image_conversion.RGBImage;
 const RGBPixel = image_conversion.RGBPixel;
+const GrayscalePixel = image_conversion.GrayscalePixel;
 const BinaryImage = image_conversion.BinaryImage;
 const BinaryPixel = image_conversion.BinaryPixel;
 const cropImage = image_conversion.cropImage;
@@ -21,6 +22,8 @@ const rgbToHsvImage = image_conversion.rgbToHsvImage;
 const hsvToRgbImage = image_conversion.hsvToRgbImage;
 const hsvToBinaryImage = image_conversion.hsvToBinaryImage;
 const checkHsvPixelInRange = image_conversion.checkHsvPixelInRange;
+const binaryPixelsfromIntArray = image_conversion.binaryPixelsfromIntArray;
+const binaryPixelsfromString = image_conversion.binaryPixelsfromString;
 const draw_utils = @import("../utils/draw_utils.zig");
 const drawRectangleOnImage = draw_utils.drawRectangleOnImage;
 const drawEllipseOnImage = draw_utils.drawEllipseOnImage;
@@ -1005,33 +1008,33 @@ pub fn isolateHaloAmmoCounter(
         defer chromatic_pattern_binary_mask.deinit(allocator);
 
         // Erode the mask to get rid of some of the smaller chromatic aberration captures
-        // const erode_kernel = try getStructuringElement(
-        //     .cross,
-        //     3,
-        //     3,
-        //     allocator,
-        // );
-        // defer erode_kernel.deinit(allocator);
-        // const chromatic_pattern_eroded_mask = try erode(
-        //     chromatic_pattern_binary_mask,
-        //     erode_kernel,
-        //     allocator,
-        // );
-        // defer chromatic_pattern_eroded_mask.deinit(allocator);
-        // // Debug: After eroding
-        // {
-        //     const eroded_chromatic_pattern_rgb_image = try maskImage(
-        //         screenshot.image,
-        //         chromatic_pattern_eroded_mask,
-        //         allocator,
-        //     );
-        //     defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
-        //     // Debug: Pixels after eroding
-        //     if (diagnostics) |diag| {
-        //         try diag.addImage("eroded_chromatic_pattern_rgb_image", eroded_chromatic_pattern_rgb_image, allocator);
-        //     }
-        // }
-        const chromatic_pattern_eroded_mask = chromatic_pattern_binary_mask;
+        const erode_kernel = try getStructuringElement(
+            .cross,
+            3,
+            3,
+            allocator,
+        );
+        defer erode_kernel.deinit(allocator);
+        const chromatic_pattern_eroded_mask = try erode(
+            chromatic_pattern_binary_mask,
+            erode_kernel,
+            allocator,
+        );
+        defer chromatic_pattern_eroded_mask.deinit(allocator);
+        // Debug: After eroding
+        {
+            const eroded_chromatic_pattern_rgb_image = try maskImage(
+                screenshot.image,
+                chromatic_pattern_eroded_mask,
+                allocator,
+            );
+            defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
+            // Debug: Pixels after eroding
+            if (diagnostics) |diag| {
+                try diag.addImage("eroded_chromatic_pattern_rgb_image", eroded_chromatic_pattern_rgb_image, allocator);
+            }
+        }
+        // const chromatic_pattern_eroded_mask = chromatic_pattern_binary_mask;
 
         // Create a horizontal kernel and dilate to connect text characters
         //
@@ -1273,35 +1276,35 @@ pub const Boundary = struct {
     end_index: usize,
 };
 
-pub fn splitAmmoCounterRegionIntoDigits(
-    screenshot: Screenshot(RGBImage),
-    diagnostics: ?*IsolateDiagnostics,
+/// Scan each column of the image where each digit starts and ends horizontally
+pub fn findHorizontalBoundariesInImage(
+    image: anytype,
     allocator: std.mem.Allocator,
-) ![]const RGBImage {
-    const hsv_image = try rgbToHsvImage(screenshot.image, allocator);
-    defer hsv_image.deinit(allocator);
+) ![]const Boundary {
+    const PixelType = std.meta.Child(@TypeOf(image.pixels));
 
-    // Find the chromatic aberration text
-    const chromatic_pattern_hsv_img = try findHaloChromaticAberrationText(hsv_image, allocator);
-    defer chromatic_pattern_hsv_img.deinit(allocator);
-    // Debug: Pixels after finding chromatic aberration pattern
-    if (diagnostics) |diag| {
-        try diag.addImage("digits_chromatic_pattern_hsv_img", chromatic_pattern_hsv_img, allocator);
-    }
-
-    // Scan each column of the image where each digit starts and ends horizontally
     var number_of_boundaries: usize = 0;
     var character_boundary_accumulator: [MAX_NUM_AMMO_CHARACTERS]Boundary = undefined;
     // Track whether we're currently in the middle of a character
     var in_character = false;
+    var found_first_character = false;
     // Track the last column/x position we found an active pixel in the character
     var last_x_in_character: usize = 0;
     const ALLOWED_GAP = 1;
-    for (0..chromatic_pattern_hsv_img.width) |x| {
-        const is_column_active = column_blk: for (0..chromatic_pattern_hsv_img.height) |y| {
-            const pixel_index = (y * chromatic_pattern_hsv_img.width) + x;
-            const pixel = chromatic_pattern_hsv_img.pixels[pixel_index];
-            const is_pixel_active = pixel.h > 0.0 or pixel.s > 0.0 or pixel.v > 0.0;
+    for (0..image.width) |x| {
+        const is_column_active: bool = column_blk: for (0..image.height) |y| {
+            const pixel_index = (y * image.width) + x;
+            const pixel = image.pixels[pixel_index];
+            const is_pixel_active = switch (PixelType) {
+                RGBPixel => pixel.r > 0.0 or pixel.g > 0.0 or pixel.b > 0.0,
+                HSVPixel => pixel.h > 0.0 or pixel.s > 0.0 or pixel.v > 0.0,
+                GrayscalePixel => pixel.value > 0.0,
+                BinaryPixel => pixel.value,
+                else => {
+                    @compileLog("PixelType=", @typeName(PixelType));
+                    @compileError("findHorizontalBoundariesInImage(...): Unsupported pixel type");
+                },
+            };
             if (is_pixel_active) {
                 break :column_blk is_pixel_active;
             }
@@ -1329,7 +1332,8 @@ pub fn splitAmmoCounterRegionIntoDigits(
                 // `CHARACTER_MAX_WIDTH` to account for cases like
                 // `screenshot-data/halo-infinite/4k/default/26 - streets.png` where we
                 // detect chromatic aberration that almost touches the next character.
-                if (previous_boundary_found_width < CHARACTER_TYPICAL_WIDTH and
+                if (found_first_character and
+                    previous_boundary_found_width < CHARACTER_TYPICAL_WIDTH and
                     x - last_x_in_character <= (ALLOWED_GAP + 1))
                 {
                     // Go back to the previous boundary and extend it
@@ -1343,6 +1347,7 @@ pub fn splitAmmoCounterRegionIntoDigits(
                     character_boundary_accumulator[number_of_boundaries].start_index = x;
                 }
 
+                found_first_character = true;
                 in_character = true;
             }
         } else {
@@ -1365,22 +1370,142 @@ pub fn splitAmmoCounterRegionIntoDigits(
         }
     }
 
+    const boundaries = try allocator.alloc(Boundary, number_of_boundaries);
+    for (0..number_of_boundaries) |boundary_index| {
+        boundaries[boundary_index] = character_boundary_accumulator[boundary_index];
+    }
+
+    return boundaries;
+}
+
+const FindHorizontalBoundariesInImageTestCase = struct {
+    image: BinaryImage,
+    expected_boundaries: []const Boundary,
+};
+
+test "findHorizontalBoundariesInImage" {
+    const allocator = std.testing.allocator;
+
+    // 0000000000
+    const test_cases = [_]FindHorizontalBoundariesInImageTestCase{
+        .{
+            .image = BinaryImage{
+                .width = 60,
+                .height = 2,
+                .pixels = &binaryPixelsfromString(&.{
+                    "000000000011111111111111100001111111111111100000000000000000",
+                    "000000000001111111111111100000111111111111110000000000000000",
+                }),
+            },
+            .expected_boundaries = &[_]Boundary{
+                .{ .start_index = 10, .end_index = 24 },
+                .{ .start_index = 29, .end_index = 43 },
+            },
+        },
+        // TODO: Do more test cases
+        // .{
+        //     .image = BinaryImage{
+        //         .width = 60,
+        //         .height = 2,
+        //         .pixels = &binaryPixelsfromString(&.{
+        //             "100000000000000000000000000111000000000000000000000000000000",
+        //             "000000000011111111111111100001111111111111100000000000000000",
+        //             "000000000001111111111111100000111111111111110000000000000000",
+        //         }),
+        //     },
+        //     .expected_boundaries = &[_]Boundary{
+        //         .{ .start_index = 10, .end_index = 24 },
+        //         .{ .start_index = 29, .end_index = 43 },
+        //     },
+        // },
+    };
+
+    for (test_cases) |test_case| {
+        const boundaries = try findHorizontalBoundariesInImage(test_case.image, std.testing.allocator);
+        defer allocator.free(boundaries);
+
+        try std.testing.expectEqualSlices(Boundary, test_case.expected_boundaries, boundaries);
+    }
+}
+
+pub fn splitAmmoCounterRegionIntoDigits(
+    screenshot: Screenshot(RGBImage),
+    diagnostics: ?*IsolateDiagnostics,
+    allocator: std.mem.Allocator,
+) ![]const RGBImage {
+    const hsv_image = try rgbToHsvImage(screenshot.image, allocator);
+    defer hsv_image.deinit(allocator);
+
+    // Find the chromatic aberration text
+    const chromatic_pattern_hsv_img = try findHaloChromaticAberrationText(hsv_image, allocator);
+    defer chromatic_pattern_hsv_img.deinit(allocator);
     // Debug: Pixels after finding chromatic aberration pattern
     if (diagnostics) |diag| {
-        const copy_pixels = try allocator.alloc(HSVPixel, chromatic_pattern_hsv_img.pixels.len);
-        std.mem.copyForwards(HSVPixel, copy_pixels, chromatic_pattern_hsv_img.pixels);
+        try diag.addImage("digits_chromatic_pattern_hsv_img", chromatic_pattern_hsv_img, allocator);
+    }
 
-        for (0..number_of_boundaries) |boundary_index| {
-            const start_index = character_boundary_accumulator[boundary_index].start_index;
-            const end_index = character_boundary_accumulator[boundary_index].end_index;
+    const chromatic_pattern_binary_mask = try hsvToBinaryImage(chromatic_pattern_hsv_img, allocator);
+    defer chromatic_pattern_binary_mask.deinit(allocator);
+
+    // Erode the mask to get rid of some of the smaller chromatic aberration captures
+    const erode_kernel = blk: {
+        break :blk BinaryImage{
+            .width = 3,
+            .height = 3,
+            .pixels = &binaryPixelsfromIntArray(&[_]u1{
+                0, 0, 0,
+                0, 1, 1,
+                0, 1, 0,
+            }),
+        };
+    };
+    const chromatic_pattern_eroded_mask = try erode(
+        chromatic_pattern_binary_mask,
+        erode_kernel,
+        allocator,
+    );
+    defer chromatic_pattern_eroded_mask.deinit(allocator);
+    // Debug: After eroding
+    {
+        const eroded_chromatic_pattern_rgb_image = try maskImage(
+            screenshot.image,
+            chromatic_pattern_eroded_mask,
+            allocator,
+        );
+        defer eroded_chromatic_pattern_rgb_image.deinit(allocator);
+        // Debug: Pixels after eroding
+        if (diagnostics) |diag| {
+            try diag.addImage("digit_eroded_chromatic_pattern_rgb_image", eroded_chromatic_pattern_rgb_image, allocator);
+        }
+    }
+
+    const morphed_chromatic_pattern_hsv_img = try maskImage(
+        chromatic_pattern_hsv_img,
+        chromatic_pattern_eroded_mask,
+        allocator,
+    );
+    defer morphed_chromatic_pattern_hsv_img.deinit(allocator);
+
+    // Scan each column of the image where each digit starts and ends horizontally
+    const horizontal_boundaries = try findHorizontalBoundariesInImage(morphed_chromatic_pattern_hsv_img, allocator);
+    defer allocator.free(horizontal_boundaries);
+
+    // Debug: Pixels after finding chromatic aberration pattern
+    if (diagnostics) |diag| {
+        const copy_pixels = try allocator.alloc(HSVPixel, morphed_chromatic_pattern_hsv_img.pixels.len);
+        std.mem.copyForwards(HSVPixel, copy_pixels, morphed_chromatic_pattern_hsv_img.pixels);
+
+        for (horizontal_boundaries) |boundary| {
+            const start_index = boundary.start_index;
+            const end_index = boundary.end_index;
 
             const first_row_index = 0;
-            const top_start_pixel_index = (first_row_index * chromatic_pattern_hsv_img.width) + start_index;
-            const top_end_pixel_index = (first_row_index * chromatic_pattern_hsv_img.width) + end_index;
+            const top_start_pixel_index = (first_row_index * morphed_chromatic_pattern_hsv_img.width) + start_index;
+            const top_end_pixel_index = (first_row_index * morphed_chromatic_pattern_hsv_img.width) + end_index;
 
-            const last_row_index = chromatic_pattern_hsv_img.height - 1;
-            const bottom_start_pixel_index = (last_row_index * chromatic_pattern_hsv_img.width) + start_index;
-            const bottom_end_pixel_index = (last_row_index * chromatic_pattern_hsv_img.width) + end_index;
+            const last_row_index = morphed_chromatic_pattern_hsv_img.height - 1;
+            const bottom_start_pixel_index = (last_row_index * morphed_chromatic_pattern_hsv_img.width) + start_index;
+            const bottom_end_pixel_index = (last_row_index * morphed_chromatic_pattern_hsv_img.width) + end_index;
 
             copy_pixels[top_start_pixel_index] = .{ .h = 0.3333, .s = 1.0, .v = 1.0 };
             copy_pixels[bottom_start_pixel_index] = .{ .h = 0.3333, .s = 1.0, .v = 1.0 };
@@ -1390,8 +1515,8 @@ pub fn splitAmmoCounterRegionIntoDigits(
         }
 
         const marked_hsv_image = HSVImage{
-            .width = chromatic_pattern_hsv_img.width,
-            .height = chromatic_pattern_hsv_img.height,
+            .width = morphed_chromatic_pattern_hsv_img.width,
+            .height = morphed_chromatic_pattern_hsv_img.height,
             .pixels = copy_pixels,
         };
         defer marked_hsv_image.deinit(allocator);
@@ -1400,15 +1525,15 @@ pub fn splitAmmoCounterRegionIntoDigits(
     }
 
     // Sanity check that we found enough characters
-    if (number_of_boundaries < MIN_NUM_AMMO_CHARACTERS) {
+    if (horizontal_boundaries.len < MIN_NUM_AMMO_CHARACTERS) {
         std.log.err("Unable to detect enough characters in ammo counter. Found {d} characters but we expect at least {d}", .{
-            number_of_boundaries,
+            horizontal_boundaries.len,
             MIN_NUM_AMMO_CHARACTERS,
         });
         return error.NotAbleToDetectEnoughCharactersInAmmoCounter;
     }
 
-    const ammo_cropped_digits = try allocator.alloc(RGBImage, number_of_boundaries);
+    const ammo_cropped_digits = try allocator.alloc(RGBImage, horizontal_boundaries.len);
     var num_digits_allocated: usize = 0;
     errdefer {
         for (0..num_digits_allocated) |boundary_index| {
@@ -1417,9 +1542,9 @@ pub fn splitAmmoCounterRegionIntoDigits(
         allocator.free(ammo_cropped_digits);
     }
 
-    for (0..number_of_boundaries) |boundary_index| {
-        const found_start_x_index = character_boundary_accumulator[boundary_index].start_index;
-        const found_width = (character_boundary_accumulator[boundary_index].end_index - character_boundary_accumulator[boundary_index].start_index) + 1;
+    for (horizontal_boundaries, 0..) |boundary, boundary_index| {
+        const found_start_x_index = boundary.start_index;
+        const found_width = (boundary.end_index - boundary.start_index) + 1;
 
         if (found_width < CHARACTER_MIN_WIDTH) {
             std.log.err("Found character width {d}px should be >= {d}px.", .{
@@ -1539,6 +1664,7 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
+    const image_file_path = "screenshot-data/halo-infinite/1080/default/97% - banished narrows plasma pistol37.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - cliffhanger camo marker2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - streets2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/12 - cliffhanger switching weapons.png";
@@ -1553,7 +1679,7 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/18 - streets kenya.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/24 - streets2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/25 - streets burger.png";
-    const image_file_path = "screenshot-data/halo-infinite/4k/default/26 - streets.png";
+    // const image_file_path = "screenshot-data/halo-infinite/4k/default/26 - streets.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker wall.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/41% - cliffhanger stalker.png";

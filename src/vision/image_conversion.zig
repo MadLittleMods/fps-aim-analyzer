@@ -343,6 +343,42 @@ pub fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len
     return binary_pixels;
 }
 
+fn _countCharactersInPixelStringRows(comptime pixel_string_rows: []const []const u8) usize {
+    var count = 0;
+    for (pixel_string_rows) |pixel_string_row| {
+        for (pixel_string_row) |_| {
+            count += 1;
+        }
+    }
+
+    return count;
+}
+
+pub fn binaryPixelsfromString(
+    comptime pixel_string_rows: []const []const u8,
+) [_countCharactersInPixelStringRows(pixel_string_rows)]BinaryPixel {
+    comptime var binary_pixels = [_]BinaryPixel{BinaryPixel{ .value = false }} **
+        _countCharactersInPixelStringRows(pixel_string_rows);
+
+    comptime var pixel_index = 0;
+    inline for (pixel_string_rows) |pixel_string_row| {
+        inline for (pixel_string_row) |character| {
+            binary_pixels[pixel_index] = BinaryPixel{ .value = if (character == '1')
+                true
+            else if (character == '0')
+                false
+            else {
+                @compileLog("invalid character", character);
+                @compileError("binaryPixelsfromString: Invalid character in pixel string");
+            } };
+
+            pixel_index += 1;
+        }
+    }
+
+    return binary_pixels;
+}
+
 pub fn convertToRgbImage(image: anytype, allocator: std.mem.Allocator) !RGBImage {
     switch (@TypeOf(image)) {
         RGBImage => {
@@ -362,7 +398,7 @@ pub fn convertToRgbImage(image: anytype, allocator: std.mem.Allocator) !RGBImage
         GrayscaleImage => return grayscaleToRgbImage(image, allocator),
         BinaryImage => return binaryToRgbImage(image, allocator),
         else => {
-            @compileLog("image=", @typeName(image));
+            @compileLog("image=", @typeName(@TypeOf(image)));
             @compileError("convertToRgbImage(...): Unsupported image type");
         },
     }
@@ -532,7 +568,7 @@ pub fn blackOutPixels(pixel_slice: anytype) void {
         BinaryPixel => @memset(pixel_slice, BinaryPixel{ .value = false }),
         else => {
             @compileLog("PixelType=", @typeName(PixelType));
-            @compileError("maskImage: Unsupported pixel type");
+            @compileError("blackOutPixels: Unsupported pixel type");
         },
     }
 }
