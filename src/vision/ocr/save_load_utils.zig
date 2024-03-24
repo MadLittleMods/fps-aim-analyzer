@@ -77,6 +77,9 @@ pub fn findLatestNeuralNetworkCheckpoint(
     // Find the latest checkpoint file (largest epoch index)
     var latest_epoch_index: u32 = 0;
     var opt_latest_file_name: ?[]const u8 = null;
+    defer if (opt_latest_file_name) |latest_file_name| {
+        allocator.free(latest_file_name);
+    };
     var iter_dir_iterator = iter_dir.iterate();
     while (try iter_dir_iterator.next()) |entry| {
         if (entry.kind == .file and
@@ -86,8 +89,11 @@ pub fn findLatestNeuralNetworkCheckpoint(
             const number_suffix = entry.name[checkpoint_file_name_prefix.len..(entry.name.len - json_file_suffix.len)];
             const parsed_epoch_index = try std.fmt.parseInt(u32, number_suffix, 10);
             if (parsed_epoch_index >= latest_epoch_index) {
+                const file_name_copy = try allocator.alloc(u8, entry.name.len);
+                @memcpy(file_name_copy, entry.name);
+
                 latest_epoch_index = parsed_epoch_index;
-                opt_latest_file_name = entry.name;
+                opt_latest_file_name = file_name_copy;
             }
         }
     }

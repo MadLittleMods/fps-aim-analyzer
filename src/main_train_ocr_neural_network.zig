@@ -33,6 +33,11 @@ const BATCH_SIZE: u32 = 100;
 const LEARN_RATE: f64 = 0.05;
 const MOMENTUM = 0.9;
 
+/// We only use a small portion of test points when calculating cost and accuracy while
+/// going through the mini-batches in each epoch. This is to make the program run
+/// faster. The full cost breakdown is done after each epoch.
+const NUM_OF_IMAGES_TO_QUICK_TEST_ON = 250;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -326,11 +331,11 @@ pub fn train(
                 const runtime_duration_seconds = current_timestamp_seconds - start_timestamp_seconds;
 
                 const cost = try neural_network_for_testing.cost_many(
-                    neural_network_data.testing_data_points,
+                    neural_network_data.testing_data_points[0..NUM_OF_IMAGES_TO_QUICK_TEST_ON],
                     allocator,
                 );
                 const accuracy = try neural_network_for_testing.getAccuracyAgainstTestingDataPoints(
-                    neural_network_data.testing_data_points,
+                    neural_network_data.testing_data_points[0..NUM_OF_IMAGES_TO_QUICK_TEST_ON],
                     allocator,
                 );
                 std.log.debug("epoch {d: <3} batch {d: <3} {s: >12} -> cost {d}, " ++
@@ -339,13 +344,13 @@ pub fn train(
                     batch_index,
                     std.fmt.fmtDurationSigned(runtime_duration_seconds * std.time.ns_per_s),
                     cost,
-                    neural_network_data.testing_data_points.len,
+                    NUM_OF_IMAGES_TO_QUICK_TEST_ON,
                     accuracy,
                 });
             }
         }
 
-        if (current_epoch_index % 100 == 0 and current_epoch_index > 0) {
+        if (current_epoch_index % 20 == 0 and current_epoch_index > 0) {
             // Do a full cost break-down with all of the test points after each epoch
             const cost = try neural_network_for_testing.cost_many(neural_network_data.testing_data_points, allocator);
             const accuracy = try neural_network_for_testing.getAccuracyAgainstTestingDataPoints(

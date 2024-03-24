@@ -926,7 +926,7 @@ const CHARACTER_MIN_SPACING = 1;
 /// The amount of active pixels in the bounding box. Characters should be in big
 /// blocks of pixels with lots of coverage. This helps get rid of false-positives
 /// found elsewhere in the image.
-const BOUNDING_BOX_COVERAGE = 0.75;
+const BOUNDING_BOX_COVERAGE = 0.72;
 /// We find the average point of all of the chromatic abberation UI being displayed and
 /// only consider bounding boxes that are within this specified proximity to the
 /// midpoint.
@@ -1122,12 +1122,12 @@ pub fn isolateHaloAmmoCounter(
     // Calculate the bounding boxes and the total area of all of the bounding boxes
     const bounding_boxes = try allocator.alloc(BoundingClientRect(usize), chromatic_contours.len);
     defer allocator.free(bounding_boxes);
-    var total_bound_box_area: usize = 0.0;
+    var total_bounding_box_area: usize = 0.0;
     for (chromatic_contours, 0..) |contour, contour_index| {
         const bounding_box = boundingRect(contour);
         bounding_boxes[contour_index] = bounding_box;
 
-        total_bound_box_area += bounding_box.width * bounding_box.height;
+        total_bounding_box_area += bounding_box.width * bounding_box.height;
     }
 
     // Weighted average of the bounding box centers, weighted by the area of the bounding box
@@ -1146,8 +1146,8 @@ pub fn isolateHaloAmmoCounter(
         total_x += center_x * weight;
         total_y += center_y * weight;
     }
-    const midpoint_x = total_x / total_bound_box_area;
-    const midpoint_y = total_y / total_bound_box_area;
+    const midpoint_x = total_x / total_bounding_box_area;
+    const midpoint_y = total_y / total_bounding_box_area;
     // Create a bounding box around the midpoint to use as a heuristic to find the ammo counter
     const midpoint_proximity_bounding_box = BoundingClientRect(usize){
         .x = midpoint_x - MIDPOINT_PROXIMITY_X,
@@ -1223,7 +1223,10 @@ pub fn isolateHaloAmmoCounter(
             // aberration as opposed errant false-positives which may have large
             // bounding boxes but very little coverage inside.
             const has_enough_coverage = blk: {
-                const coverage = calculateCoverageInBoundingBox(chromatic_pattern_opened_mask, bounding_box);
+                const coverage = calculateCoverageInBoundingBox(
+                    chromatic_pattern_opened_mask,
+                    bounding_box,
+                );
                 break :blk coverage > BOUNDING_BOX_COVERAGE;
             };
             if (!has_enough_coverage) {
@@ -1234,7 +1237,10 @@ pub fn isolateHaloAmmoCounter(
             // rest of the chromatic abberation that we detected. This way we can avoid
             // false-positives like the text from picking up equipment which is also
             // appears on the left (ex. `screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png`)
-            const intersection = findIntersection(bounding_box, midpoint_proximity_bounding_box);
+            const intersection = findIntersection(
+                bounding_box,
+                midpoint_proximity_bounding_box,
+            );
             if (intersection == null) {
                 continue;
             }
@@ -1452,6 +1458,9 @@ pub fn splitAmmoCounterRegionIntoDigits(
         break :blk BinaryImage{
             .width = 3,
             .height = 3,
+            // We're using a half-cross just to be a little more lenient with what we
+            // keep. Our goal is to get rid of false-positive strips throughout the
+            // world (especially when looking at patterns on the ground).
             .pixels = &binaryPixelsfromIntArray(&[_]u1{
                 0, 0, 0,
                 0, 1, 1,
@@ -1664,6 +1673,8 @@ test "Find Halo ammo counter region" {
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/36 - argyle2.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/09 - argyle sidekick.png";
     // const image_file_path = "screenshot-data/halo-infinite/1080/default/11 - argyle2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/81% - banished narrows plasma pistol2.png";
+    // const image_file_path = "screenshot-data/halo-infinite/1080/default/74% - banished narrows plasma pistol12.png";
     const image_file_path = "screenshot-data/halo-infinite/1080/default/97% - banished narrows plasma pistol37.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - cliffhanger camo marker2.png";
     // const image_file_path = "screenshot-data/halo-infinite/4k/default/11 - streets2.png";
