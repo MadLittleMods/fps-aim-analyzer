@@ -1,7 +1,7 @@
 const std = @import("std");
 const x = @import("x");
 const common = @import("./x11_common.zig");
-const buffer_utils = @import("../buffer_utils.zig");
+const buffer_utils = @import("../utils/buffer_utils.zig");
 
 /// X server extension info.
 pub const ExtensionInfo = struct {

@@ -2,14 +2,15 @@ const std = @import("std");
 const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11/x11_extension_utils.zig");
-const buffer_utils = @import("buffer_utils.zig");
+const buffer_utils = @import("utils/buffer_utils.zig");
 const AppState = @import("app_state.zig").AppState;
+const image_conversion = @import("vision/image_conversion.zig");
 
 /// Given an unsigned integer type, returns a signed integer type that can hold the
 /// entire positive range of the unsigned integer type.
 fn GetEncompassingSignedInt(comptime unsigned_T: type) type {
     if (@typeInfo(unsigned_T).Int.signedness == .signed) {
-        @panic("This function only makes sense to use with unsigned integer types but you passed in a signed integer.");
+        @compileError("This function only makes sense to use with unsigned integer types but you passed in a signed integer.");
     }
 
     return @Type(.{
@@ -19,11 +20,6 @@ fn GetEncompassingSignedInt(comptime unsigned_T: type) type {
         },
     });
 }
-
-pub const Dimensions = struct {
-    width: i16,
-    height: i16,
-};
 
 /// Stores the IDs of the all of the resources used when communicating with the X Window server.
 pub const Ids = struct {
@@ -80,7 +76,7 @@ pub const Ids = struct {
 };
 
 /// Given a list of picture formats, finds the first one that matches the desired depth.
-pub fn findMatchingPictureFormat(
+pub fn findMatchingPictureFormatForDepth(
     formats: []const x.render.PictureFormatInfo,
     desired_depth: u8,
 ) !x.render.PictureFormatInfo {
@@ -89,6 +85,37 @@ pub fn findMatchingPictureFormat(
         return format;
     }
     return error.PictureFormatNotFound;
+}
+
+pub fn findMatchingPixmapFormatForDepth(
+    formats: []const x.Format,
+    desired_depth: u8,
+) !x.Format {
+    for (formats) |format| {
+        if (format.depth != desired_depth) continue;
+        return format;
+    }
+    return error.PixmapFormatNotFound;
+}
+
+pub fn getFirstScreenFromConnectionSetup(conn_setup: x.ConnectSetup) *x.Screen {
+    const fixed = conn_setup.fixed();
+
+    const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
+    const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
+    const screen_ptr = conn_setup.getFirstScreenPtr(format_list_limit);
+
+    return screen_ptr;
+}
+
+pub fn getPixmapFormatsFromConnectionSetup(conn_setup: x.ConnectSetup) ![]const x.Format {
+    const fixed = conn_setup.fixed();
+
+    const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
+    const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
+    const pixmap_formats = try conn_setup.getFormatList(format_list_offset, format_list_limit);
+
+    return pixmap_formats;
 }
 
 /// Bootstraps all of the X resources we will need use when rendering the UI.
@@ -110,6 +137,7 @@ pub fn createResources(
     const max_screenshots_shown = state.max_screenshots_shown;
     const margin = state.margin;
 
+    // TODO: Pass in an allocator to use for the arena allocator
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_allocator.deinit();
     const allocator = arena_allocator.allocator();
@@ -257,15 +285,22 @@ pub fn createResources(
                 //     msg.num_depths,
                 //     msg.num_visuals,
                 // });
-                // for (msg.getPictureFormats(), 0..) |format, i| {
+                const picture_formats = msg.getPictureFormats();
+                // for (picture_formats, 0..) |format, i| {
                 //     std.log.debug("RENDER extension: pict format ({}) {any}", .{
                 //         i,
                 //         format,
                 //     });
                 // }
                 break :blk .{
-                    .matching_picture_format_24 = try findMatchingPictureFormat(msg.getPictureFormats()[0..], 24),
-                    .matching_picture_format_32 = try findMatchingPictureFormat(msg.getPictureFormats()[0..], 32),
+                    .matching_picture_format_24 = try findMatchingPictureFormatForDepth(
+                        picture_formats[0..],
+                        24,
+                    ),
+                    .matching_picture_format_32 = try findMatchingPictureFormatForDepth(
+                        picture_formats[0..],
+                        32,
+                    ),
                 };
             },
             else => |msg| {
@@ -383,8 +418,11 @@ pub const FontDims = struct {
 pub const RenderContext = struct {
     sock: *const std.os.socket_t,
     ids: *const Ids,
+    root_screen_depth: u8,
     extensions: *const x11_extension_utils.Extensions,
     font_dims: *const FontDims,
+    image_byte_order: std.builtin.Endian,
+    root_window_pixmap_format: x.Format,
     state: *AppState,
 
     /// Renders the UI to our window.
@@ -529,5 +567,67 @@ pub const RenderContext = struct {
         }
 
         self.state.next_screenshot_index = @rem(next_screenshot_index + 1, max_screenshots_shown);
+    }
+
+    /// Grab the pixels from the window after we've rendered to it using `get_image` and
+    /// check that the test image pattern was *actually* drawn to the window.
+    pub fn analyzeScreenCapture(
+        self: *@This(),
+        get_image_reply: *x.get_image.Reply,
+    ) !void {
+        const image_data = get_image_reply.getData();
+
+        const capture_width: i64 = self.state.ammo_counter_bounding_box.width;
+        const capture_height: i64 = self.state.ammo_counter_bounding_box.height;
+
+        // std.log.debug("capture_width={} capture_height={} image_data.len={}", .{
+        //     capture_width,
+        //     capture_height,
+        //     image_data.len,
+        // });
+
+        // Given our request for an image with the width/height specified,
+        // make sure we got at least the right amount of data back to
+        // represent that size of image (there may also be padding at the
+        // end).
+        const expected_num_bytes = capture_width * capture_height * x.get_image.Reply.scanline_pad_bytes;
+        if (image_data.len < expected_num_bytes) {
+            std.log.err("Expected at least {} bytes of image data but only got {} bytes", .{
+                expected_num_bytes,
+                image_data.len,
+            });
+            return error.ExpectedMoreImageData;
+        }
+
+        const bytes_per_pixel_in_data = x.get_image.Reply.scanline_pad_bytes;
+
+        var width_index: u16 = 0;
+        var height_index: u16 = 0;
+        var image_data_index: u32 = 0;
+        while ((image_data_index + bytes_per_pixel_in_data) < image_data.len) : (image_data_index += bytes_per_pixel_in_data) {
+            if (width_index >= capture_width) {
+                // For Debugging: Print a newline after each row
+                // std.debug.print("\n", .{});
+                width_index = 0;
+                height_index += 1;
+            }
+
+            //  The image data might have padding on the end so make sure to stop when
+            //  we expect the image to end
+            if (height_index >= capture_height) {
+                break;
+            }
+
+            // const padded_pixel_value = image_data[image_data_index..(image_data_index + bytes_per_pixel_in_data)];
+            // const pixel_value = std.mem.readVarInt(
+            //     u32,
+            //     padded_pixel_value,
+            //     self.image_byte_order,
+            // );
+            // // For Debugging: Print out the pixels
+            // std.debug.print("0x{x} ", .{pixel_value});
+
+            width_index += 1;
+        }
     }
 };

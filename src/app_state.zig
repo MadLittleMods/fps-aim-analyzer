@@ -1,4 +1,4 @@
-const render_utils = @import("render_utils.zig");
+const render_utils = @import("utils/render_utils.zig");
 
 /// Holds the overall state of the application. In an ideal world, this would be
 /// everything to reproduce the exact way the application looks at any given time.
@@ -9,6 +9,9 @@ pub const AppState = struct {
     window_dimensions: render_utils.Dimensions,
     /// The pixel dimensions of how big each screenshot capture should be.
     screenshot_capture_dimensions: render_utils.Dimensions,
+    /// The pixel dimension region of the screen we're looking at to analyze the ammo
+    /// counter.
+    ammo_counter_bounding_box: render_utils.BoundingClientRect(i16),
 
     /// The max number of screenshots that will be stored and displayed.
     max_screenshots_shown: u8,

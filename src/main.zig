@@ -1,58 +1,89 @@
 const std = @import("std");
 const x = @import("x");
+const zigimg = @import("zigimg");
 const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11//x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
-const render_utils = @import("render_utils.zig");
+const render = @import("render.zig");
 const AppState = @import("app_state.zig").AppState;
-const buffer_utils = @import("buffer_utils.zig");
-
-var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-const allocator = arena.allocator();
+const buffer_utils = @import("utils/buffer_utils.zig");
+const render_utils = @import("utils/render_utils.zig");
+const Dimensions = render_utils.Dimensions;
+const BoundingClientRect = render_utils.BoundingClientRect;
 
 pub fn main() !u8 {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer switch (gpa.deinit()) {
+        .ok => {},
+        .leak => std.log.err("GPA allocator: Memory leak detected", .{}),
+    };
+
     try x.wsaStartup();
     const conn = try common.connect(allocator);
     defer std.os.shutdown(conn.sock, .both) catch {};
+    const conn_setup_fixed_fields = conn.setup.fixed();
+    // Print out some info about the X server we connected to
+    {
+        inline for (@typeInfo(@TypeOf(conn_setup_fixed_fields.*)).Struct.fields) |field| {
+            std.log.debug("{s}: {any}", .{ field.name, @field(conn_setup_fixed_fields, field.name) });
+        }
+        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
+    }
 
-    const screen = blk: {
-        const fixed = conn.setup.fixed();
-        inline for (@typeInfo(@TypeOf(fixed.*)).Struct.fields) |field| {
-            std.log.debug("{s}: {any}", .{ field.name, @field(fixed, field.name) });
-        }
-        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(fixed.vendor_len)});
-        const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
-        const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
-        var screen = conn.setup.getFirstScreenPtr(format_list_limit);
-        inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
-            std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
-        }
-        break :blk screen;
+    const screen = render.getFirstScreenFromConnectionSetup(conn.setup);
+    inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
+        std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
+    }
+
+    const pixmap_formats = try render.getPixmapFormatsFromConnectionSetup(conn.setup);
+    const root_window_pixmap_format = try render.findMatchingPixmapFormatForDepth(
+        pixmap_formats,
+        screen.root_depth,
+    );
+
+    const image_byte_order: std.builtin.Endian = switch (conn_setup_fixed_fields.image_byte_order) {
+        .lsb_first => .Little,
+        .msb_first => .Big,
+        else => |order| {
+            std.log.err("unknown image-byte-order {}", .{order});
+            return 1;
+        },
     };
 
-    const ids = render_utils.Ids.init(
+    const ids = render.Ids.init(
         screen.root,
-        conn.setup.fixed().resource_id_base,
+        conn_setup_fixed_fields.resource_id_base,
     );
 
     const depth = 32;
 
-    const root_screen_dimensions = render_utils.Dimensions{
+    const root_screen_dimensions = Dimensions{
         .width = @intCast(screen.pixel_width),
         .height = @intCast(screen.pixel_height),
     };
 
     const screenshot_capture_scale = 20;
-    const screenshot_capture_dimensions = render_utils.Dimensions{
+    const screenshot_capture_dimensions = Dimensions{
         .width = @intCast(@divTrunc(screen.pixel_width, screenshot_capture_scale)),
         .height = @intCast(@divTrunc(screen.pixel_height, screenshot_capture_scale)),
+    };
+
+    // Start out with the bottom-right corner of the screen
+    const ammo_counter_bounding_box_width = 30; //@intCast(@divTrunc(screen.pixel_width, 2)),
+    const ammo_counter_bounding_box_height = 30; //@intCast(@divTrunc(screen.pixel_height, 2)),
+    const ammo_counter_bounding_box = BoundingClientRect(i16){
+        .x = @as(i16, @intCast(screen.pixel_width)) - ammo_counter_bounding_box_width,
+        .y = @as(i16, @intCast(screen.pixel_height)) - ammo_counter_bounding_box_height,
+        .width = ammo_counter_bounding_box_width,
+        .height = ammo_counter_bounding_box_height,
     };
 
     const max_screenshots_shown = 6;
     const margin = 20;
     const padding = 10;
-    const window_dimensions = render_utils.Dimensions{
+    const window_dimensions = Dimensions{
         .width = screenshot_capture_dimensions.width + (2 * padding),
         .height = (max_screenshots_shown * (screenshot_capture_dimensions.height + padding)) + padding,
     };
@@ -61,6 +92,7 @@ pub fn main() !u8 {
         .root_screen_dimensions = root_screen_dimensions,
         .window_dimensions = window_dimensions,
         .screenshot_capture_dimensions = screenshot_capture_dimensions,
+        .ammo_counter_bounding_box = ammo_counter_bounding_box,
         .max_screenshots_shown = max_screenshots_shown,
         .margin = margin,
         .padding = padding,
@@ -68,7 +100,7 @@ pub fn main() !u8 {
 
     // Create a big buffer that we can use to read messages and replies from the X server.
     const double_buffer = try x.DoubleBuffer.init(
-        std.mem.alignForward(usize, 8000, std.mem.page_size),
+        std.mem.alignForward(usize, std.math.pow(usize, 2, 32), std.mem.page_size),
         .{ .memfd_name = "ZigX11DoubleBuffer" },
     );
     defer double_buffer.deinit(); // not necessary but good to test
@@ -135,7 +167,7 @@ pub fn main() !u8 {
         .input = input_extension,
     };
 
-    try render_utils.createResources(
+    try render.createResources(
         conn.sock,
         &buffer,
         &ids,
@@ -167,7 +199,7 @@ pub fn main() !u8 {
         x.query_text_extents.serialize(&message_buffer, ids.fg_gc, text);
         try conn.send(&message_buffer);
     }
-    const font_dims: render_utils.FontDims = blk: {
+    const font_dims: render.FontDims = blk: {
         const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
         try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
@@ -187,20 +219,23 @@ pub fn main() !u8 {
         }
     };
 
-    // Show the window. In the X11 protocol is called mapping a window, and hiding a
-    // window is called unmapping. When windows are initially created, they are unmapped
-    // (or hidden).
+    // Show the window. In the X11 protocol, this is called mapping a window, and hiding
+    // a window is called unmapping. When windows are initially created, they are
+    // unmapped (or hidden).
     {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, ids.window);
         try conn.send(&msg);
     }
 
-    var render_context = render_utils.RenderContext{
+    var render_context = render.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,
+        .root_screen_depth = screen.root_depth,
         .extensions = &extensions,
         .font_dims = &font_dims,
+        .image_byte_order = image_byte_order,
+        .root_window_pixmap_format = root_window_pixmap_format,
         .state = &state,
     };
 
@@ -208,7 +243,9 @@ pub fn main() !u8 {
         {
             const receive_buffer = buffer.nextReadBuffer();
             if (receive_buffer.len == 0) {
-                std.log.err("buffer size {} not big enough!", .{buffer.half_len});
+                std.log.err("buffer size {} not big enough to fit the bytes we received!", .{
+                    buffer.half_len,
+                });
                 return 1;
             }
             const len = try x.readSock(conn.sock, receive_buffer, 0);
@@ -234,8 +271,11 @@ pub fn main() !u8 {
                     return 1;
                 },
                 .reply => |msg| {
-                    std.log.info("todo: handle a reply message {}", .{msg});
-                    return error.TodoHandleReplyMessage;
+                    // We assume any reply here will be to the `get_image` request but
+                    // normally you would want some state machine sequencer to match up
+                    // requests with replies.
+                    const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
+                    try render_context.analyzeScreenCapture(get_image_reply);
                 },
                 .generic_extension_event => |msg| {
                     if (msg.ext_opcode == extensions.input.opcode) {
@@ -247,7 +287,9 @@ pub fn main() !u8 {
                                     try render_context.render();
                                 }
                             },
-                            else => unreachable, // We did not register for these events so we should not see them
+                            // We did not register for these events so we should not see them
+                            else => @panic("Received unexpected generic extension " ++
+                                "event that we did not register for"),
                         }
                     } else {
                         std.log.info("TODO: handle a GE generic event {}", .{msg});
@@ -290,17 +332,39 @@ pub fn main() !u8 {
                 },
                 .no_exposure => |msg| std.debug.panic("unexpected no_exposure {}", .{msg}),
                 .unhandled => |msg| {
-                    std.log.info("todo: server msg {}", .{msg});
+                    std.log.info("todo: unhandled server msg {}", .{msg});
                     return error.UnhandledServerMsg;
                 },
                 .map_notify,
                 .reparent_notify,
                 .configure_notify,
-                => unreachable, // did not register for these
+                // We did not register for these
+                => @panic("Received unexpected event event that we did not register for"),
             }
+        }
+
+        {
+            var get_image_msg: [x.get_image.len]u8 = undefined;
+            x.get_image.serialize(&get_image_msg, .{
+                .format = .z_pixmap,
+                .drawable_id = ids.root,
+                .x = @intCast(ammo_counter_bounding_box.x),
+                .y = @intCast(ammo_counter_bounding_box.y),
+                .width = @intCast(ammo_counter_bounding_box.width),
+                .height = @intCast(ammo_counter_bounding_box.height),
+                .plane_mask = 0xffffffff,
+            });
+            // We handle the reply to this request above (see `analyzeScreenCapture`)
+            try common.send(conn.sock, &get_image_msg);
         }
     }
 
     // Clean-up
-    try render_utils.cleanupResources(ids);
+    try render.cleanupResources(conn.sock, &ids);
+}
+
+test {
+    _ = @import("utils/render_utils.zig");
+    _ = @import("utils/print_utils.zig");
+    _ = @import("vision/vision.zig");
 }

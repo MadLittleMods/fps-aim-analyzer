@@ -1,2 +1,8 @@
 zig-cache/
 zig-out/
+
+screenshot-data/
+debug/
+train/
+
+src/neural_network_checkpoint_*
