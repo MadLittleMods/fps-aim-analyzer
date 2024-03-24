@@ -89,6 +89,11 @@ pub fn findLatestNeuralNetworkCheckpoint(
             const number_suffix = entry.name[checkpoint_file_name_prefix.len..(entry.name.len - json_file_suffix.len)];
             const parsed_epoch_index = try std.fmt.parseInt(u32, number_suffix, 10);
             if (parsed_epoch_index >= latest_epoch_index) {
+                // Clear out the previous file name if we were already keeping track of one
+                if (opt_latest_file_name) |latest_file_name| {
+                    allocator.free(latest_file_name);
+                }
+
                 const file_name_copy = try allocator.alloc(u8, entry.name.len);
                 @memcpy(file_name_copy, entry.name);
 
