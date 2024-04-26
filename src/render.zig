@@ -5,6 +5,11 @@ const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const buffer_utils = @import("utils/buffer_utils.zig");
 const AppState = @import("app_state.zig").AppState;
 const image_conversion = @import("vision/image_conversion.zig");
+const RGBImage = image_conversion.RGBImage;
+const RGBPixel = image_conversion.RGBPixel;
+const halo_text_vision = @import("vision/halo_text_vision.zig");
+const Screenshot = halo_text_vision.Screenshot;
+const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
 
 /// Given an unsigned integer type, returns a signed integer type that can hold the
 /// entire positive range of the unsigned integer type.
@@ -127,6 +132,7 @@ pub fn createResources(
     extensions: *const x11_extension_utils.Extensions,
     depth: u8,
     state: *const AppState,
+    base_allocator: std.mem.Allocator,
 ) !void {
     const reader = common.SocketReader{ .context = sock };
     const buffer_limit = buffer.half_len;
@@ -137,8 +143,7 @@ pub fn createResources(
     const max_screenshots_shown = state.max_screenshots_shown;
     const margin = state.margin;
 
-    // TODO: Pass in an allocator to use for the arena allocator
-    var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena_allocator = std.heap.ArenaAllocator.init(base_allocator);
     defer arena_allocator.deinit();
     const allocator = arena_allocator.allocator();
     // We need to find a visual type that matches the depth of our window that we want to create.
@@ -424,6 +429,7 @@ pub const RenderContext = struct {
     image_byte_order: std.builtin.Endian,
     root_window_pixmap_format: x.Format,
     state: *AppState,
+    character_recognition: *CharacterRecognition,
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
@@ -569,22 +575,18 @@ pub const RenderContext = struct {
         self.state.next_screenshot_index = @rem(next_screenshot_index + 1, max_screenshots_shown);
     }
 
-    /// Grab the pixels from the window after we've rendered to it using `get_image` and
-    /// check that the test image pattern was *actually* drawn to the window.
-    pub fn analyzeScreenCapture(
+    pub fn convertXGetImageReplyToRGBImage(
         self: *@This(),
         get_image_reply: *x.get_image.Reply,
-    ) !void {
+        allocator: std.mem.Allocator,
+    ) !RGBImage {
         const image_data = get_image_reply.getData();
 
+        // Cast to an i64 so we can do big math with it (3840x2160 for example) (TODO:
+        // figure out better way to do math here)
         const capture_width: i64 = self.state.ammo_counter_bounding_box.width;
         const capture_height: i64 = self.state.ammo_counter_bounding_box.height;
-
-        // std.log.debug("capture_width={} capture_height={} image_data.len={}", .{
-        //     capture_width,
-        //     capture_height,
-        //     image_data.len,
-        // });
+        const bytes_per_pixel_in_data = x.get_image.Reply.scanline_pad_bytes;
 
         // Given our request for an image with the width/height specified,
         // make sure we got at least the right amount of data back to
@@ -599,35 +601,75 @@ pub const RenderContext = struct {
             return error.ExpectedMoreImageData;
         }
 
-        const bytes_per_pixel_in_data = x.get_image.Reply.scanline_pad_bytes;
+        const rgb_pixels = try allocator.alloc(RGBPixel, @intCast(capture_width * capture_height));
+        defer allocator.free(rgb_pixels);
+        const rgb_image = RGBImage{
+            .width = @intCast(capture_width),
+            .height = @intCast(capture_height),
+            .pixels = rgb_pixels,
+        };
 
-        var width_index: u16 = 0;
-        var height_index: u16 = 0;
+        var x_index: usize = 0;
+        var y_index: usize = 0;
         var image_data_index: u32 = 0;
         while ((image_data_index + bytes_per_pixel_in_data) < image_data.len) : (image_data_index += bytes_per_pixel_in_data) {
-            if (width_index >= capture_width) {
+            if (x_index >= capture_width) {
                 // For Debugging: Print a newline after each row
                 // std.debug.print("\n", .{});
-                width_index = 0;
-                height_index += 1;
+                x_index = 0;
+                y_index += 1;
             }
 
             //  The image data might have padding on the end so make sure to stop when
             //  we expect the image to end
-            if (height_index >= capture_height) {
+            if (y_index >= capture_height) {
                 break;
             }
 
-            // const padded_pixel_value = image_data[image_data_index..(image_data_index + bytes_per_pixel_in_data)];
-            // const pixel_value = std.mem.readVarInt(
-            //     u32,
-            //     padded_pixel_value,
-            //     self.image_byte_order,
-            // );
-            // // For Debugging: Print out the pixels
-            // std.debug.print("0x{x} ", .{pixel_value});
+            const pixel_index: usize = y_index * @as(usize, @intCast(capture_width)) + x_index;
 
-            width_index += 1;
+            const padded_pixel_value = image_data[image_data_index..(image_data_index + bytes_per_pixel_in_data)];
+            // Read the raw value into a normal u32 (taking into account the byte order)
+            const pixel_value = std.mem.readVarInt(
+                u32,
+                padded_pixel_value,
+                self.image_byte_order,
+            );
+            // Break down the pixel value into its ARGB components
+            //
+            // const alpha = @as(u8, @intCast((pixel_value >> 24) & 0xff));
+            const red = @as(u8, @intCast((pixel_value >> 16) & 0xff));
+            const green = @as(u8, @intCast((pixel_value >> 8) & 0xff));
+            const blue = @as(u8, @intCast(pixel_value & 0xff));
+
+            // For Debugging: Print out the pixels
+            // std.debug.print("0x{x} ", .{pixel_value});
+            rgb_pixels[pixel_index] = RGBPixel{
+                .r = @as(f32, @floatFromInt(red)) / 255.0,
+                .g = @as(f32, @floatFromInt(green)) / 255.0,
+                .b = @as(f32, @floatFromInt(blue)) / 255.0,
+            };
+
+            x_index += 1;
+        }
+
+        return rgb_image;
+    }
+
+    /// Grab the pixels from the window after we've rendered to it using `get_image` and
+    /// check that the test image pattern was *actually* drawn to the window.
+    pub fn analyzeScreenCapture(
+        self: *@This(),
+        screenshot: Screenshot(RGBImage),
+        allocator: std.mem.Allocator,
+    ) !void {
+        const opt_asdf = try self.character_recognition.parseAmmoCounterImage(
+            screenshot,
+            null,
+            allocator,
+        );
+        if (opt_asdf) |asdf| {
+            std.log.err("asdf {any}", .{asdf});
         }
     }
 };

@@ -11,6 +11,19 @@ const buffer_utils = @import("utils/buffer_utils.zig");
 const render_utils = @import("utils/render_utils.zig");
 const Dimensions = render_utils.Dimensions;
 const BoundingClientRect = render_utils.BoundingClientRect;
+const image_conversion = @import("vision/image_conversion.zig");
+const RGBImage = image_conversion.RGBImage;
+const halo_text_vision = @import("vision/halo_text_vision.zig");
+const ScreenshotRegion = halo_text_vision.ScreenshotRegion;
+const Screenshot = halo_text_vision.Screenshot;
+const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
+const save_load_utils = @import("vision/ocr/save_load_utils.zig");
+
+fn projectSrcPath() []const u8 {
+    const file_source_path = std.fs.path.dirname(@src().file) orelse ".";
+
+    return file_source_path;
+}
 
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -23,6 +36,7 @@ pub fn main() !u8 {
     try x.wsaStartup();
     const conn = try common.connect(allocator);
     defer std.os.shutdown(conn.sock, .both) catch {};
+    defer conn.setup.deinit(allocator);
     const conn_setup_fixed_fields = conn.setup.fixed();
     // Print out some info about the X server we connected to
     {
@@ -71,8 +85,9 @@ pub fn main() !u8 {
     };
 
     // Start out with the bottom-right corner of the screen
-    const ammo_counter_bounding_box_width = 30; //@intCast(@divTrunc(screen.pixel_width, 2)),
-    const ammo_counter_bounding_box_height = 30; //@intCast(@divTrunc(screen.pixel_height, 2)),
+    const ammo_counter_screenshot_region = ScreenshotRegion.bottom_right_quadrant;
+    const ammo_counter_bounding_box_width: i16 = @intCast(@divTrunc(screen.pixel_width, 2));
+    const ammo_counter_bounding_box_height: i16 = @intCast(@divTrunc(screen.pixel_height, 2));
     const ammo_counter_bounding_box = BoundingClientRect(i16){
         .x = @as(i16, @intCast(screen.pixel_width)) - ammo_counter_bounding_box_width,
         .y = @as(i16, @intCast(screen.pixel_height)) - ammo_counter_bounding_box_height,
@@ -93,6 +108,8 @@ pub fn main() !u8 {
         .window_dimensions = window_dimensions,
         .screenshot_capture_dimensions = screenshot_capture_dimensions,
         .ammo_counter_bounding_box = ammo_counter_bounding_box,
+        // We start out capturing the bottom-right corner of the screen
+        .ammo_counter_screenshot_region = ammo_counter_screenshot_region,
         .max_screenshots_shown = max_screenshots_shown,
         .margin = margin,
         .padding = padding,
@@ -175,6 +192,7 @@ pub fn main() !u8 {
         &extensions,
         depth,
         &state,
+        allocator,
     );
 
     // Register for events from the X Input extension for when the mouse is clicked
@@ -228,6 +246,24 @@ pub fn main() !u8 {
         try conn.send(&msg);
     }
 
+    // Assemble a file path to the neural network model file
+    const neural_network_file_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{
+            // Prepend the project directory path
+            projectSrcPath(),
+            // And the latest file name
+            "neural_network_checkpoint_epoch_440.json",
+        },
+    );
+    defer allocator.free(neural_network_file_path);
+    // Load the neural network and get ready to recognize characters
+    var character_recognition = try CharacterRecognition.init(
+        neural_network_file_path,
+        allocator,
+    );
+
     var render_context = render.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,
@@ -237,6 +273,7 @@ pub fn main() !u8 {
         .image_byte_order = image_byte_order,
         .root_window_pixmap_format = root_window_pixmap_format,
         .state = &state,
+        .character_recognition = &character_recognition,
     };
 
     while (true) {
@@ -271,11 +308,27 @@ pub fn main() !u8 {
                     return 1;
                 },
                 .reply => |msg| {
-                    // We assume any reply here will be to the `get_image` request but
-                    // normally you would want some state machine sequencer to match up
-                    // requests with replies.
+                    // Note: We assume any reply here will be to the `get_image` request
+                    // but normally you would want some state machine sequencer to match
+                    // up requests with replies.
                     const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
-                    try render_context.analyzeScreenCapture(get_image_reply);
+
+                    const rgb_image = try render_context.convertXGetImageReplyToRGBImage(get_image_reply, allocator);
+                    defer rgb_image.deinit(allocator);
+                    const screenshot: Screenshot(RGBImage) = .{
+                        .image = rgb_image,
+                        .crop_region = state.ammo_counter_screenshot_region,
+                        .crop_region_x = @intCast(ammo_counter_bounding_box.x),
+                        .crop_region_y = @intCast(ammo_counter_bounding_box.y),
+                        .pre_crop_width = screen.pixel_width,
+                        .pre_crop_height = screen.pixel_height,
+                        // We assume the game is being rendered 1:1 (100%), so the game
+                        // resolution is the same as the image resolution
+                        .game_resolution_width = screen.pixel_width,
+                        .game_resolution_height = screen.pixel_height,
+                    };
+
+                    try render_context.analyzeScreenCapture(screenshot, allocator);
                 },
                 .generic_extension_event => |msg| {
                     if (msg.ext_opcode == extensions.input.opcode) {

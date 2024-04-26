@@ -4,13 +4,13 @@ const neural_networks = @import("zig-neural-networks");
 const json_file_suffix = ".json";
 const bytes_per_mb: usize = 1024 * 1024;
 
-fn projectRootpath(allocator: std.mem.Allocator) ![]const u8 {
-    const source_path = std.fs.path.dirname(@src().file) orelse ".";
-    const project_root_path = try std.fs.path.resolvePosix(allocator, &[_][]const u8{
-        source_path, "../../",
+fn projectSrcPath(allocator: std.mem.Allocator) ![]const u8 {
+    const file_source_path = std.fs.path.dirname(@src().file) orelse ".";
+    const project_src_path = try std.fs.path.resolvePosix(allocator, &[_][]const u8{
+        file_source_path, "../../",
     });
 
-    return project_root_path;
+    return project_src_path;
 }
 
 /// Saves the the current state of the neural network to a JSON checkpoint file in the
@@ -26,14 +26,14 @@ pub fn saveNeuralNetworkCheckpoint(
     allocator: std.mem.Allocator,
 ) !void {
     // Figure out the path to save the file to in the root directory of the project
-    const project_root_path = try projectRootpath(allocator);
-    defer allocator.free(project_root_path);
+    const project_src_path = try projectSrcPath(allocator);
+    defer allocator.free(project_src_path);
     const file_path = try std.fmt.allocPrint(
         allocator,
         "{s}/{s}{d}.json",
         .{
             // Prepend the project directory path
-            project_root_path,
+            project_src_path,
             // Assemble the file name
             checkpoint_file_name_prefix,
             current_epoch_index,
@@ -69,9 +69,9 @@ pub fn findLatestNeuralNetworkCheckpoint(
     checkpoint_file_name_prefix: []const u8,
     allocator: std.mem.Allocator,
 ) !CheckpointFileInfo {
-    const project_root_path = try projectRootpath(allocator);
-    defer allocator.free(project_root_path);
-    var iter_dir = try std.fs.cwd().openIterableDir(project_root_path, .{});
+    const project_src_path = try projectSrcPath(allocator);
+    defer allocator.free(project_src_path);
+    var iter_dir = try std.fs.cwd().openIterableDir(project_src_path, .{});
     defer iter_dir.close();
 
     // Find the latest checkpoint file (largest epoch index)
@@ -106,7 +106,7 @@ pub fn findLatestNeuralNetworkCheckpoint(
     const latest_file_name = if (opt_latest_file_name) |latest_file_name| blk: {
         break :blk latest_file_name;
     } else {
-        std.log.err("No neural network checkpoints found in {s}", .{project_root_path});
+        std.log.err("No neural network checkpoints found in {s}", .{project_src_path});
         return error.NoCheckpointsFound;
     };
 
@@ -115,7 +115,7 @@ pub fn findLatestNeuralNetworkCheckpoint(
         "{s}/{s}",
         .{
             // Prepend the project directory path
-            project_root_path,
+            project_src_path,
             // And the latest file name
             latest_file_name,
         },

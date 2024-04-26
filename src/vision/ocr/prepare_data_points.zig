@@ -62,6 +62,67 @@ const capture_base_black_image = GrayscaleImage{
     .height = CHARACTER_CAPTURE_HEIGHT,
 };
 
+pub fn prepareAmmoDigitImage(rgb_image: RGBImage, debug_name: []const u8, allocator: std.mem.Allocator) !GrayscaleImage {
+    const grayscale_image = try rgbToGrayscaleImage(rgb_image, allocator);
+    defer grayscale_image.deinit(allocator);
+
+    // We can't fix too big and we should never encounter this if they were
+    // processed correctly.
+    const is_too_big = grayscale_image.width > CHARACTER_CAPTURE_WIDTH or
+        grayscale_image.height > CHARACTER_CAPTURE_HEIGHT;
+    if (is_too_big) {
+        std.log.err("Training digit image {s} is too big to prepare. " ++
+            "Found {d}x{d} but expected {d}x{d} or smaller. " ++
+            "This is probably a problem with the processing and extraction step.", .{
+            debug_name,
+            grayscale_image.width,
+            grayscale_image.height,
+            CHARACTER_CAPTURE_WIDTH,
+            CHARACTER_CAPTURE_HEIGHT,
+        });
+        return error.TrainingDigitImageTooBig;
+    }
+
+    // If the image is smaller than what the neural network needs, just pad it out with black pixels
+    var sized_grayscale_image = grayscale_image;
+    const needs_expansion = grayscale_image.width < CHARACTER_CAPTURE_WIDTH or
+        grayscale_image.height < CHARACTER_CAPTURE_HEIGHT;
+    if (needs_expansion) {
+        const expanded_image = try overlayImage(
+            grayscale_image,
+            capture_base_black_image,
+            0,
+            0,
+            .left,
+            .top,
+            allocator,
+        );
+
+        sized_grayscale_image = expanded_image;
+    }
+    defer if (needs_expansion) {
+        sized_grayscale_image.deinit(allocator);
+    };
+
+    return sized_grayscale_image;
+}
+
+pub fn convertGrayscaleImageToNeuralNetworkInputs(
+    grayscale_image: GrayscaleImage,
+    allocator: std.mem.Allocator,
+) ![]const f64 {
+    // TODO: We only store colors as f32 so maybe we want to adapt the
+    // neural network to use f32 (instead of f64) in this case for better
+    // performance? Or maybe the better f64 precision is good for the
+    // weights/biases internally?
+    const inputs = try allocator.alloc(f64, grayscale_image.pixels.len);
+    for (grayscale_image.pixels, 0..) |pixel, i| {
+        inputs[i] = @floatCast(pixel.value);
+    }
+
+    return inputs;
+}
+
 pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !Parsed(NeuralNetworkData) {
     var parsed = Parsed(NeuralNetworkData){
         .arena = try allocator.create(std.heap.ArenaAllocator),
@@ -95,46 +156,11 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !Parsed(Ne
                 const rgb_image = try RGBImage.loadImageFromFilePath(full_file_path, allocator);
                 defer rgb_image.deinit(allocator);
 
-                const grayscale_image = try rgbToGrayscaleImage(rgb_image, allocator);
-                defer grayscale_image.deinit(allocator);
-
-                // We can't fix too big and we should never encounter this if they were
-                // processed correctly.
-                const is_too_big = grayscale_image.width > CHARACTER_CAPTURE_WIDTH or
-                    grayscale_image.height > CHARACTER_CAPTURE_HEIGHT;
-                if (is_too_big) {
-                    std.log.err("Training digit image {s} is too big to prepare. " ++
-                        "Found {d}x{d} but expected {d}x{d} or smaller. " ++
-                        "This is probably a problem with the processing and extraction step.", .{
-                        entry.name,
-                        grayscale_image.width,
-                        grayscale_image.height,
-                        CHARACTER_CAPTURE_WIDTH,
-                        CHARACTER_CAPTURE_HEIGHT,
-                    });
-                    return error.TrainingDigitImageTooBig;
-                }
-
-                // If the image is smaller than what the neural network needs, just pad it out with black pixels
-                var sized_grayscale_image = grayscale_image;
-                const needs_expansion = grayscale_image.width < CHARACTER_CAPTURE_WIDTH or
-                    grayscale_image.height < CHARACTER_CAPTURE_HEIGHT;
-                if (needs_expansion) {
-                    const expanded_image = try overlayImage(
-                        grayscale_image,
-                        capture_base_black_image,
-                        0,
-                        0,
-                        .left,
-                        .top,
-                        allocator,
-                    );
-
-                    sized_grayscale_image = expanded_image;
-                }
-                defer if (needs_expansion) {
-                    sized_grayscale_image.deinit(allocator);
-                };
+                const prepared_grayscale_image = try prepareAmmoDigitImage(
+                    rgb_image,
+                    entry.name,
+                    allocator,
+                );
 
                 // Get the expected character digit from the file name.
                 const expected_characters = try getExpectedCharactersFromFileName(entry.name, allocator);
@@ -156,17 +182,10 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !Parsed(Ne
                     else => DigitLabel.unknown,
                 };
 
-                // TODO: We only store colors as f32 so maybe we want to adapt the
-                // neural network to use f32 in this case for better performance? Or
-                // maybe the better f64 precision is good for the weights/biases
-                // internally?
-                const input = try parsed_arena_allocator.alloc(f64, sized_grayscale_image.pixels.len);
-                for (sized_grayscale_image.pixels, 0..) |pixel, i| {
-                    input[i] = @floatCast(pixel.value);
-                }
+                const inputs = try convertGrayscaleImageToNeuralNetworkInputs(prepared_grayscale_image, parsed_arena_allocator);
 
                 const data_point = DataPoint.init(
-                    input,
+                    inputs,
                     // FIXME: Once https://github.com/ziglang/zig/pull/18112 merges and we support a Zig
                     // version that includes it, we should use `getPtrConstAssertContains(...)` instead.
                     one_hot_digit_label_map.getPtrConst(label).?,
