@@ -1434,6 +1434,7 @@ test "findHorizontalBoundariesInImage" {
     }
 }
 
+/// Segmentation of the ammo counter into individual digits.
 pub fn splitAmmoCounterRegionIntoDigits(
     screenshot: Screenshot(RGBImage),
     diagnostics: ?*IsolateDiagnostics,

@@ -18,6 +18,8 @@ const ScreenshotRegion = halo_text_vision.ScreenshotRegion;
 const Screenshot = halo_text_vision.Screenshot;
 const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
 const save_load_utils = @import("vision/ocr/save_load_utils.zig");
+const print_utils = @import("./utils/print_utils.zig");
+const printLabeledImage = print_utils.printLabeledImage;
 
 fn projectSrcPath() []const u8 {
     const file_source_path = std.fs.path.dirname(@src().file) orelse ".";
