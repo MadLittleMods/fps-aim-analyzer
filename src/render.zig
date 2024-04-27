@@ -10,6 +10,8 @@ const RGBPixel = image_conversion.RGBPixel;
 const halo_text_vision = @import("vision/halo_text_vision.zig");
 const Screenshot = halo_text_vision.Screenshot;
 const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
+const print_utils = @import("./utils/print_utils.zig");
+const printLabeledImage = print_utils.printLabeledImage;
 
 /// Given an unsigned integer type, returns a signed integer type that can hold the
 /// entire positive range of the unsigned integer type.
@@ -583,7 +585,7 @@ pub const RenderContext = struct {
         const image_data = get_image_reply.getData();
 
         // Cast to an i64 so we can do big math with it (3840x2160 for example) (TODO:
-        // figure out better way to do math here)
+        // figure out better way to do math with different types)
         const capture_width: i64 = self.state.ammo_counter_bounding_box.width;
         const capture_height: i64 = self.state.ammo_counter_bounding_box.height;
         const bytes_per_pixel_in_data = x.get_image.Reply.scanline_pad_bytes;
@@ -602,7 +604,6 @@ pub const RenderContext = struct {
         }
 
         const rgb_pixels = try allocator.alloc(RGBPixel, @intCast(capture_width * capture_height));
-        defer allocator.free(rgb_pixels);
         const rgb_image = RGBImage{
             .width = @intCast(capture_width),
             .height = @intCast(capture_height),
@@ -613,11 +614,12 @@ pub const RenderContext = struct {
         var y_index: usize = 0;
         var image_data_index: u32 = 0;
         while ((image_data_index + bytes_per_pixel_in_data) < image_data.len) : (image_data_index += bytes_per_pixel_in_data) {
+            // Move on to the next row if we've reached the end of the current row
             if (x_index >= capture_width) {
-                // For Debugging: Print a newline after each row
-                // std.debug.print("\n", .{});
                 x_index = 0;
                 y_index += 1;
+                // For Debugging: Print a newline after each row
+                // std.debug.print("\n", .{});
             }
 
             //  The image data might have padding on the end so make sure to stop when
@@ -635,6 +637,9 @@ pub const RenderContext = struct {
                 padded_pixel_value,
                 self.image_byte_order,
             );
+            // For Debugging: Print out the pixels
+            // std.debug.print("0x{x} ", .{pixel_value});
+
             // Break down the pixel value into its ARGB components
             //
             // const alpha = @as(u8, @intCast((pixel_value >> 24) & 0xff));
@@ -642,8 +647,6 @@ pub const RenderContext = struct {
             const green = @as(u8, @intCast((pixel_value >> 8) & 0xff));
             const blue = @as(u8, @intCast(pixel_value & 0xff));
 
-            // For Debugging: Print out the pixels
-            // std.debug.print("0x{x} ", .{pixel_value});
             rgb_pixels[pixel_index] = RGBPixel{
                 .r = @as(f32, @floatFromInt(red)) / 255.0,
                 .g = @as(f32, @floatFromInt(green)) / 255.0,
