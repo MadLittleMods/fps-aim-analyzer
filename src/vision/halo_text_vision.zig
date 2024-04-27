@@ -1092,6 +1092,11 @@ pub fn isolateHaloAmmoCounter(
         }
         allocator.free(chromatic_contours);
     }
+    // We didn't find any contours
+    if (chromatic_contours.len == 0) {
+        return null;
+    }
+
     // Debug: ...
     var traced_rgb_image: RGBImage = undefined;
     defer {
