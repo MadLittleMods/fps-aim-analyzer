@@ -1135,6 +1135,14 @@ pub fn isolateHaloAmmoCounter(
         total_bounding_box_area += bounding_box.width * bounding_box.height;
     }
 
+    // Somehow we ended up with bounding boxes that have no area
+    if (total_bounding_box_area == 0) {
+        std.log.err("Somehow we ended up with bounding boxes that have no area (found {d} contours)", .{
+            chromatic_contours.len,
+        });
+        return null;
+    }
+
     // Weighted average of the bounding box centers, weighted by the area of the bounding box
     //
     // We use the midpoint as a heuristic that the ammo counter should be within a
@@ -1155,8 +1163,9 @@ pub fn isolateHaloAmmoCounter(
     const midpoint_y = total_y / total_bounding_box_area;
     // Create a bounding box around the midpoint to use as a heuristic to find the ammo counter
     const midpoint_proximity_bounding_box = BoundingClientRect(usize){
-        .x = midpoint_x - MIDPOINT_PROXIMITY_X,
-        .y = midpoint_y - MIDPOINT_PROXIMITY_Y,
+        // Avoid negative wraparound on these usize values
+        .x = if (midpoint_x > MIDPOINT_PROXIMITY_X) midpoint_x - MIDPOINT_PROXIMITY_X else 0,
+        .y = if (midpoint_y > MIDPOINT_PROXIMITY_Y) midpoint_y - MIDPOINT_PROXIMITY_Y else 0,
         .width = (MIDPOINT_PROXIMITY_X * 2) + 1,
         .height = (MIDPOINT_PROXIMITY_Y * 2) + 1,
     };
