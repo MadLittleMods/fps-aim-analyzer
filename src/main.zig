@@ -337,9 +337,26 @@ pub fn main() !u8 {
                         switch (x.inputext.genericExtensionEventTaggedUnion(@alignCast(data.ptr))) {
                             .raw_button_press => |extension_message| {
                                 std.log.info("raw_button_press {}", .{extension_message});
-                                if (extension_message.detail == 1) {
+                                const is_left_click = extension_message.detail == 1;
+                                if (is_left_click) {
                                     try render_context.captureScreenshotToPixmap();
                                     try render_context.render();
+
+                                    // Request a screenshot of the ammo counter
+                                    {
+                                        var get_image_msg: [x.get_image.len]u8 = undefined;
+                                        x.get_image.serialize(&get_image_msg, .{
+                                            .format = .z_pixmap,
+                                            .drawable_id = ids.root,
+                                            .x = @intCast(ammo_counter_bounding_box.x),
+                                            .y = @intCast(ammo_counter_bounding_box.y),
+                                            .width = @intCast(ammo_counter_bounding_box.width),
+                                            .height = @intCast(ammo_counter_bounding_box.height),
+                                            .plane_mask = 0xffffffff,
+                                        });
+                                        // We handle the reply to this request above (see `analyzeScreenCapture`)
+                                        try common.send(conn.sock, &get_image_msg);
+                                    }
                                 }
                             },
                             // We did not register for these events so we should not see them
@@ -396,21 +413,6 @@ pub fn main() !u8 {
                 // We did not register for these
                 => @panic("Received unexpected event event that we did not register for"),
             }
-        }
-
-        {
-            var get_image_msg: [x.get_image.len]u8 = undefined;
-            x.get_image.serialize(&get_image_msg, .{
-                .format = .z_pixmap,
-                .drawable_id = ids.root,
-                .x = @intCast(ammo_counter_bounding_box.x),
-                .y = @intCast(ammo_counter_bounding_box.y),
-                .width = @intCast(ammo_counter_bounding_box.width),
-                .height = @intCast(ammo_counter_bounding_box.height),
-                .plane_mask = 0xffffffff,
-            });
-            // We handle the reply to this request above (see `analyzeScreenCapture`)
-            try common.send(conn.sock, &get_image_msg);
         }
     }
 
