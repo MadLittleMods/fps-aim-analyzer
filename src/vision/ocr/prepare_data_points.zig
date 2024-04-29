@@ -64,7 +64,6 @@ const capture_base_black_image = GrayscaleImage{
 
 pub fn prepareAmmoDigitImage(rgb_image: RGBImage, debug_name: []const u8, allocator: std.mem.Allocator) !GrayscaleImage {
     const grayscale_image = try rgbToGrayscaleImage(rgb_image, allocator);
-    defer grayscale_image.deinit(allocator);
 
     // We can't fix too big and we should never encounter this if they were
     // processed correctly.
@@ -100,8 +99,10 @@ pub fn prepareAmmoDigitImage(rgb_image: RGBImage, debug_name: []const u8, alloca
 
         sized_grayscale_image = expanded_image;
     }
+    // If we needed to expand the image, we're using that instead and no longer need the
+    // non-expanded image.
     defer if (needs_expansion) {
-        sized_grayscale_image.deinit(allocator);
+        grayscale_image.deinit(allocator);
     };
 
     return sized_grayscale_image;
@@ -161,6 +162,7 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !Parsed(Ne
                     entry.name,
                     allocator,
                 );
+                defer prepared_grayscale_image.deinit(allocator);
 
                 // Get the expected character digit from the file name.
                 const expected_characters = try getExpectedCharactersFromFileName(entry.name, allocator);
@@ -182,7 +184,10 @@ pub fn getHaloAmmoCounterTrainingPoints(allocator: std.mem.Allocator) !Parsed(Ne
                     else => DigitLabel.unknown,
                 };
 
-                const inputs = try convertGrayscaleImageToNeuralNetworkInputs(prepared_grayscale_image, parsed_arena_allocator);
+                const inputs = try convertGrayscaleImageToNeuralNetworkInputs(
+                    prepared_grayscale_image,
+                    parsed_arena_allocator,
+                );
 
                 const data_point = DataPoint.init(
                     inputs,
