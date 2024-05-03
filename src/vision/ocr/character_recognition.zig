@@ -18,6 +18,12 @@ const DigitLabel = prepare_data_points.DigitLabel;
 const prepareAmmoDigitImage = prepare_data_points.prepareAmmoDigitImage;
 const convertGrayscaleImageToNeuralNetworkInputs = prepare_data_points.convertGrayscaleImageToNeuralNetworkInputs;
 
+pub const ParsedAmmoResult = struct {
+    ammo_value: u32,
+    ammo_counter_bounding_box: BoundingClientRect(usize),
+    confidence_levels: []const f64,
+};
+
 pub const CharacterRecognition = struct {
     parsed_neural_network: std.json.Parsed(neural_networks.NeuralNetwork),
 
@@ -64,11 +70,7 @@ pub const CharacterRecognition = struct {
         screenshot: Screenshot(RGBImage),
         diagnostics: ?*IsolateDiagnostics,
         allocator: std.mem.Allocator,
-    ) !?struct {
-        ammo_value: u32,
-        ammo_counter_bounding_box: BoundingClientRect(usize),
-        confidence_levels: []const f64,
-    } {
+    ) !?ParsedAmmoResult {
         // Find where all of the digits are in the image
         const maybe_results = try findHaloAmmoDigits(
             screenshot,

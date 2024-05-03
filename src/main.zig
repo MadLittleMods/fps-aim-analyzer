@@ -5,6 +5,7 @@ const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11//x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
+const x_shape_extension = @import("x11/x_shape_extension.zig");
 const render = @import("render.zig");
 const AppState = @import("app_state.zig").AppState;
 const buffer_utils = @import("utils/buffer_utils.zig");
@@ -16,6 +17,7 @@ const RGBImage = image_conversion.RGBImage;
 const halo_text_vision = @import("vision/halo_text_vision.zig");
 const ScreenshotRegion = halo_text_vision.ScreenshotRegion;
 const Screenshot = halo_text_vision.Screenshot;
+const futureAmmoHeuristicBoundingClientRect = halo_text_vision.futureAmmoHeuristicBoundingClientRect;
 const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
 const save_load_utils = @import("vision/ocr/save_load_utils.zig");
 const print_utils = @import("./utils/print_utils.zig");
@@ -68,6 +70,7 @@ pub fn main() !u8 {
         },
     };
 
+    std.log.info("root window ID {0} 0x{0x}", .{screen.root});
     const ids = render.Ids.init(
         screen.root,
         conn_setup_fixed_fields.resource_id_base,
@@ -88,11 +91,11 @@ pub fn main() !u8 {
 
     // Start out with the bottom-right corner of the screen
     const ammo_counter_screenshot_region = ScreenshotRegion.bottom_right_quadrant;
-    const ammo_counter_bounding_box_width: i16 = @intCast(@divTrunc(screen.pixel_width, 2));
-    const ammo_counter_bounding_box_height: i16 = @intCast(@divTrunc(screen.pixel_height, 2));
-    const ammo_counter_bounding_box = BoundingClientRect(i16){
-        .x = @as(i16, @intCast(screen.pixel_width)) - ammo_counter_bounding_box_width,
-        .y = @as(i16, @intCast(screen.pixel_height)) - ammo_counter_bounding_box_height,
+    const ammo_counter_bounding_box_width = screen.pixel_width / 2;
+    const ammo_counter_bounding_box_height = screen.pixel_height / 2;
+    const ammo_counter_bounding_box = BoundingClientRect(usize){
+        .x = screen.pixel_width - ammo_counter_bounding_box_width,
+        .y = screen.pixel_height - ammo_counter_bounding_box_height,
         .width = ammo_counter_bounding_box_width,
         .height = ammo_counter_bounding_box_height,
     };
@@ -180,10 +183,34 @@ pub fn main() !u8 {
         },
     );
 
+    // We use the X Input extension to detect clicks on the game window (or whatever
+    // window) they happen to be on. Useful because we can detect clicks even when our
+    // window is not focused and doesn't have to be directly clicked.
+    const optional_shape_extension = try x11_extension_utils.getExtensionInfo(
+        conn.sock,
+        &buffer,
+        "SHAPE",
+    );
+    const shape_extension = optional_shape_extension orelse @panic("SHAPE extension not found");
+
+    try x_shape_extension.ensureCompatibleVersionOfXShapeExtension(
+        conn.sock,
+        &buffer,
+        &shape_extension,
+        .{
+            // We arbitrarily require version 1.1 of the X Shape extension
+            // because that's the latest version and is sufficiently old
+            // and ubiquitous.
+            .major_version = 1,
+            .minor_version = 1,
+        },
+    );
+
     // Assemble a map of X extension info
     const extensions = x11_extension_utils.Extensions{
         .render = render_extension,
         .input = input_extension,
+        .shape = shape_extension,
     };
 
     try render.createResources(
@@ -245,6 +272,31 @@ pub fn main() !u8 {
     {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, ids.window);
+        try conn.send(&msg);
+    }
+    // Show the debug window
+    {
+        var msg: [x.map_window.len]u8 = undefined;
+        x.map_window.serialize(&msg, ids.debug_window);
+        try conn.send(&msg);
+    }
+
+    // Since the debug window covers the whole screen, we want to make it so that mouse
+    // events aren't affected by it all. Make it completely click-through-able.
+    {
+        const rectangle_list = [_]x.Rectangle{
+            .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+        };
+        var msg: [x.shape.rectangles.getLen(rectangle_list.len)]u8 = undefined;
+        x.shape.rectangles.serialize(&msg, shape_extension.opcode, .{
+            .destination_window_id = ids.debug_window,
+            .destination_kind = .input,
+            .operation = .set,
+            .x_offset = 0,
+            .y_offset = 0,
+            .ordering = .unsorted,
+            .rectangles = &rectangle_list,
+        });
         try conn.send(&msg);
     }
 
@@ -330,7 +382,18 @@ pub fn main() !u8 {
                         .game_resolution_height = screen.pixel_height,
                     };
 
-                    try render_context.analyzeScreenCapture(screenshot, allocator);
+                    const opt_ammo_results = try render_context.analyzeScreenCapture(screenshot, allocator);
+                    if (opt_ammo_results) |ammo_results| {
+                        std.log.debug("ammo_results {any}", .{ammo_results});
+
+                        const ammo_ui_strip_bounding_box = futureAmmoHeuristicBoundingClientRect(ammo_results.ammo_counter_bounding_box);
+
+                        // Keep track of where we last found the ammo counter so we can
+                        // capture a lot less of the screen next time.
+                        state.ammo_counter_bounding_box = ammo_ui_strip_bounding_box;
+                        state.ammo_counter_screenshot_region = .ammo_ui_strip;
+                        std.log.debug("New state.ammo_counter_bounding_box {any}", .{state.ammo_counter_bounding_box});
+                    }
                 },
                 .generic_extension_event => |msg| {
                     if (msg.ext_opcode == extensions.input.opcode) {

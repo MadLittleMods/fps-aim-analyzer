@@ -10,8 +10,11 @@ const RGBPixel = image_conversion.RGBPixel;
 const halo_text_vision = @import("vision/halo_text_vision.zig");
 const Screenshot = halo_text_vision.Screenshot;
 const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
+const ParsedAmmoResult = @import("vision/ocr/character_recognition.zig").ParsedAmmoResult;
 const print_utils = @import("./utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
+
+const CONFIDENCE_THRESHOLD = 0.5;
 
 /// Given an unsigned integer type, returns a signed integer type that can hold the
 /// entire positive range of the unsigned integer type.
@@ -42,7 +45,12 @@ pub const Ids = struct {
 
     /// The drawable ID of our window
     window: u32 = 0,
+    /// The drawable ID of the debug window that we can draw markers on
+    debug_window: u32 = 0,
     colormap: u32 = 0,
+    /// Graphics context we can use for debugging purposes and draw directly on the
+    /// debug window
+    debug_gc: u32 = 0,
     /// Background graphics context. Defines the
     bg_gc: u32 = 0,
     /// Foreground graphics context
@@ -156,6 +164,9 @@ pub fn createResources(
     );
     std.log.debug("matching_visual_type {any}", .{matching_visual_type});
 
+    // Our window resources
+    // =============================================================================
+
     // We just need some colormap to provide when creating the window in order to avoid
     // a "bad" `match` error when working with a 32-bit depth.
     {
@@ -214,6 +225,75 @@ pub fn createResources(
             // .save_under = true,
             .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
             // .dont_propagate = 1,
+        });
+        try common.send(sock, message_buffer[0..len]);
+    }
+    {
+        std.log.debug("Creating debug window_id {0} 0x{0x}", .{ids.debug_window});
+
+        var message_buffer: [x.create_window.max_len]u8 = undefined;
+        const len = x.create_window.serialize(&message_buffer, .{
+            .window_id = ids.debug_window,
+            .parent_window_id = ids.root,
+            // Color depth:
+            // - 24 for RGB
+            // - 32 for ARGB
+            .depth = depth,
+            // Place it in the top-right corner of the screen
+            .x = 0,
+            .y = 0,
+            .width = @intCast(root_screen_dimensions.width),
+            .height = @intCast(root_screen_dimensions.height),
+            // It's unclear what this is for, but we just need to set it to something
+            // since it's one of the arguments.
+            .border_width = 0,
+            .class = .input_output,
+            .visual_id = matching_visual_type.id,
+        }, .{
+            .bg_pixmap = .none,
+            // 0xAARRGGBB
+            // Required when `depth` is set to 32
+            .bg_pixel = 0x00000000,
+            // .border_pixmap =
+            // Required when `depth` is set to 32
+            .border_pixel = 0x00000000,
+            // Required when `depth` is set to 32
+            .colormap = @enumFromInt(ids.colormap),
+            // .bit_gravity = .north_west,
+            // .win_gravity = .north_east,
+            // .backing_store = .when_mapped,
+            // .backing_planes = 0x1234,
+            // .backing_pixel = 0xbbeeeeff,
+            //
+            // Whether this window overrides structure control facilities. Basically, a
+            // suggestion whether the window manager to decorate this window (false) or
+            // we want to override the behavior. We set this to true to disable the
+            // window controls (basically a borderless window).
+            .override_redirect = true,
+            // .save_under = true,
+            .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+            // .dont_propagate = 1,
+        });
+        try common.send(sock, message_buffer[0..len]);
+    }
+
+    {
+        const color_black: u32 = 0xff000000;
+        const color_blue: u32 = 0xff0000ff;
+
+        std.log.info("debug_graphics_context_id {0} 0x{0x}", .{ids.bg_gc});
+        var message_buffer: [x.create_gc.max_len]u8 = undefined;
+        const len = x.create_gc.serialize(&message_buffer, .{
+            .gc_id = ids.debug_gc,
+            .drawable_id = ids.window,
+        }, .{
+            .background = color_black,
+            .foreground = color_blue,
+            // This option will prevent `NoExposure` events when we send `CopyArea`.
+            // We're no longer using `CopyArea` in favor of X Render `Composite` though
+            // so this isn't of much use. Still seems applicable to keep around in the
+            // spirit of what we want to do.
+            .graphics_exposures = false,
         });
         try common.send(sock, message_buffer[0..len]);
     }
@@ -449,6 +529,18 @@ pub const RenderContext = struct {
         const padding = state.padding;
         const mouse_x = state.mouse_x;
 
+        // asdf
+        {
+            var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
+            x.poly_fill_rectangle.serialize(&msg, .{
+                .drawable_id = ids.debug_window,
+                .gc_id = ids.debug_gc,
+            }, &[_]x.Rectangle{
+                .{ .x = 100, .y = 100, .width = 200, .height = 200 },
+            });
+            try common.send(sock, &msg);
+        }
+
         // Draw a big blue square in the middle of the window
         {
             var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
@@ -584,10 +676,8 @@ pub const RenderContext = struct {
     ) !RGBImage {
         const image_data = get_image_reply.getData();
 
-        // Cast to an i64 so we can do big math with it (3840x2160 for example) (TODO:
-        // figure out better way to do math with different types)
-        const capture_width: i64 = self.state.ammo_counter_bounding_box.width;
-        const capture_height: i64 = self.state.ammo_counter_bounding_box.height;
+        const capture_width = self.state.ammo_counter_bounding_box.width;
+        const capture_height = self.state.ammo_counter_bounding_box.height;
         const bytes_per_pixel_in_data = x.get_image.Reply.scanline_pad_bytes;
 
         // Given our request for an image with the width/height specified,
@@ -603,10 +693,10 @@ pub const RenderContext = struct {
             return error.ExpectedMoreImageData;
         }
 
-        const rgb_pixels = try allocator.alloc(RGBPixel, @intCast(capture_width * capture_height));
+        const rgb_pixels = try allocator.alloc(RGBPixel, capture_width * capture_height);
         const rgb_image = RGBImage{
-            .width = @intCast(capture_width),
-            .height = @intCast(capture_height),
+            .width = capture_width,
+            .height = capture_height,
             .pixels = rgb_pixels,
         };
 
@@ -628,7 +718,7 @@ pub const RenderContext = struct {
                 break;
             }
 
-            const pixel_index: usize = y_index * @as(usize, @intCast(capture_width)) + x_index;
+            const pixel_index: usize = y_index * capture_width + x_index;
 
             const padded_pixel_value = image_data[image_data_index..(image_data_index + bytes_per_pixel_in_data)];
             // Read the raw value into a normal u32 (taking into account the byte order)
@@ -665,14 +755,23 @@ pub const RenderContext = struct {
         self: *@This(),
         screenshot: Screenshot(RGBImage),
         allocator: std.mem.Allocator,
-    ) !void {
-        const opt_asdf = try self.character_recognition.parseAmmoCounterImage(
+    ) !?ParsedAmmoResult {
+        const opt_ammo_results = try self.character_recognition.parseAmmoCounterImage(
             screenshot,
             null,
             allocator,
         );
-        if (opt_asdf) |asdf| {
-            std.log.err("asdf {any}", .{asdf});
+        if (opt_ammo_results) |ammo_results| {
+            for (ammo_results.confidence_levels) |confidence_level| {
+                // If the neural network isn't sure about the result, let's just ignore it
+                if (confidence_level < CONFIDENCE_THRESHOLD) {
+                    return null;
+                }
+            }
+
+            return ammo_results;
         }
+
+        return null;
     }
 };

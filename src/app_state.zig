@@ -14,7 +14,7 @@ pub const AppState = struct {
 
     /// The pixel dimension region of the screen we're looking at to analyze the ammo
     /// counter.
-    ammo_counter_bounding_box: render_utils.BoundingClientRect(i16),
+    ammo_counter_bounding_box: render_utils.BoundingClientRect(usize),
     ammo_counter_screenshot_region: ScreenshotRegion,
 
     /// The max number of screenshots that will be stored and displayed.

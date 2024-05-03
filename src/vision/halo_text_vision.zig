@@ -1817,8 +1817,9 @@ test "Find Halo ammo counter region" {
     };
 }
 
-/// Given the results of looking for ammo a frame, where to look for ammo in the next frame
-fn futureAmmoHeuristicBoundingClientRect(ammo_counter_bounding_box: BoundingClientRect(usize)) BoundingClientRect(usize) {
+/// Given the results of looking for ammo a frame, where to look for ammo in the next
+/// frame. The screenshot returned represents a `ScreenshotRegion.ammo_ui_strip`
+pub fn futureAmmoHeuristicBoundingClientRect(ammo_counter_bounding_box: BoundingClientRect(usize)) BoundingClientRect(usize) {
     // The amount of horizontal slop on each side to account for the counter
     // moving around when switching weapons
     const NUM_PADDING_CHARACTERS = 2;
@@ -1839,6 +1840,6 @@ fn futureAmmoHeuristicBoundingClientRect(ammo_counter_bounding_box: BoundingClie
         .x = ammo_counter_bounding_box.right() - STRIP_WIDTH + HORIZONTAL_PADDING_LEFT,
         .y = ammo_counter_bounding_box.top(),
         .width = STRIP_WIDTH,
-        .height = @max(ammo_counter_bounding_box.height(), MIN_HEIGHT),
+        .height = @max(ammo_counter_bounding_box.height, MIN_HEIGHT),
     };
 }

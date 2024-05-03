@@ -18,6 +18,7 @@ pub const ExtensionInfo = struct {
 pub const Extensions = struct {
     render: ExtensionInfo,
     input: ExtensionInfo,
+    shape: ExtensionInfo,
 };
 
 /// Determines whether the extension is available on the server.
@@ -37,7 +38,7 @@ pub fn getExtensionInfo(
     }
     const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
     try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-    const optional_render_extension = blk: {
+    const optional_extension = blk: {
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.ServerMsg.QueryExtension = @ptrCast(msg_reply);
@@ -65,5 +66,5 @@ pub fn getExtensionInfo(
         }
     };
 
-    return optional_render_extension;
+    return optional_extension;
 }
