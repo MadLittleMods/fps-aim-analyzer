@@ -393,6 +393,9 @@ pub fn main() !u8 {
                         state.ammo_counter_bounding_box = ammo_ui_strip_bounding_box;
                         state.ammo_counter_screenshot_region = .ammo_ui_strip;
                         std.log.debug("New state.ammo_counter_bounding_box {any}", .{state.ammo_counter_bounding_box});
+
+                        // Draw debug gizmos again
+                        try render_context.render();
                     }
                 },
                 .generic_extension_event => |msg| {

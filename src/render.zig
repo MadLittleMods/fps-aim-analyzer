@@ -521,6 +521,10 @@ pub const RenderContext = struct {
         const font_dims = self.font_dims.*;
         const state = self.state.*;
 
+        // Draw some debug gizmos on the screen before anything else
+        // so we can figure out why things below might be going wrong.
+        try self.drawDebugGizmos();
+
         const window_id = ids.window;
         const window_dimensions = state.window_dimensions;
         const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
@@ -528,41 +532,6 @@ pub const RenderContext = struct {
         const next_screenshot_index = state.next_screenshot_index;
         const padding = state.padding;
         const mouse_x = state.mouse_x;
-
-        // asdf
-        {
-            var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
-            x.poly_fill_rectangle.serialize(&msg, .{
-                .drawable_id = ids.debug_window,
-                .gc_id = ids.debug_gc,
-            }, &[_]x.Rectangle{
-                .{ .x = 100, .y = 100, .width = 200, .height = 200 },
-            });
-            try common.send(sock, &msg);
-        }
-
-        // Draw a big blue square in the middle of the window
-        {
-            var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
-            x.poly_fill_rectangle.serialize(&msg, .{
-                .drawable_id = window_id,
-                .gc_id = ids.bg_gc,
-            }, &[_]x.Rectangle{
-                .{ .x = 100, .y = 100, .width = 200, .height = 200 },
-            });
-            try common.send(sock, &msg);
-        }
-        // Make a cut-out in the middle of the blue square
-        {
-            var msg: [x.clear_area.len]u8 = undefined;
-            x.clear_area.serialize(&msg, false, window_id, .{
-                .x = 150,
-                .y = 150,
-                .width = 100,
-                .height = 100,
-            });
-            try common.send(sock, &msg);
-        }
 
         // Render some text in the middle of the square cut-out
         const text_length = 11;
@@ -612,6 +581,61 @@ pub const RenderContext = struct {
                 .dst_y = @intCast((screen_shot_offset * (screenshot_capture_dimensions.height + padding)) + padding),
                 .width = @intCast(screenshot_capture_dimensions.width),
                 .height = @intCast(screenshot_capture_dimensions.height),
+            });
+            try common.send(sock, &msg);
+        }
+    }
+
+    /// Draw some debug gizmos on the screen like the current ammo counter bounding box
+    pub fn drawDebugGizmos(self: *const @This()) !void {
+        const sock = self.sock.*;
+        const ids = self.ids.*;
+        const state = self.state.*;
+
+        // Clear the last bounding box drawn around the ammo counter
+        {
+            const right_quadrant_bounding_box_width = @divFloor(
+                state.root_screen_dimensions.width,
+                2,
+            );
+            const right_quadrant_bounding_box_height = @divFloor(
+                state.root_screen_dimensions.height,
+                2,
+            );
+
+            var msg: [x.clear_area.len]u8 = undefined;
+            x.clear_area.serialize(&msg, false, ids.debug_window, .{
+                .x = @intCast(state.root_screen_dimensions.width - right_quadrant_bounding_box_width - 1),
+                .y = @intCast(state.root_screen_dimensions.height - right_quadrant_bounding_box_height - 1),
+                .width = @intCast(right_quadrant_bounding_box_width + 2),
+                .height = @intCast(right_quadrant_bounding_box_height + 2),
+            });
+            try common.send(sock, &msg);
+        }
+        // Draw a bounding box around where we're currently trying to capture the ammo counter in
+        {
+            var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
+            x.poly_fill_rectangle.serialize(&msg, .{
+                .drawable_id = ids.debug_window,
+                .gc_id = ids.debug_gc,
+            }, &[_]x.Rectangle{
+                .{
+                    .x = @intCast(state.ammo_counter_bounding_box.x - 1),
+                    .y = @intCast(state.ammo_counter_bounding_box.y - 1),
+                    .width = @intCast(state.ammo_counter_bounding_box.width + 2),
+                    .height = @intCast(state.ammo_counter_bounding_box.height + 2),
+                },
+            });
+            try common.send(sock, &msg);
+        }
+        // Make a cut-out from the bonding box rectangle so we only see the border around it
+        {
+            var msg: [x.clear_area.len]u8 = undefined;
+            x.clear_area.serialize(&msg, false, ids.debug_window, .{
+                .x = @intCast(state.ammo_counter_bounding_box.x),
+                .y = @intCast(state.ammo_counter_bounding_box.y),
+                .width = @intCast(state.ammo_counter_bounding_box.width),
+                .height = @intCast(state.ammo_counter_bounding_box.height),
             });
             try common.send(sock, &msg);
         }
