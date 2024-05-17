@@ -367,13 +367,14 @@ pub fn main() !u8 {
                     // up requests with replies.
                     const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
 
+                    // Convert the X image format to an `RGBImage` we can use in our vision code
                     const rgb_image = try render_context.convertXGetImageReplyToRGBImage(get_image_reply, allocator);
                     defer rgb_image.deinit(allocator);
                     const screenshot: Screenshot(RGBImage) = .{
                         .image = rgb_image,
                         .crop_region = state.ammo_counter_screenshot_region,
-                        .crop_region_x = @intCast(ammo_counter_bounding_box.x),
-                        .crop_region_y = @intCast(ammo_counter_bounding_box.y),
+                        .crop_region_x = @intCast(state.ammo_counter_bounding_box.x),
+                        .crop_region_y = @intCast(state.ammo_counter_bounding_box.y),
                         .pre_crop_width = screen.pixel_width,
                         .pre_crop_height = screen.pixel_height,
                         // We assume the game is being rendered 1:1 (100%), so the game
@@ -382,6 +383,9 @@ pub fn main() !u8 {
                         .game_resolution_height = screen.pixel_height,
                     };
 
+                    try printLabeledImage("analyzing screenshot", rgb_image, .kitty, allocator);
+
+                    // Run text detection and OCR on the ammo counter
                     const opt_ammo_results = try render_context.analyzeScreenCapture(screenshot, allocator);
                     if (opt_ammo_results) |ammo_results| {
                         std.log.debug("ammo_results {any}", .{ammo_results});
@@ -414,10 +418,10 @@ pub fn main() !u8 {
                                         x.get_image.serialize(&get_image_msg, .{
                                             .format = .z_pixmap,
                                             .drawable_id = ids.root,
-                                            .x = @intCast(ammo_counter_bounding_box.x),
-                                            .y = @intCast(ammo_counter_bounding_box.y),
-                                            .width = @intCast(ammo_counter_bounding_box.width),
-                                            .height = @intCast(ammo_counter_bounding_box.height),
+                                            .x = @intCast(state.ammo_counter_bounding_box.x),
+                                            .y = @intCast(state.ammo_counter_bounding_box.y),
+                                            .width = @intCast(state.ammo_counter_bounding_box.width),
+                                            .height = @intCast(state.ammo_counter_bounding_box.height),
                                             .plane_mask = 0xffffffff,
                                         });
                                         // We handle the reply to this request above (see `analyzeScreenCapture`)
