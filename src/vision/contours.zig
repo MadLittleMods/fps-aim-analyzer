@@ -762,8 +762,8 @@ pub fn boundingRect(points: []const ImagePoint) BoundingClientRect(usize) {
     return .{
         .x = min_x,
         .y = min_y,
-        .width = max_x - min_x,
-        .height = max_y - min_y,
+        .width = max_x - min_x + 1,
+        .height = max_y - min_y + 1,
     };
 }
 
@@ -788,8 +788,8 @@ test "boundingRect" {
     const expected = .{
         .x = 1,
         .y = 1,
-        .width = 9,
-        .height = 9,
+        .width = 10,
+        .height = 10,
     };
     try _expectBoundingClientRectEqual(actual, expected);
 }
