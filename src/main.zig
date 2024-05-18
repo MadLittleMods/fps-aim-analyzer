@@ -406,7 +406,7 @@ pub fn main() !u8 {
                     if (msg.ext_opcode == extensions.input.opcode) {
                         switch (x.inputext.genericExtensionEventTaggedUnion(@alignCast(data.ptr))) {
                             .raw_button_press => |extension_message| {
-                                std.log.info("raw_button_press {}", .{extension_message});
+                                // std.log.info("raw_button_press {}", .{extension_message});
                                 const is_left_click = extension_message.detail == 1;
                                 if (is_left_click) {
                                     try render_context.captureScreenshotToPixmap();

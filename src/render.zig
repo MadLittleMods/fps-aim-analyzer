@@ -9,6 +9,7 @@ const RGBImage = image_conversion.RGBImage;
 const RGBPixel = image_conversion.RGBPixel;
 const halo_text_vision = @import("vision/halo_text_vision.zig");
 const Screenshot = halo_text_vision.Screenshot;
+const IsolateDiagnostics = halo_text_vision.IsolateDiagnostics;
 const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
 const ParsedAmmoResult = @import("vision/ocr/character_recognition.zig").ParsedAmmoResult;
 const print_utils = @import("./utils/print_utils.zig");
@@ -628,7 +629,7 @@ pub const RenderContext = struct {
             });
             try common.send(sock, &msg);
         }
-        // Make a cut-out from the bonding box rectangle so we only see the border around it
+        // Make a cut-out from the bounding box rectangle so we only see the border around it
         {
             var msg: [x.clear_area.len]u8 = undefined;
             x.clear_area.serialize(&msg, false, ids.debug_window, .{
@@ -780,11 +781,32 @@ pub const RenderContext = struct {
         screenshot: Screenshot(RGBImage),
         allocator: std.mem.Allocator,
     ) !?ParsedAmmoResult {
+        // var isolate_diagnostics = IsolateDiagnostics.init(allocator);
+        // defer isolate_diagnostics.deinit(allocator);
+
         const opt_ammo_results = try self.character_recognition.parseAmmoCounterImage(
             screenshot,
-            null,
+            null, // &isolate_diagnostics,
             allocator,
         );
+
+        // Debug: Show what happened during the isolation process
+        // for (isolate_diagnostics.images.keys(), isolate_diagnostics.images.values()) |label, image| {
+        //     const debug_image_label = try std.fmt.allocPrint(allocator, "{s} ({d}x{d})", .{
+        //         label,
+        //         image.width,
+        //         image.height,
+        //     });
+        //     defer allocator.free(debug_image_label);
+
+        //     // For small images, make it easier to pixel peep
+        //     if (image.width < 200 and image.height < 200) {
+        //         try printLabeledImage(debug_image_label, image, .half_block, allocator);
+        //     } else {
+        //         try printLabeledImage(debug_image_label, image, .kitty, allocator);
+        //     }
+        // }
+
         if (opt_ammo_results) |ammo_results| {
             for (ammo_results.confidence_levels) |confidence_level| {
                 // If the neural network isn't sure about the result, let's just ignore it

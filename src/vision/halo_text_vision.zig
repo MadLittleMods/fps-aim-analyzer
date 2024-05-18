@@ -1234,7 +1234,7 @@ pub fn isolateHaloAmmoCounter(
             }
 
             // We assume that characters we're looking for have a lot of chromatic
-            // aberration as opposed errant false-positives which may have large
+            // aberration as opposed to errant false-positives which may have large
             // bounding boxes but very little coverage inside.
             const has_enough_coverage = blk: {
                 const coverage = calculateCoverageInBoundingBox(
@@ -1250,7 +1250,8 @@ pub fn isolateHaloAmmoCounter(
             // Make sure the bounding box is within the proximity of the midpoint of the
             // rest of the chromatic abberation that we detected. This way we can avoid
             // false-positives like the text from picking up equipment which is also
-            // appears on the left (ex. `screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png`)
+            // appears on the left-side of the quadrant we're looking at (ex.
+            // `screenshot-data/halo-infinite/4k/default/36 - breaker turbine goo.png`)
             const intersection = findIntersection(
                 bounding_box,
                 midpoint_proximity_bounding_box,
@@ -1272,7 +1273,7 @@ pub fn isolateHaloAmmoCounter(
         ammo_counter_bounding_box.x - 3,
         ammo_counter_bounding_box.y,
         // Expand the bounding box just a little bit to account for our detection not
-        // being perfect allow the "1" character in a "41" for example to be split if
+        // being perfect to allow the "1" character in a "41" for example to be split if
         // room allows.
         ammo_counter_bounding_box.width + 6,
         ammo_counter_bounding_box.height,
