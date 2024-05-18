@@ -665,12 +665,12 @@ pub fn overlayImage(
     const output_pixels = try allocator.alloc(PixelType, image_b.pixels.len);
     @memcpy(output_pixels, image_b.pixels);
 
-    var image_offset_x: usize = switch (image_origin_x) {
+    var image_offset_left: usize = switch (image_origin_x) {
         .left => 0,
         .center => image_a.width / 2,
         .right => image_a.width - 1,
     };
-    var image_offset_y: usize = switch (image_origin_y) {
+    var image_offset_top: usize = switch (image_origin_y) {
         .top => 0,
         .center => image_a.height / 2,
         .bottom => image_a.height - 1,
@@ -679,25 +679,35 @@ pub fn overlayImage(
     for (0..image_a.height) |y| {
         const row_start_pixel_index_a = y * image_a.width;
 
-        // Avoid signed integer math and underflow by checking if we would be out of
-        // bounds manually
+        // Calculate the y position in image_b
         var y_b = y + image_position_y;
-        if (y_b < image_offset_y) {
+        if (
+        // Skip out of bounds pixels on the top-side. Avoid signed integer math and
+        // underflow.
+        y_b < image_offset_top or
+            // Skip out of bounds pixels on the bottom-side
+            y_b >= image_b.height)
+        {
             continue;
         }
-        y_b -= image_offset_y;
+        y_b -= image_offset_top;
         const row_start_pixel_index_b = y_b * image_b.width;
 
         for (0..image_a.width) |x| {
             const current_pixel_index_a = row_start_pixel_index_a + x;
 
-            // Avoid signed integer math and underflow by checking if we would be out of
-            // bounds manually
+            // Calculate the x position in image_b
             var x_b = x + image_position_x;
-            if (x_b < image_offset_x) {
+            if (
+            // Skip out of bounds pixels on the left-side. Avoid signed integer math and
+            // underflow.
+            x_b < image_offset_left or
+                // Skip out of bounds pixels on the right-side
+                x_b >= image_b.width)
+            {
                 continue;
             }
-            x_b -= image_offset_x;
+            x_b -= image_offset_left;
 
             const current_pixel_index_b = row_start_pixel_index_b + (x_b);
 
