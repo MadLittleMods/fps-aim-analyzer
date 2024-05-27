@@ -7,6 +7,8 @@ const BinaryPixel = image_conversion.BinaryPixel;
 const binaryPixelsfromIntArray = image_conversion.binaryPixelsfromIntArray;
 const binaryToRgbImage = image_conversion.binaryToRgbImage;
 const expectImageEqual = image_conversion.expectImageEqual;
+const math_utils = @import("../utils/math_utils.zig");
+const absoluteDifference = math_utils.absoluteDifference;
 const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
 
@@ -75,8 +77,8 @@ pub fn getStructuringElement(
                     const pixel_index = row_start_index + x;
 
                     // Absolute difference between the pixel and the center of the ellipse
-                    const dx = if (x > center_x) x - center_x else center_x - x;
-                    const raw_dy = if (y > center_y) y - center_y else center_y - y;
+                    const dx = absoluteDifference(x, center_x);
+                    const raw_dy = absoluteDifference(y, center_y);
                     // We also scale the y-axis by the ratio the axis
                     // (`radius_x/radius_y`) to stretch the ellipse into a circle. This
                     // simplifes the problem into a point-in-circle problem.

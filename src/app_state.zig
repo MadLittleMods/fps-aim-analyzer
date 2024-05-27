@@ -16,6 +16,9 @@ pub const AppState = struct {
     /// counter.
     ammo_counter_bounding_box: render_utils.BoundingClientRect(usize),
     ammo_counter_screenshot_region: ScreenshotRegion,
+    ammo_value: u32 = 0,
+
+    last_left_click_ts: i64 = 0,
 
     /// The max number of screenshots that will be stored and displayed.
     max_screenshots_shown: u8,

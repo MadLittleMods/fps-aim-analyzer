@@ -36,17 +36,11 @@ const contours = @import("contours.zig");
 const findContours = contours.findContours;
 const traceContoursOnRgbImage = contours.traceContoursOnRgbImage;
 const boundingRect = contours.boundingRect;
+const math_utils = @import("../utils/math_utils.zig");
+const absoluteDifference = math_utils.absoluteDifference;
 const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
 const decorateStringWithAnsiColor = print_utils.decorateStringWithAnsiColor;
-
-fn absoluteDifference(a: anytype, b: @TypeOf(a)) @TypeOf(a) {
-    if (a > b) {
-        return a - b;
-    } else {
-        return b - a;
-    }
-}
 
 /// Basically representing the stage of cropping the process is at
 pub const ScreenshotRegion = enum {

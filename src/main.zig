@@ -14,6 +14,8 @@ const Dimensions = render_utils.Dimensions;
 const BoundingClientRect = render_utils.BoundingClientRect;
 const image_conversion = @import("vision/image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
+const math_utils = @import("utils/math_utils.zig");
+const absoluteDifference = math_utils.absoluteDifference;
 const halo_text_vision = @import("vision/halo_text_vision.zig");
 const ScreenshotRegion = halo_text_vision.ScreenshotRegion;
 const Screenshot = halo_text_vision.Screenshot;
@@ -22,6 +24,10 @@ const CharacterRecognition = @import("vision/ocr/character_recognition.zig").Cha
 const save_load_utils = @import("vision/ocr/save_load_utils.zig");
 const print_utils = @import("./utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
+
+// We only expect the time between a left-click and the time it would take to see the
+// ammo counter go down by 1 to be at max 200ms.
+const INPUT_DELAY_MAX_MS = 200;
 
 fn projectSrcPath() []const u8 {
     const file_source_path = std.fs.path.dirname(@src().file) orelse ".";
@@ -331,6 +337,27 @@ pub fn main() !u8 {
     };
 
     while (true) {
+        // Capture frames for 200ms after a left-click. We're trying to catch the ammo
+        // counter going down by 1.
+        const current_ts = std.time.milliTimestamp();
+        if (current_ts - state.last_left_click_ts < INPUT_DELAY_MAX_MS) {
+            // Request a screenshot of the ammo counter
+            {
+                var get_image_msg: [x.get_image.len]u8 = undefined;
+                x.get_image.serialize(&get_image_msg, .{
+                    .format = .z_pixmap,
+                    .drawable_id = ids.root,
+                    .x = @intCast(state.ammo_counter_bounding_box.x),
+                    .y = @intCast(state.ammo_counter_bounding_box.y),
+                    .width = @intCast(state.ammo_counter_bounding_box.width),
+                    .height = @intCast(state.ammo_counter_bounding_box.height),
+                    .plane_mask = 0xffffffff,
+                });
+                // We handle the reply to this request above (see `analyzeScreenCapture`)
+                try common.send(conn.sock, &get_image_msg);
+            }
+        }
+
         {
             const receive_buffer = buffer.nextReadBuffer();
             if (receive_buffer.len == 0) {
@@ -398,6 +425,19 @@ pub fn main() !u8 {
                         state.ammo_counter_screenshot_region = .ammo_ui_strip;
                         std.log.debug("New state.ammo_counter_bounding_box {any}", .{state.ammo_counter_bounding_box});
 
+                        const prev_ammo_value = state.ammo_value;
+                        const current_ammo_value = ammo_results.ammo_value;
+
+                        // Keep track of the ammo count
+                        state.ammo_value = current_ammo_value;
+
+                        // If the ammo went down by 1 (meaning a bullet was shot), take
+                        // a screenshot
+                        if (absoluteDifference(current_ammo_value, prev_ammo_value) == 1) {
+                            try render_context.captureScreenshotToPixmap();
+                            try render_context.render();
+                        }
+
                         // Draw debug gizmos again
                         try render_context.render();
                     }
@@ -409,24 +449,13 @@ pub fn main() !u8 {
                                 // std.log.info("raw_button_press {}", .{extension_message});
                                 const is_left_click = extension_message.detail == 1;
                                 if (is_left_click) {
-                                    try render_context.captureScreenshotToPixmap();
-                                    try render_context.render();
-
-                                    // Request a screenshot of the ammo counter
-                                    {
-                                        var get_image_msg: [x.get_image.len]u8 = undefined;
-                                        x.get_image.serialize(&get_image_msg, .{
-                                            .format = .z_pixmap,
-                                            .drawable_id = ids.root,
-                                            .x = @intCast(state.ammo_counter_bounding_box.x),
-                                            .y = @intCast(state.ammo_counter_bounding_box.y),
-                                            .width = @intCast(state.ammo_counter_bounding_box.width),
-                                            .height = @intCast(state.ammo_counter_bounding_box.height),
-                                            .plane_mask = 0xffffffff,
-                                        });
-                                        // We handle the reply to this request above (see `analyzeScreenCapture`)
-                                        try common.send(conn.sock, &get_image_msg);
-                                    }
+                                    // Keep track of the left-click time. We should
+                                    // expect the ammo counter to go down in an upcoming
+                                    // capture (or at least to see the counter). If not,
+                                    // we should reset the capture area and scan the
+                                    // whole bottom-right quadrant again for the ammo
+                                    // counter as it may have moved.
+                                    state.last_left_click_ts = std.time.milliTimestamp();
                                 }
                             },
                             // We did not register for these events so we should not see them
