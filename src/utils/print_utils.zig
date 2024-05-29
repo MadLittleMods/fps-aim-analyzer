@@ -6,6 +6,35 @@ const rgbPixelsfromHexArray = image_conversion.rgbPixelsfromHexArray;
 const test_images = @import("../vision/test_images.zig");
 const test_square_image = test_images.test_square_image;
 
+/// TODO
+pub fn formatEachItemInSlice(
+    comptime T: type,
+    items: []const T,
+    comptime item_fmt: []const u8,
+    allocator: std.mem.Allocator,
+) ![]const u8 {
+    const pieces = try allocator.alloc([]const u8, items.len);
+    defer {
+        for (pieces) |piece| {
+            allocator.free(piece);
+        }
+        allocator.free(pieces);
+    }
+
+    for (0..pieces.len) |index| {
+        pieces[index] = try std.fmt.allocPrint(allocator, item_fmt, .{items[index]});
+    }
+
+    const joined_pieces = try std.mem.join(allocator, ", ", pieces);
+    defer allocator.free(joined_pieces);
+
+    const resultant_string = try std.fmt.allocPrint(allocator, "{{ {s} }}", .{
+        joined_pieces,
+    });
+
+    return resultant_string;
+}
+
 fn repeatString(string: []const u8, repeat: usize, allocator: std.mem.Allocator) ![]const u8 {
     const resultant_string = try allocator.alloc(u8, repeat * string.len);
     for (0..repeat) |repeat_index| {

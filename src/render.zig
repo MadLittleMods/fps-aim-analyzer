@@ -9,9 +9,12 @@ const RGBImage = image_conversion.RGBImage;
 const RGBPixel = image_conversion.RGBPixel;
 const halo_text_vision = @import("vision/halo_text_vision.zig");
 const Screenshot = halo_text_vision.Screenshot;
+const ScreenshotRegion = halo_text_vision.ScreenshotRegion;
 const IsolateDiagnostics = halo_text_vision.IsolateDiagnostics;
 const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
 const ParsedAmmoResult = @import("vision/ocr/character_recognition.zig").ParsedAmmoResult;
+const render_utils = @import("utils/render_utils.zig");
+const BoundingClientRect = render_utils.BoundingClientRect;
 const print_utils = @import("./utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
 
@@ -500,6 +503,21 @@ pub const FontDims = struct {
     font_ascent: i16, // pixels up from the text basepoint to the top of the text
 };
 
+pub const GetImageRequestInfo = struct {
+    /// The crop area from the screen that we requested
+    bounding_box: BoundingClientRect(usize),
+    /// Region type of the game window that was captured
+    screenshot_region: ScreenshotRegion,
+    /// Width of the entire game window
+    pre_crop_width: usize,
+    /// Height of the entire game window
+    pre_crop_height: usize,
+    /// Resolution width that the game is rendering at
+    game_resolution_width: usize,
+    /// Resolution height that the game is rendering at
+    game_resolution_height: usize,
+};
+
 /// Context struct pattern where we can hold some state that we can access in any of the
 /// methods. This is useful because we have to call `render()` in many places and we
 /// don't want to have to wrangle all of those arguments each time.
@@ -513,6 +531,9 @@ pub const RenderContext = struct {
     root_window_pixmap_format: x.Format,
     state: *AppState,
     character_recognition: *CharacterRecognition,
+    /// Keep track of the X GetImage requests we've sent along with the parameters so we
+    /// can line it up when the reply comes in.
+    get_image_request_queue: std.fifo.LinearFifo(GetImageRequestInfo, .{ .Static = 256 }),
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
@@ -694,15 +715,82 @@ pub const RenderContext = struct {
         self.state.next_screenshot_index = @rem(next_screenshot_index + 1, max_screenshots_shown);
     }
 
-    pub fn convertXGetImageReplyToRGBImage(
+    /// Make a new X GetImage request to capture a screenshot of a specific region of
+    /// the root screen. Also keep track of the request so we can line it up when the
+    /// reply comes in.
+    pub fn enqueueGetImageRequest(
+        self: *@This(),
+        /// The crop area from the screen that we requested
+        bounding_box: BoundingClientRect(usize),
+        /// Region type of the game window that was captured
+        screenshot_region: ScreenshotRegion,
+        /// Width of the entire game window
+        pre_crop_width: usize,
+        /// Height of the entire game window
+        pre_crop_height: usize,
+        /// Resolution width that the game is rendering at
+        game_resolution_width: usize,
+        /// Resolution height that the game is rendering at
+        game_resolution_height: usize,
+    ) !void {
+        const sock = self.sock.*;
+        const ids = self.ids.*;
+
+        var get_image_msg: [x.get_image.len]u8 = undefined;
+        x.get_image.serialize(&get_image_msg, .{
+            .format = .z_pixmap,
+            .drawable_id = ids.root,
+            .x = @intCast(bounding_box.x),
+            .y = @intCast(bounding_box.y),
+            .width = @intCast(bounding_box.width),
+            .height = @intCast(bounding_box.height),
+            .plane_mask = 0xffffffff,
+        });
+        // We handle the reply to this request above (see `analyzeScreenCapture`)
+        try common.send(sock, &get_image_msg);
+
+        // Keep track of the request so we can line it up when the reply comes in
+        try self.get_image_request_queue.writeItem(.{
+            .bounding_box = bounding_box,
+            .screenshot_region = screenshot_region,
+            .pre_crop_width = pre_crop_width,
+            .pre_crop_height = pre_crop_height,
+            .game_resolution_width = game_resolution_width,
+            .game_resolution_height = game_resolution_height,
+        });
+    }
+
+    /// Process the next incoming X GetImage reply and convert it into a screenshot
+    pub fn processNextGetImageRequest(
         self: *@This(),
         get_image_reply: *x.get_image.Reply,
         allocator: std.mem.Allocator,
-    ) !RGBImage {
+    ) !Screenshot(RGBImage) {
+        const opt_request_info = self.get_image_request_queue.readItem();
+        if (opt_request_info) |request_info| {
+            const screenshot = try self.convertXGetImageReplyToRGBImage(
+                get_image_reply,
+                request_info,
+                allocator,
+            );
+
+            return screenshot;
+        }
+
+        return error.NoMatchingRequestForThisRepy;
+    }
+
+    /// Convert the raw image data from an X GetImage reply into an RGB image
+    fn convertXGetImageReplyToRGBImage(
+        self: *@This(),
+        get_image_reply: *x.get_image.Reply,
+        request_info: GetImageRequestInfo,
+        allocator: std.mem.Allocator,
+    ) !Screenshot(RGBImage) {
         const image_data = get_image_reply.getData();
 
-        const capture_width = self.state.ammo_counter_bounding_box.width;
-        const capture_height = self.state.ammo_counter_bounding_box.height;
+        const capture_width = request_info.bounding_box.width;
+        const capture_height = request_info.bounding_box.height;
         const bytes_per_pixel_in_data = x.get_image.Reply.scanline_pad_bytes;
 
         // Given our request for an image with the width/height specified,
@@ -771,7 +859,18 @@ pub const RenderContext = struct {
             x_index += 1;
         }
 
-        return rgb_image;
+        const screenshot: Screenshot(RGBImage) = .{
+            .image = rgb_image,
+            .crop_region = request_info.screenshot_region,
+            .crop_region_x = @intCast(request_info.bounding_box.x),
+            .crop_region_y = @intCast(request_info.bounding_box.y),
+            .pre_crop_width = request_info.pre_crop_width,
+            .pre_crop_height = request_info.pre_crop_height,
+            .game_resolution_width = request_info.game_resolution_width,
+            .game_resolution_height = request_info.game_resolution_height,
+        };
+
+        return screenshot;
     }
 
     /// Grab the pixels from the window after we've rendered to it using `get_image` and

@@ -7,6 +7,7 @@ const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
 const x_shape_extension = @import("x11/x_shape_extension.zig");
 const render = @import("render.zig");
+const GetImageRequestInfo = render.GetImageRequestInfo;
 const AppState = @import("app_state.zig").AppState;
 const buffer_utils = @import("utils/buffer_utils.zig");
 const render_utils = @import("utils/render_utils.zig");
@@ -23,6 +24,7 @@ const futureAmmoHeuristicBoundingClientRect = halo_text_vision.futureAmmoHeurist
 const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
 const save_load_utils = @import("vision/ocr/save_load_utils.zig");
 const print_utils = @import("./utils/print_utils.zig");
+const formatEachItemInSlice = print_utils.formatEachItemInSlice;
 const printLabeledImage = print_utils.printLabeledImage;
 
 // We only expect the time between a left-click and the time it would take to see the
@@ -334,6 +336,7 @@ pub fn main() !u8 {
         .root_window_pixmap_format = root_window_pixmap_format,
         .state = &state,
         .character_recognition = &character_recognition,
+        .get_image_request_queue = std.fifo.LinearFifo(GetImageRequestInfo, .{ .Static = 256 }).init(),
     };
 
     while (true) {
@@ -342,20 +345,16 @@ pub fn main() !u8 {
         const current_ts = std.time.milliTimestamp();
         if (current_ts - state.last_left_click_ts < INPUT_DELAY_MAX_MS) {
             // Request a screenshot of the ammo counter
-            {
-                var get_image_msg: [x.get_image.len]u8 = undefined;
-                x.get_image.serialize(&get_image_msg, .{
-                    .format = .z_pixmap,
-                    .drawable_id = ids.root,
-                    .x = @intCast(state.ammo_counter_bounding_box.x),
-                    .y = @intCast(state.ammo_counter_bounding_box.y),
-                    .width = @intCast(state.ammo_counter_bounding_box.width),
-                    .height = @intCast(state.ammo_counter_bounding_box.height),
-                    .plane_mask = 0xffffffff,
-                });
-                // We handle the reply to this request above (see `analyzeScreenCapture`)
-                try common.send(conn.sock, &get_image_msg);
-            }
+            try render_context.enqueueGetImageRequest(
+                state.ammo_counter_bounding_box,
+                state.ammo_counter_screenshot_region,
+                screen.pixel_width,
+                screen.pixel_height,
+                // We assume the game is being rendered 1:1 (100%), so the game
+                // resolution is the same as the image resolution
+                screen.pixel_width,
+                screen.pixel_height,
+            );
         }
 
         {
@@ -394,28 +393,36 @@ pub fn main() !u8 {
                     // up requests with replies.
                     const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
 
-                    // Convert the X image format to an `RGBImage` we can use in our vision code
-                    const rgb_image = try render_context.convertXGetImageReplyToRGBImage(get_image_reply, allocator);
-                    defer rgb_image.deinit(allocator);
-                    const screenshot: Screenshot(RGBImage) = .{
-                        .image = rgb_image,
-                        .crop_region = state.ammo_counter_screenshot_region,
-                        .crop_region_x = @intCast(state.ammo_counter_bounding_box.x),
-                        .crop_region_y = @intCast(state.ammo_counter_bounding_box.y),
-                        .pre_crop_width = screen.pixel_width,
-                        .pre_crop_height = screen.pixel_height,
-                        // We assume the game is being rendered 1:1 (100%), so the game
-                        // resolution is the same as the image resolution
-                        .game_resolution_width = screen.pixel_width,
-                        .game_resolution_height = screen.pixel_height,
-                    };
+                    std.log.debug("Processing with {d}x{d} ({d}, {d})", .{
+                        state.ammo_counter_bounding_box.width,
+                        state.ammo_counter_bounding_box.height,
+                        state.ammo_counter_bounding_box.x,
+                        state.ammo_counter_bounding_box.y,
+                    });
 
-                    try printLabeledImage("analyzing screenshot", rgb_image, .kitty, allocator);
+                    // Convert the X image format to an `RGBImage` we can use in our vision code
+                    const screenshot = try render_context.processNextGetImageRequest(
+                        get_image_reply,
+                        allocator,
+                    );
+                    defer screenshot.image.deinit(allocator);
+
+                    try printLabeledImage("analyzing screenshot", screenshot.image, .kitty, allocator);
 
                     // Run text detection and OCR on the ammo counter
                     const opt_ammo_results = try render_context.analyzeScreenCapture(screenshot, allocator);
                     if (opt_ammo_results) |ammo_results| {
-                        std.log.debug("ammo_results {any}", .{ammo_results});
+                        const confidence_level_string = try formatEachItemInSlice(
+                            f64,
+                            ammo_results.confidence_levels,
+                            "{d:.4}",
+                            allocator,
+                        );
+                        defer allocator.free(confidence_level_string);
+                        std.log.debug("ammo_results {d} (confidence {s})", .{
+                            ammo_results.ammo_value,
+                            confidence_level_string,
+                        });
 
                         const ammo_ui_strip_bounding_box = futureAmmoHeuristicBoundingClientRect(ammo_results.ammo_counter_bounding_box);
 
@@ -423,7 +430,12 @@ pub fn main() !u8 {
                         // capture a lot less of the screen next time.
                         state.ammo_counter_bounding_box = ammo_ui_strip_bounding_box;
                         state.ammo_counter_screenshot_region = .ammo_ui_strip;
-                        std.log.debug("New state.ammo_counter_bounding_box {any}", .{state.ammo_counter_bounding_box});
+                        std.log.debug("New state.ammo_counter_bounding_box {d}x{d} ({d}, {d})", .{
+                            state.ammo_counter_bounding_box.width,
+                            state.ammo_counter_bounding_box.height,
+                            state.ammo_counter_bounding_box.x,
+                            state.ammo_counter_bounding_box.y,
+                        });
 
                         const prev_ammo_value = state.ammo_value;
                         const current_ammo_value = ammo_results.ammo_value;
@@ -433,7 +445,7 @@ pub fn main() !u8 {
 
                         // If the ammo went down by 1 (meaning a bullet was shot), take
                         // a screenshot
-                        if (absoluteDifference(current_ammo_value, prev_ammo_value) == 1) {
+                        if (current_ammo_value < prev_ammo_value and (prev_ammo_value - current_ammo_value) == 1) {
                             try render_context.captureScreenshotToPixmap();
                             try render_context.render();
                         }
