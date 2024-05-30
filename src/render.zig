@@ -504,6 +504,8 @@ pub const FontDims = struct {
 };
 
 pub const GetImageRequestInfo = struct {
+    /// `std.time.milliTimestamp()`
+    request_ts: i64,
     /// The crop area from the screen that we requested
     bounding_box: BoundingClientRect(usize),
     /// Region type of the game window that was captured
@@ -736,6 +738,13 @@ pub const RenderContext = struct {
         const sock = self.sock.*;
         const ids = self.ids.*;
 
+        std.log.debug("enqueueGetImageRequest x={}, y={}, width={}, height={}", .{
+            bounding_box.x,
+            bounding_box.y,
+            bounding_box.width,
+            bounding_box.height,
+        });
+
         var get_image_msg: [x.get_image.len]u8 = undefined;
         x.get_image.serialize(&get_image_msg, .{
             .format = .z_pixmap,
@@ -751,6 +760,7 @@ pub const RenderContext = struct {
 
         // Keep track of the request so we can line it up when the reply comes in
         try self.get_image_request_queue.writeItem(.{
+            .request_ts = std.time.milliTimestamp(),
             .bounding_box = bounding_box,
             .screenshot_region = screenshot_region,
             .pre_crop_width = pre_crop_width,
@@ -766,13 +776,27 @@ pub const RenderContext = struct {
         get_image_reply: *x.get_image.Reply,
         allocator: std.mem.Allocator,
     ) !Screenshot(RGBImage) {
+        const before_conversion_ts = std.time.milliTimestamp();
         const opt_request_info = self.get_image_request_queue.readItem();
         if (opt_request_info) |request_info| {
+            std.log.debug("Processing next image response {d}x{d} ({d}, {d}) - request time {}", .{
+                request_info.bounding_box.width,
+                request_info.bounding_box.height,
+                request_info.bounding_box.x,
+                request_info.bounding_box.y,
+                std.fmt.fmtDurationSigned((before_conversion_ts - request_info.request_ts) * std.time.ns_per_ms),
+            });
+
             const screenshot = try self.convertXGetImageReplyToRGBImage(
                 get_image_reply,
                 request_info,
                 allocator,
             );
+
+            const after_conversion_ts = std.time.milliTimestamp();
+            // std.log.debug("Conversion time {}", .{
+            //     std.fmt.fmtDurationSigned((after_conversion_ts - before_conversion_ts) * std.time.ns_per_ms),
+            // });
 
             return screenshot;
         }

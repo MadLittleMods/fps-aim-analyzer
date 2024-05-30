@@ -393,13 +393,6 @@ pub fn main() !u8 {
                     // up requests with replies.
                     const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
 
-                    std.log.debug("Processing with {d}x{d} ({d}, {d})", .{
-                        state.ammo_counter_bounding_box.width,
-                        state.ammo_counter_bounding_box.height,
-                        state.ammo_counter_bounding_box.x,
-                        state.ammo_counter_bounding_box.y,
-                    });
-
                     // Convert the X image format to an `RGBImage` we can use in our vision code
                     const screenshot = try render_context.processNextGetImageRequest(
                         get_image_reply,
@@ -407,10 +400,15 @@ pub fn main() !u8 {
                     );
                     defer screenshot.image.deinit(allocator);
 
-                    try printLabeledImage("analyzing screenshot", screenshot.image, .kitty, allocator);
+                    // try printLabeledImage("analyzing screenshot", screenshot.image, .kitty, allocator);
 
                     // Run text detection and OCR on the ammo counter
+                    const before_analyze_ts = std.time.milliTimestamp();
                     const opt_ammo_results = try render_context.analyzeScreenCapture(screenshot, allocator);
+                    const after_analyze_ts = std.time.milliTimestamp();
+                    std.log.debug("Analysis time {}", .{
+                        std.fmt.fmtDurationSigned((after_analyze_ts - before_analyze_ts) * std.time.ns_per_ms),
+                    });
                     if (opt_ammo_results) |ammo_results| {
                         const confidence_level_string = try formatEachItemInSlice(
                             f64,
