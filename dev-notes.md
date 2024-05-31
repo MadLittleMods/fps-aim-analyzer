@@ -15,6 +15,7 @@ Documentation:
  - `xcb` client library for C projects:
     - Docs: https://xcb.freedesktop.org/
     - Source: https://gitlab.freedesktop.org/xorg/lib/libxcb
+    - Protocol XML definitions: https://gitlab.freedesktop.org/xorg/proto/xcbproto
 
 Guides:
 

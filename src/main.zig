@@ -1,58 +1,143 @@
 const std = @import("std");
 const x = @import("x");
+const zigimg = @import("zigimg");
 const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11//x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
-const render_utils = @import("render_utils.zig");
+const x_shape_extension = @import("x11/x_shape_extension.zig");
+const render = @import("render.zig");
+const GetImageRequestInfo = render.GetImageRequestInfo;
 const AppState = @import("app_state.zig").AppState;
-const buffer_utils = @import("buffer_utils.zig");
+const buffer_utils = @import("utils/buffer_utils.zig");
+const render_utils = @import("utils/render_utils.zig");
+const Dimensions = render_utils.Dimensions;
+const BoundingClientRect = render_utils.BoundingClientRect;
+const image_conversion = @import("vision/image_conversion.zig");
+const RGBImage = image_conversion.RGBImage;
+const math_utils = @import("utils/math_utils.zig");
+const absoluteDifference = math_utils.absoluteDifference;
+const halo_text_vision = @import("vision/halo_text_vision.zig");
+const ScreenshotRegion = halo_text_vision.ScreenshotRegion;
+const Screenshot = halo_text_vision.Screenshot;
+const futureAmmoHeuristicBoundingClientRect = halo_text_vision.futureAmmoHeuristicBoundingClientRect;
+const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
+const save_load_utils = @import("vision/ocr/save_load_utils.zig");
+const print_utils = @import("./utils/print_utils.zig");
+const formatEachItemInSlice = print_utils.formatEachItemInSlice;
+const printLabeledImage = print_utils.printLabeledImage;
 
-var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-const allocator = arena.allocator();
+// We only expect the time between a left-click and the time it would take to see the
+// ammo counter go down by 1 to be at max 200ms.
+const INPUT_DELAY_MAX_MS = 200;
+
+fn projectSrcPath() []const u8 {
+    const file_source_path = std.fs.path.dirname(@src().file) orelse ".";
+
+    return file_source_path;
+}
+
+/// Capture a screenshot of the ammo counter tp analyze and the reticle at the same time.
+fn captureScreenshots(render_context: *render.RenderContext, state: *AppState) !void {
+    const scratch_ring_buffer_size = state.scratch_ring_buffer_size;
+    const current_scratch_index = state.next_scratch_index;
+
+    // Request a screenshot of the ammo counter
+    try render_context.enqueueGetImageRequest(
+        current_scratch_index,
+        state.ammo_counter_bounding_box,
+        state.ammo_counter_screenshot_region,
+        @intCast(state.root_screen_dimensions.width),
+        @intCast(state.root_screen_dimensions.height),
+        // We assume the game is being rendered 1:1 (100%), so the game
+        // resolution is the same as the image resolution
+        @intCast(state.root_screen_dimensions.width),
+        @intCast(state.root_screen_dimensions.height),
+    );
+    // Also capture a screenshot of the reticle at the same time
+    // so if we determine the ammo counter went down, we have
+    // the corresponding view of what you were shooting at.
+    try render_context.captureScreenshotToPixmap(current_scratch_index);
+
+    // Advance the scratch index
+    state.next_scratch_index = @rem(current_scratch_index + 1, scratch_ring_buffer_size);
+}
 
 pub fn main() !u8 {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer switch (gpa.deinit()) {
+        .ok => {},
+        .leak => std.log.err("GPA allocator: Memory leak detected", .{}),
+    };
+
     try x.wsaStartup();
     const conn = try common.connect(allocator);
     defer std.os.shutdown(conn.sock, .both) catch {};
+    defer conn.setup.deinit(allocator);
+    const conn_setup_fixed_fields = conn.setup.fixed();
+    // Print out some info about the X server we connected to
+    {
+        inline for (@typeInfo(@TypeOf(conn_setup_fixed_fields.*)).Struct.fields) |field| {
+            std.log.debug("{s}: {any}", .{ field.name, @field(conn_setup_fixed_fields, field.name) });
+        }
+        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
+    }
 
-    const screen = blk: {
-        const fixed = conn.setup.fixed();
-        inline for (@typeInfo(@TypeOf(fixed.*)).Struct.fields) |field| {
-            std.log.debug("{s}: {any}", .{ field.name, @field(fixed, field.name) });
-        }
-        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(fixed.vendor_len)});
-        const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
-        const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
-        var screen = conn.setup.getFirstScreenPtr(format_list_limit);
-        inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
-            std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
-        }
-        break :blk screen;
+    const screen = render.getFirstScreenFromConnectionSetup(conn.setup);
+    inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
+        std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
+    }
+
+    const pixmap_formats = try render.getPixmapFormatsFromConnectionSetup(conn.setup);
+    const root_window_pixmap_format = try render.findMatchingPixmapFormatForDepth(
+        pixmap_formats,
+        screen.root_depth,
+    );
+
+    const image_byte_order: std.builtin.Endian = switch (conn_setup_fixed_fields.image_byte_order) {
+        .lsb_first => .Little,
+        .msb_first => .Big,
+        else => |order| {
+            std.log.err("unknown image-byte-order {}", .{order});
+            return 1;
+        },
     };
 
-    const ids = render_utils.Ids.init(
+    std.log.info("root window ID {0} 0x{0x}", .{screen.root});
+    const ids = render.Ids.init(
         screen.root,
-        conn.setup.fixed().resource_id_base,
+        conn_setup_fixed_fields.resource_id_base,
     );
 
     const depth = 32;
 
-    const root_screen_dimensions = render_utils.Dimensions{
+    const root_screen_dimensions = Dimensions{
         .width = @intCast(screen.pixel_width),
         .height = @intCast(screen.pixel_height),
     };
 
     const screenshot_capture_scale = 20;
-    const screenshot_capture_dimensions = render_utils.Dimensions{
+    const screenshot_capture_dimensions = Dimensions{
         .width = @intCast(@divTrunc(screen.pixel_width, screenshot_capture_scale)),
         .height = @intCast(@divTrunc(screen.pixel_height, screenshot_capture_scale)),
+    };
+
+    // Start out with the bottom-right corner of the screen
+    const ammo_counter_screenshot_region = ScreenshotRegion.bottom_right_quadrant;
+    const ammo_counter_bounding_box_width = screen.pixel_width / 2;
+    const ammo_counter_bounding_box_height = screen.pixel_height / 2;
+    const ammo_counter_bounding_box = BoundingClientRect(usize){
+        .x = screen.pixel_width - ammo_counter_bounding_box_width,
+        .y = screen.pixel_height - ammo_counter_bounding_box_height,
+        .width = ammo_counter_bounding_box_width,
+        .height = ammo_counter_bounding_box_height,
     };
 
     const max_screenshots_shown = 6;
     const margin = 20;
     const padding = 10;
-    const window_dimensions = render_utils.Dimensions{
+    const window_dimensions = Dimensions{
         .width = screenshot_capture_dimensions.width + (2 * padding),
         .height = (max_screenshots_shown * (screenshot_capture_dimensions.height + padding)) + padding,
     };
@@ -61,6 +146,9 @@ pub fn main() !u8 {
         .root_screen_dimensions = root_screen_dimensions,
         .window_dimensions = window_dimensions,
         .screenshot_capture_dimensions = screenshot_capture_dimensions,
+        .ammo_counter_bounding_box = ammo_counter_bounding_box,
+        // We start out capturing the bottom-right corner of the screen
+        .ammo_counter_screenshot_region = ammo_counter_screenshot_region,
         .max_screenshots_shown = max_screenshots_shown,
         .margin = margin,
         .padding = padding,
@@ -68,7 +156,7 @@ pub fn main() !u8 {
 
     // Create a big buffer that we can use to read messages and replies from the X server.
     const double_buffer = try x.DoubleBuffer.init(
-        std.mem.alignForward(usize, 8000, std.mem.page_size),
+        std.mem.alignForward(usize, std.math.pow(usize, 2, 32), std.mem.page_size),
         .{ .memfd_name = "ZigX11DoubleBuffer" },
     );
     defer double_buffer.deinit(); // not necessary but good to test
@@ -129,13 +217,37 @@ pub fn main() !u8 {
         },
     );
 
+    // We use the X Input extension to detect clicks on the game window (or whatever
+    // window) they happen to be on. Useful because we can detect clicks even when our
+    // window is not focused and doesn't have to be directly clicked.
+    const optional_shape_extension = try x11_extension_utils.getExtensionInfo(
+        conn.sock,
+        &buffer,
+        "SHAPE",
+    );
+    const shape_extension = optional_shape_extension orelse @panic("SHAPE extension not found");
+
+    try x_shape_extension.ensureCompatibleVersionOfXShapeExtension(
+        conn.sock,
+        &buffer,
+        &shape_extension,
+        .{
+            // We arbitrarily require version 1.1 of the X Shape extension
+            // because that's the latest version and is sufficiently old
+            // and ubiquitous.
+            .major_version = 1,
+            .minor_version = 1,
+        },
+    );
+
     // Assemble a map of X extension info
     const extensions = x11_extension_utils.Extensions{
         .render = render_extension,
         .input = input_extension,
+        .shape = shape_extension,
     };
 
-    try render_utils.createResources(
+    try render.createResources(
         conn.sock,
         &buffer,
         &ids,
@@ -143,6 +255,7 @@ pub fn main() !u8 {
         &extensions,
         depth,
         &state,
+        allocator,
     );
 
     // Register for events from the X Input extension for when the mouse is clicked
@@ -167,7 +280,7 @@ pub fn main() !u8 {
         x.query_text_extents.serialize(&message_buffer, ids.fg_gc, text);
         try conn.send(&message_buffer);
     }
-    const font_dims: render_utils.FontDims = blk: {
+    const font_dims: render.FontDims = blk: {
         const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
         try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
@@ -187,28 +300,78 @@ pub fn main() !u8 {
         }
     };
 
-    // Show the window. In the X11 protocol is called mapping a window, and hiding a
-    // window is called unmapping. When windows are initially created, they are unmapped
-    // (or hidden).
+    // Show the window. In the X11 protocol, this is called mapping a window, and hiding
+    // a window is called unmapping. When windows are initially created, they are
+    // unmapped (or hidden).
     {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, ids.window);
         try conn.send(&msg);
     }
+    // Show the debug window
+    {
+        var msg: [x.map_window.len]u8 = undefined;
+        x.map_window.serialize(&msg, ids.debug_window);
+        try conn.send(&msg);
+    }
 
-    var render_context = render_utils.RenderContext{
+    // Since the debug window covers the whole screen, we want to make it so that mouse
+    // events aren't affected by it all. Make it completely click-through-able.
+    {
+        const rectangle_list = [_]x.Rectangle{
+            .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+        };
+        var msg: [x.shape.rectangles.getLen(rectangle_list.len)]u8 = undefined;
+        x.shape.rectangles.serialize(&msg, shape_extension.opcode, .{
+            .destination_window_id = ids.debug_window,
+            .destination_kind = .input,
+            .operation = .set,
+            .x_offset = 0,
+            .y_offset = 0,
+            .ordering = .unsorted,
+            .rectangles = &rectangle_list,
+        });
+        try conn.send(&msg);
+    }
+
+    // Assemble a file path to the neural network model file
+    const neural_network_file_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{
+            // Prepend the project directory path
+            projectSrcPath(),
+            // And the latest file name
+            "neural_network_checkpoint_epoch_440.json",
+        },
+    );
+    defer allocator.free(neural_network_file_path);
+    // Load the neural network and get ready to recognize characters
+    var character_recognition = try CharacterRecognition.init(
+        neural_network_file_path,
+        allocator,
+    );
+
+    var render_context = render.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,
+        .root_screen_depth = screen.root_depth,
         .extensions = &extensions,
         .font_dims = &font_dims,
+        .image_byte_order = image_byte_order,
+        .root_window_pixmap_format = root_window_pixmap_format,
         .state = &state,
+        .character_recognition = &character_recognition,
+        .get_image_request_queue = std.fifo.LinearFifo(GetImageRequestInfo, .{ .Static = 256 }).init(),
     };
 
     while (true) {
         {
             const receive_buffer = buffer.nextReadBuffer();
             if (receive_buffer.len == 0) {
-                std.log.err("buffer size {} not big enough!", .{buffer.half_len});
+                std.log.err("buffer size {} not big enough to fit the bytes we received!", .{
+                    buffer.half_len,
+                });
                 return 1;
             }
             const len = try x.readSock(conn.sock, receive_buffer, 0);
@@ -234,20 +397,108 @@ pub fn main() !u8 {
                     return 1;
                 },
                 .reply => |msg| {
-                    std.log.info("todo: handle a reply message {}", .{msg});
-                    return error.TodoHandleReplyMessage;
+                    // Note: We assume any reply here will be to the `get_image` request
+                    // but normally you would want some state machine sequencer to match
+                    // up requests with replies.
+                    const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
+
+                    // Convert the X image format to an `RGBImage` we can use in our vision code
+                    const processed_results = try render_context.processNextGetImageRequest(
+                        get_image_reply,
+                        allocator,
+                    );
+                    const scratch_index = processed_results.request_info.scratch_index;
+                    const screenshot = processed_results.screenshot;
+                    defer screenshot.image.deinit(allocator);
+
+                    // try printLabeledImage("analyzing screenshot", screenshot.image, .kitty, allocator);
+
+                    // Run text detection and OCR on the ammo counter
+                    const before_analyze_ts = std.time.milliTimestamp();
+                    const opt_ammo_results = try render_context.analyzeScreenCapture(screenshot, allocator);
+                    const after_analyze_ts = std.time.milliTimestamp();
+                    std.log.debug("Analysis time {}", .{
+                        std.fmt.fmtDurationSigned((after_analyze_ts - before_analyze_ts) * std.time.ns_per_ms),
+                    });
+                    if (opt_ammo_results) |ammo_results| {
+                        const confidence_level_string = try formatEachItemInSlice(
+                            f64,
+                            ammo_results.confidence_levels,
+                            "{d:.4}",
+                            allocator,
+                        );
+                        defer allocator.free(confidence_level_string);
+                        std.log.debug("ammo_results {d} (confidence {s})", .{
+                            ammo_results.ammo_value,
+                            confidence_level_string,
+                        });
+
+                        const ammo_ui_strip_bounding_box = futureAmmoHeuristicBoundingClientRect(ammo_results.ammo_counter_bounding_box);
+
+                        // Keep track of where we last found the ammo counter so we can
+                        // capture a lot less of the screen next time.
+                        state.ammo_counter_bounding_box = ammo_ui_strip_bounding_box;
+                        state.ammo_counter_screenshot_region = .ammo_ui_strip;
+                        std.log.debug("New state.ammo_counter_bounding_box {d}x{d} ({d}, {d})", .{
+                            state.ammo_counter_bounding_box.width,
+                            state.ammo_counter_bounding_box.height,
+                            state.ammo_counter_bounding_box.x,
+                            state.ammo_counter_bounding_box.y,
+                        });
+
+                        const prev_ammo_value = state.ammo_value;
+                        const current_ammo_value = ammo_results.ammo_value;
+
+                        // Keep track of the ammo count
+                        state.ammo_value = current_ammo_value;
+
+                        // If the ammo went down by 1 (meaning a bullet was shot), copy
+                        // the screenshot from the scratchpad to our list of screenshots
+                        // of interest.
+                        if (current_ammo_value < prev_ammo_value and (prev_ammo_value - current_ammo_value) == 1) {
+                            try render_context.copyScreenshotFromScratchpad(scratch_index);
+                            // Re-render the UI to show the new screenshot
+                            try render_context.render();
+                        }
+
+                        // Draw debug gizmos again
+                        try render_context.render();
+                    }
+
+                    // Capture frames for 200ms (the max input delay we expect) after a
+                    // left-click. We only want to request another screenshot after the
+                    // last request finished processing so we do this check in this
+                    // image reply function.
+                    const current_ts = std.time.milliTimestamp();
+                    if (current_ts - state.last_left_click_ts < INPUT_DELAY_MAX_MS) {
+                        try captureScreenshots(&render_context, &state);
+                    }
                 },
                 .generic_extension_event => |msg| {
                     if (msg.ext_opcode == extensions.input.opcode) {
                         switch (x.inputext.genericExtensionEventTaggedUnion(@alignCast(data.ptr))) {
                             .raw_button_press => |extension_message| {
-                                std.log.info("raw_button_press {}", .{extension_message});
-                                if (extension_message.detail == 1) {
-                                    try render_context.captureScreenshotToPixmap();
-                                    try render_context.render();
+                                // std.log.info("raw_button_press {}", .{extension_message});
+                                const is_left_click = extension_message.detail == 1;
+                                if (is_left_click) {
+                                    // Keep track of the left-click time. We should
+                                    // expect the ammo counter to go down in an upcoming
+                                    // capture (or at least to see the counter). If not,
+                                    // we should reset the capture area and scan the
+                                    // whole bottom-right quadrant again for the ammo
+                                    // counter as it may have moved.
+                                    state.last_left_click_ts = std.time.milliTimestamp();
+
+                                    // If there is not already a request in the queue, get the loop
+                                    // started by requesting a screenshot of the ammo counter
+                                    if (render_context.get_image_request_queue.readableLength() == 0) {
+                                        try captureScreenshots(&render_context, &state);
+                                    }
                                 }
                             },
-                            else => unreachable, // We did not register for these events so we should not see them
+                            // We did not register for these events so we should not see them
+                            else => @panic("Received unexpected generic extension " ++
+                                "event that we did not register for"),
                         }
                     } else {
                         std.log.info("TODO: handle a GE generic event {}", .{msg});
@@ -290,17 +541,24 @@ pub fn main() !u8 {
                 },
                 .no_exposure => |msg| std.debug.panic("unexpected no_exposure {}", .{msg}),
                 .unhandled => |msg| {
-                    std.log.info("todo: server msg {}", .{msg});
+                    std.log.info("todo: unhandled server msg {}", .{msg});
                     return error.UnhandledServerMsg;
                 },
                 .map_notify,
                 .reparent_notify,
                 .configure_notify,
-                => unreachable, // did not register for these
+                // We did not register for these
+                => @panic("Received unexpected event event that we did not register for"),
             }
         }
     }
 
     // Clean-up
-    try render_utils.cleanupResources(ids);
+    try render.cleanupResources(conn.sock, &ids);
+}
+
+test {
+    _ = @import("utils/render_utils.zig");
+    _ = @import("utils/print_utils.zig");
+    _ = @import("vision/vision.zig");
 }
