@@ -59,13 +59,17 @@ pub const Ids = struct {
     bg_gc: u32 = 0,
     /// Foreground graphics context
     fg_gc: u32 = 0,
-    /// The drawable ID of the pixmap that we store screenshots in
-    pixmap: u32 = 0,
+    /// The drawable ID of the scratchpad pixmap that we store screenshots in
+    scratch_pixmap: u32 = 0,
+    /// The drawable ID of the pixmap that we store screenshots that we actually want
+    /// use and display
+    screenshot_pixmap: u32 = 0,
     // We need to create a "picture" version of every drawable for use with the X Render
     // extension.
     picture_root: u32 = 0,
     picture_window: u32 = 0,
-    picture_pixmap: u32 = 0,
+    picture_scratch_pixmap: u32 = 0,
+    picture_screenshot_pixmap: u32 = 0,
 
     pub fn init(root: u32, base_resource_id: u32) Self {
         var ids = Ids{
@@ -155,6 +159,7 @@ pub fn createResources(
     const window_dimensions = state.window_dimensions;
     const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
     const max_screenshots_shown = state.max_screenshots_shown;
+    const scratch_ring_buffer_size = state.scratch_ring_buffer_size;
     const margin = state.margin;
 
     var arena_allocator = std.heap.ArenaAllocator.init(base_allocator);
@@ -343,11 +348,25 @@ pub fn createResources(
         try common.send(sock, message_buffer[0..len]);
     }
 
-    // Create a pixmap drawable to capture the screenshot onto
+    // Create a scratchpad pixmap drawable to capture screenshots onto
     {
         var message_buffer: [x.create_pixmap.len]u8 = undefined;
         x.create_pixmap.serialize(&message_buffer, .{
-            .id = ids.pixmap,
+            .id = ids.scratch_pixmap,
+            .drawable_id = ids.window,
+            .depth = depth,
+            .width = @intCast(screenshot_capture_dimensions.width),
+            .height = @as(u16, @intCast(scratch_ring_buffer_size)) * @as(u16, @intCast(screenshot_capture_dimensions.height)),
+        });
+        try common.send(sock, &message_buffer);
+    }
+
+    // Create a pixmap drawable where we can copy from our scratchpad pixmap to a pixmap
+    // of screenshots that we actually want to use and display (only some frames are of interest).
+    {
+        var message_buffer: [x.create_pixmap.len]u8 = undefined;
+        x.create_pixmap.serialize(&message_buffer, .{
+            .id = ids.screenshot_pixmap,
             .drawable_id = ids.window,
             .depth = depth,
             .width = @intCast(screenshot_capture_dimensions.width),
@@ -441,12 +460,22 @@ pub fn createResources(
         try common.send(sock, message_buffer[0..len]);
     }
 
-    // Create a picture for the pixmap that we store screenshots in
+    // Create a picture for the pixmaps
     {
         var message_buffer: [x.render.create_picture.max_len]u8 = undefined;
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
-            .picture_id = ids.picture_pixmap,
-            .drawable_id = ids.pixmap,
+            .picture_id = ids.picture_scratch_pixmap,
+            .drawable_id = ids.scratch_pixmap,
+            .format_id = matching_picture_format.picture_format_id,
+            .options = .{},
+        });
+        try common.send(sock, message_buffer[0..len]);
+    }
+    {
+        var message_buffer: [x.render.create_picture.max_len]u8 = undefined;
+        const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
+            .picture_id = ids.picture_screenshot_pixmap,
+            .drawable_id = ids.screenshot_pixmap,
             .format_id = matching_picture_format.picture_format_id,
             .options = .{},
         });
@@ -460,7 +489,12 @@ pub fn cleanupResources(
 ) !void {
     {
         var message_buffer: [x.free_pixmap.len]u8 = undefined;
-        x.free_pixmap.serialize(&message_buffer, ids.pixmap);
+        x.free_pixmap.serialize(&message_buffer, ids.scratch_pixmap);
+        try common.send(sock, &message_buffer);
+    }
+    {
+        var message_buffer: [x.free_pixmap.len]u8 = undefined;
+        x.free_pixmap.serialize(&message_buffer, ids.screenshot_pixmap);
         try common.send(sock, &message_buffer);
     }
 
@@ -504,6 +538,8 @@ pub const FontDims = struct {
 };
 
 pub const GetImageRequestInfo = struct {
+    /// The index of the request/screenshot in the ring buffer
+    scratch_index: u32,
     /// `std.time.milliTimestamp()`
     request_ts: i64,
     /// The crop area from the screen that we requested
@@ -553,7 +589,7 @@ pub const RenderContext = struct {
         const window_dimensions = state.window_dimensions;
         const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
         const max_screenshots_shown = state.max_screenshots_shown;
-        const next_screenshot_index = state.next_screenshot_index;
+        const next_interesting_screenshot_index = state.next_interesting_screenshot_index;
         const padding = state.padding;
         const mouse_x = state.mouse_x;
 
@@ -586,7 +622,7 @@ pub const RenderContext = struct {
             // `max_screenshots_shown` which is what `UnsignedInt` is derived from.
             const screen_shot_index: UnsignedInt = @as(UnsignedInt, @intCast(
                 @mod(
-                    @as(SignedInt, @intCast(next_screenshot_index)) - @as(SignedInt, @intCast(screen_shot_offset)) - 1,
+                    @as(SignedInt, @intCast(next_interesting_screenshot_index)) - @as(SignedInt, @intCast(screen_shot_offset)) - 1,
                     max_screenshots_shown,
                 ),
             ));
@@ -594,7 +630,7 @@ pub const RenderContext = struct {
             var msg: [x.render.composite.len]u8 = undefined;
             x.render.composite.serialize(&msg, extensions.render.opcode, .{
                 .picture_operation = .over,
-                .src_picture_id = ids.picture_pixmap,
+                .src_picture_id = ids.picture_screenshot_pixmap,
                 .mask_picture_id = 0,
                 .dst_picture_id = ids.picture_window,
                 .src_x = 0,
@@ -667,7 +703,7 @@ pub const RenderContext = struct {
 
     /// Capture a screenshot of the root window (whatever is displayed on the screen)
     /// and store it in our pixmap.
-    pub fn captureScreenshotToPixmap(self: *@This()) !void {
+    pub fn captureScreenshotToPixmap(self: *@This(), scratch_index: u32) !void {
         const sock = self.sock.*;
         const ids = self.ids.*;
         const extensions = self.extensions.*;
@@ -675,14 +711,12 @@ pub const RenderContext = struct {
 
         const root_screen_dimensions = state.root_screen_dimensions;
         const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
-        const max_screenshots_shown = state.max_screenshots_shown;
-        const next_screenshot_index = state.next_screenshot_index;
 
         const capture_x = @divFloor(root_screen_dimensions.width, 2) - @divFloor(screenshot_capture_dimensions.width, 2);
         const capture_y = @divFloor(root_screen_dimensions.height, 2) - @divFloor(screenshot_capture_dimensions.height, 2);
 
         std.log.debug("captureScreenshotToPixmap index={} from x={}, y={}, width={}, height={}", .{
-            next_screenshot_index,
+            scratch_index,
             capture_x,
             capture_y,
             screenshot_capture_dimensions.width,
@@ -698,7 +732,7 @@ pub const RenderContext = struct {
                 .picture_operation = .over,
                 .src_picture_id = ids.picture_root,
                 .mask_picture_id = 0,
-                .dst_picture_id = ids.picture_pixmap,
+                .dst_picture_id = ids.picture_scratch_pixmap,
                 .src_x = capture_x,
                 .src_y = capture_y,
                 .mask_x = 0,
@@ -707,14 +741,57 @@ pub const RenderContext = struct {
                 // We store all captured screenshots in the same `pixmap` in a film
                 // strip layout stacked on top of each other. We only keep track of the
                 // N most recent screenshots (defined by max_screenshots_shown).
-                .dst_y = next_screenshot_index * screenshot_capture_dimensions.height,
+                .dst_y = @as(i16, @intCast(scratch_index)) * screenshot_capture_dimensions.height,
+                .width = @intCast(screenshot_capture_dimensions.width),
+                .height = @intCast(screenshot_capture_dimensions.height),
+            });
+            try common.send(sock, &msg);
+        }
+    }
+
+    /// Copy a screenshot from the screenshot at the given index into our main
+    /// screenshot of interest pixmap.
+    pub fn copyScreenshotFromScratchpad(self: *@This(), scratch_index: u32) !void {
+        const sock = self.sock.*;
+        const ids = self.ids.*;
+        const extensions = self.extensions.*;
+        const state = self.state.*;
+
+        const max_screenshots_shown = state.max_screenshots_shown;
+        const current_screenshot_index = state.next_interesting_screenshot_index;
+        const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
+
+        {
+            // We use the `x.render.composite` request to copy the root window into our
+            // pixmap instead of `x.copy_area` because that requires the depths to match and
+            // we're using a 32-bit depth on our window and trying to copy from the 24-bit
+            // depth root window.
+            var msg: [x.render.composite.len]u8 = undefined;
+            x.render.composite.serialize(&msg, extensions.render.opcode, .{
+                .picture_operation = .over,
+                .src_picture_id = ids.picture_scratch_pixmap,
+                .mask_picture_id = 0,
+                .dst_picture_id = ids.picture_screenshot_pixmap,
+                .src_x = 0,
+                // We store all captured screenshots in the same `pixmap` in a film
+                // strip layout stacked on top of each other. We only keep track of the
+                // N most recent screenshots (defined by max_screenshots_shown).
+                .src_y = @as(i16, @intCast(scratch_index)) * screenshot_capture_dimensions.height,
+                .mask_x = 0,
+                .mask_y = 0,
+                .dst_x = 0,
+                // We store all captured screenshots in the same `pixmap` in a film
+                // strip layout stacked on top of each other. We only keep track of the
+                // N most recent screenshots (defined by max_screenshots_shown).
+                .dst_y = @as(i16, @intCast(current_screenshot_index)) * screenshot_capture_dimensions.height,
                 .width = @intCast(screenshot_capture_dimensions.width),
                 .height = @intCast(screenshot_capture_dimensions.height),
             });
             try common.send(sock, &msg);
         }
 
-        self.state.next_screenshot_index = @rem(next_screenshot_index + 1, max_screenshots_shown);
+        // Advance the screenshot index
+        self.state.next_interesting_screenshot_index = @rem(current_screenshot_index + 1, max_screenshots_shown);
     }
 
     /// Make a new X GetImage request to capture a screenshot of a specific region of
@@ -722,6 +799,7 @@ pub const RenderContext = struct {
     /// reply comes in.
     pub fn enqueueGetImageRequest(
         self: *@This(),
+        scratch_index: u32,
         /// The crop area from the screen that we requested
         bounding_box: BoundingClientRect(usize),
         /// Region type of the game window that was captured
@@ -760,6 +838,7 @@ pub const RenderContext = struct {
 
         // Keep track of the request so we can line it up when the reply comes in
         try self.get_image_request_queue.writeItem(.{
+            .scratch_index = scratch_index,
             .request_ts = std.time.milliTimestamp(),
             .bounding_box = bounding_box,
             .screenshot_region = screenshot_region,
@@ -775,7 +854,7 @@ pub const RenderContext = struct {
         self: *@This(),
         get_image_reply: *x.get_image.Reply,
         allocator: std.mem.Allocator,
-    ) !Screenshot(RGBImage) {
+    ) !struct { screenshot: Screenshot(RGBImage), request_info: GetImageRequestInfo } {
         const before_conversion_ts = std.time.milliTimestamp();
         const opt_request_info = self.get_image_request_queue.readItem();
         if (opt_request_info) |request_info| {
@@ -798,7 +877,10 @@ pub const RenderContext = struct {
             //     std.fmt.fmtDurationSigned((after_conversion_ts - before_conversion_ts) * std.time.ns_per_ms),
             // });
 
-            return screenshot;
+            return .{
+                .screenshot = screenshot,
+                .request_info = request_info,
+            };
         }
 
         return error.NoMatchingRequestForThisRepy;

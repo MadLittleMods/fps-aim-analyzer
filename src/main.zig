@@ -37,6 +37,32 @@ fn projectSrcPath() []const u8 {
     return file_source_path;
 }
 
+/// Capture a screenshot of the ammo counter tp analyze and the reticle at the same time.
+fn captureScreenshots(render_context: *render.RenderContext, state: *AppState) !void {
+    const scratch_ring_buffer_size = state.scratch_ring_buffer_size;
+    const current_scratch_index = state.next_scratch_index;
+
+    // Request a screenshot of the ammo counter
+    try render_context.enqueueGetImageRequest(
+        current_scratch_index,
+        state.ammo_counter_bounding_box,
+        state.ammo_counter_screenshot_region,
+        @intCast(state.root_screen_dimensions.width),
+        @intCast(state.root_screen_dimensions.height),
+        // We assume the game is being rendered 1:1 (100%), so the game
+        // resolution is the same as the image resolution
+        @intCast(state.root_screen_dimensions.width),
+        @intCast(state.root_screen_dimensions.height),
+    );
+    // Also capture a screenshot of the reticle at the same time
+    // so if we determine the ammo counter went down, we have
+    // the corresponding view of what you were shooting at.
+    try render_context.captureScreenshotToPixmap(current_scratch_index);
+
+    // Advance the scratch index
+    state.next_scratch_index = @rem(current_scratch_index + 1, scratch_ring_buffer_size);
+}
+
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -377,10 +403,12 @@ pub fn main() !u8 {
                     const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
 
                     // Convert the X image format to an `RGBImage` we can use in our vision code
-                    const screenshot = try render_context.processNextGetImageRequest(
+                    const processed_results = try render_context.processNextGetImageRequest(
                         get_image_reply,
                         allocator,
                     );
+                    const scratch_index = processed_results.request_info.scratch_index;
+                    const screenshot = processed_results.screenshot;
                     defer screenshot.image.deinit(allocator);
 
                     // try printLabeledImage("analyzing screenshot", screenshot.image, .kitty, allocator);
@@ -424,10 +452,12 @@ pub fn main() !u8 {
                         // Keep track of the ammo count
                         state.ammo_value = current_ammo_value;
 
-                        // If the ammo went down by 1 (meaning a bullet was shot), take
-                        // a screenshot
+                        // If the ammo went down by 1 (meaning a bullet was shot), copy
+                        // the screenshot from the scratchpad to our list of screenshots
+                        // of interest.
                         if (current_ammo_value < prev_ammo_value and (prev_ammo_value - current_ammo_value) == 1) {
-                            try render_context.captureScreenshotToPixmap();
+                            try render_context.copyScreenshotFromScratchpad(scratch_index);
+                            // Re-render the UI to show the new screenshot
                             try render_context.render();
                         }
 
@@ -441,17 +471,7 @@ pub fn main() !u8 {
                     // image reply function.
                     const current_ts = std.time.milliTimestamp();
                     if (current_ts - state.last_left_click_ts < INPUT_DELAY_MAX_MS) {
-                        // Request a screenshot of the ammo counter
-                        try render_context.enqueueGetImageRequest(
-                            state.ammo_counter_bounding_box,
-                            state.ammo_counter_screenshot_region,
-                            screen.pixel_width,
-                            screen.pixel_height,
-                            // We assume the game is being rendered 1:1 (100%), so the game
-                            // resolution is the same as the image resolution
-                            screen.pixel_width,
-                            screen.pixel_height,
-                        );
+                        try captureScreenshots(&render_context, &state);
                     }
                 },
                 .generic_extension_event => |msg| {
@@ -472,17 +492,7 @@ pub fn main() !u8 {
                                     // If there is not already a request in the queue, get the loop
                                     // started by requesting a screenshot of the ammo counter
                                     if (render_context.get_image_request_queue.readableLength() == 0) {
-                                        // Request a screenshot of the ammo counter
-                                        try render_context.enqueueGetImageRequest(
-                                            state.ammo_counter_bounding_box,
-                                            state.ammo_counter_screenshot_region,
-                                            screen.pixel_width,
-                                            screen.pixel_height,
-                                            // We assume the game is being rendered 1:1 (100%), so the game
-                                            // resolution is the same as the image resolution
-                                            screen.pixel_width,
-                                            screen.pixel_height,
-                                        );
+                                        try captureScreenshots(&render_context, &state);
                                     }
                                 }
                             },
