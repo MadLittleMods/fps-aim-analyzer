@@ -340,23 +340,6 @@ pub fn main() !u8 {
     };
 
     while (true) {
-        // Capture frames for 200ms after a left-click. We're trying to catch the ammo
-        // counter going down by 1.
-        const current_ts = std.time.milliTimestamp();
-        if (current_ts - state.last_left_click_ts < INPUT_DELAY_MAX_MS) {
-            // Request a screenshot of the ammo counter
-            try render_context.enqueueGetImageRequest(
-                state.ammo_counter_bounding_box,
-                state.ammo_counter_screenshot_region,
-                screen.pixel_width,
-                screen.pixel_height,
-                // We assume the game is being rendered 1:1 (100%), so the game
-                // resolution is the same as the image resolution
-                screen.pixel_width,
-                screen.pixel_height,
-            );
-        }
-
         {
             const receive_buffer = buffer.nextReadBuffer();
             if (receive_buffer.len == 0) {
@@ -451,6 +434,25 @@ pub fn main() !u8 {
                         // Draw debug gizmos again
                         try render_context.render();
                     }
+
+                    // Capture frames for 200ms (the max input delay we expect) after a
+                    // left-click. We only want to request another screenshot after the
+                    // last request finished processing so we do this check in this
+                    // image reply function.
+                    const current_ts = std.time.milliTimestamp();
+                    if (current_ts - state.last_left_click_ts < INPUT_DELAY_MAX_MS) {
+                        // Request a screenshot of the ammo counter
+                        try render_context.enqueueGetImageRequest(
+                            state.ammo_counter_bounding_box,
+                            state.ammo_counter_screenshot_region,
+                            screen.pixel_width,
+                            screen.pixel_height,
+                            // We assume the game is being rendered 1:1 (100%), so the game
+                            // resolution is the same as the image resolution
+                            screen.pixel_width,
+                            screen.pixel_height,
+                        );
+                    }
                 },
                 .generic_extension_event => |msg| {
                     if (msg.ext_opcode == extensions.input.opcode) {
@@ -466,6 +468,22 @@ pub fn main() !u8 {
                                     // whole bottom-right quadrant again for the ammo
                                     // counter as it may have moved.
                                     state.last_left_click_ts = std.time.milliTimestamp();
+
+                                    // If there is not already a request in the queue, get the loop
+                                    // started by requesting a screenshot of the ammo counter
+                                    if (render_context.get_image_request_queue.readableLength() == 0) {
+                                        // Request a screenshot of the ammo counter
+                                        try render_context.enqueueGetImageRequest(
+                                            state.ammo_counter_bounding_box,
+                                            state.ammo_counter_screenshot_region,
+                                            screen.pixel_width,
+                                            screen.pixel_height,
+                                            // We assume the game is being rendered 1:1 (100%), so the game
+                                            // resolution is the same as the image resolution
+                                            screen.pixel_width,
+                                            screen.pixel_height,
+                                        );
+                                    }
                                 }
                             },
                             // We did not register for these events so we should not see them

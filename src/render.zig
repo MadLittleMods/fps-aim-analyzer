@@ -793,7 +793,7 @@ pub const RenderContext = struct {
                 allocator,
             );
 
-            const after_conversion_ts = std.time.milliTimestamp();
+            // const after_conversion_ts = std.time.milliTimestamp();
             // std.log.debug("Conversion time {}", .{
             //     std.fmt.fmtDurationSigned((after_conversion_ts - before_conversion_ts) * std.time.ns_per_ms),
             // });
