@@ -1827,13 +1827,18 @@ pub fn futureAmmoHeuristicBoundingClientRect(ammo_counter_bounding_box: Bounding
     const HORIZONTAL_PADDING_LEFT = (NUM_PADDING_CHARACTERS * (CHARACTER_MAX_WIDTH + CHARACTER_MAX_SPACING));
 
     // The amount of vertical slop just to capture some surroundings around the characters
-    const VERTICAL_PADDING = @divTrunc(CHARACTER_DILATE_HEIGHT, 2);
+    const VERTICAL_PADDING = 4 * CHARACTER_DILATE_HEIGHT;
     const MIN_HEIGHT = CHARACTER_MIN_HEIGHT + (2 * VERTICAL_PADDING);
+
+    var center_offset_y: usize = 0;
+    if (MIN_HEIGHT > ammo_counter_bounding_box.height) {
+        center_offset_y = (MIN_HEIGHT - ammo_counter_bounding_box.height) / 2;
+    }
 
     return BoundingClientRect(usize){
         // The number is right-aligned so we want the strip_box to be right-aligned
         .x = ammo_counter_bounding_box.right() - STRIP_WIDTH + HORIZONTAL_PADDING_LEFT,
-        .y = ammo_counter_bounding_box.top(),
+        .y = ammo_counter_bounding_box.top() - center_offset_y,
         .width = STRIP_WIDTH,
         .height = @max(ammo_counter_bounding_box.height, MIN_HEIGHT),
     };
