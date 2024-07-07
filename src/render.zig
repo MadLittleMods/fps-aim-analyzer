@@ -609,10 +609,10 @@ pub const RenderContext = struct {
         );
 
         // Copy the screenshots to our window
-        for (0..max_screenshots_shown) |screen_shot_offset_usize| {
+        for (0..max_screenshots_shown) |screenshot_offset_usize| {
             const UnsignedInt = @TypeOf(max_screenshots_shown);
             const SignedInt = GetEncompassingSignedInt(@TypeOf(max_screenshots_shown));
-            const screen_shot_offset = @as(UnsignedInt, @intCast(screen_shot_offset_usize));
+            const screenshot_offset = @as(UnsignedInt, @intCast(screenshot_offset_usize));
 
             // We need a `SignedInt` during the calculation because we want to be able
             // to go negative and have `@mod(...)` wrap us back around within range.
@@ -620,9 +620,9 @@ pub const RenderContext = struct {
             // It's safe to cast from `SignedInt` back to `UnsignedInt` because the
             // `@mod(...)` guarantees that the result is no bigger than
             // `max_screenshots_shown` which is what `UnsignedInt` is derived from.
-            const screen_shot_index: UnsignedInt = @as(UnsignedInt, @intCast(
+            const screenshot_index: UnsignedInt = @as(UnsignedInt, @intCast(
                 @mod(
-                    @as(SignedInt, @intCast(next_interesting_screenshot_index)) - @as(SignedInt, @intCast(screen_shot_offset)) - 1,
+                    @as(SignedInt, @intCast(next_interesting_screenshot_index)) - @as(SignedInt, @intCast(screenshot_offset)) - 1,
                     max_screenshots_shown,
                 ),
             ));
@@ -634,11 +634,11 @@ pub const RenderContext = struct {
                 .mask_picture_id = 0,
                 .dst_picture_id = ids.picture_window,
                 .src_x = 0,
-                .src_y = @intCast(screen_shot_index * screenshot_capture_dimensions.height),
+                .src_y = @intCast(screenshot_index * screenshot_capture_dimensions.height),
                 .mask_x = 0,
                 .mask_y = 0,
                 .dst_x = padding,
-                .dst_y = @intCast((screen_shot_offset * (screenshot_capture_dimensions.height + padding)) + padding),
+                .dst_y = @intCast((screenshot_offset * (screenshot_capture_dimensions.height + padding)) + padding),
                 .width = @intCast(screenshot_capture_dimensions.width),
                 .height = @intCast(screenshot_capture_dimensions.height),
             });
