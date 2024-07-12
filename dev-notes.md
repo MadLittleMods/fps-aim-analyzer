@@ -121,12 +121,84 @@ default screen number:    0
 ```
 
 
-## Testing with multiple screens
+## Test with multiple X11 displays
+
+> As far as the X window system is concerned, a display is a logical entity to which
+> applications can connect and on which they can display windows, receive input, and do a
+> few other things. A display can have multiple monitors, or can be connected to a virtual
+> "monitor" that is not a physical device, for example a network connection for remote
+> displays.
+>
+> *-- [Gilles on StackOverflow](https://unix.stackexchange.com/questions/667482/understanding-the-output-of-xrandr-query/667523#667523)*
+
+Relevant tools:
+
+ - `Xvfb`: X virtual framebuffer
+    - Also `xvfb-run` to run a command in a virtual framebuffer (this will start and stop xvfb for you)
+    - `xvfb-run --server-num 99 --server-args "-ac -screen 0 1920x1080x24" firefox`: Run Firefox in
+      a virtual framebuffer with a 1920x1080 screen with 24-bit color depth.
+ - `Xephyr`: Nested X server that runs as an X application. It's basically a way to
+   create a new X11 screen that appears as a window on your desktop.
+    - `Xephyr :99 -screen 1920x1080x24`: Creates a new 1920x1080 screen with 24-bit
+      color depth. Then you can run `DISPLAY=:99 firefox` to run Firefox on that screen.
+    - `xdpyinfo -display :99` to see the display info.
+ - https://github.com/a-ba/squint/: `squint` is command that duplicates the output of a monitor into a X11 window.
+ - https://github.com/Xpra-org/xpra/: Has the ability to access existing desktop sessions via it's [shadowing feature](https://github.com/Xpra-org/xpra/blob/master/docs/Usage/Shadow.md).
+    - `xpra attach :99`: See an existing X11 session
+    - `xpra shadow :99`: start a shadow server (not necessary on the same machine since you can just `attach` to it directly) https://github.com/Xpra-org/xpra/issues/3320#issuecomment-955442713
+    - `xpra shadow ssh:DISPLAY_user@example.com:DISPLAY_number` https://wiki.archlinux.org/title/Xpra#Shadow_remote_desktop
+ - https://looking-glass.io/: This is used for VM's but might be useful to peak on things
+
+On Manjaro (Arch-based), you can install these with:
+```
+pamac install xorg-server-xvfb
+pamac install xorg-server-xephyr
+pamac install xpra
+```
+
+Examples:
+
+Using `Xephyr`:
+
+(run these commands in separate terminals or put them in the background with `&`)
+```sh
+# Create a new screen with Xephyr
+Xephyr :99 -screen 1920x1080x24
+
+# Start an application in the new screen
+DISPLAY=:99 firefox
+
+# See the existing screen
+xpra attach :99
+```
+
+Using `Xvfb`:
+
+```sh
+# Create a new screen with Xvfb
+Xvfb :99 -s -ac -screen 0 1920x1080x24
+# Start an application in the new screen
+DISPLAY=:99 firefox
+
+# Alternatively, you can use `xvfb-run` to do the same thing
+xvfb-run --server-num 99 --server-args "-ac -screen 0 1920x1080x24" firefox
+
+# Start the shadow server (unlike `Xephyr`, the shadow server seems to be necessary to
+# be able to connect successfully probably because it's not considered a
+# "desktop"/"seamless" xpra session)
+xpra shadow :99
+# See the existing screen
+xpra attach :99
+```
+
+## Testing with multiple monitors
 
 > [!WARNING]  
 > These steps don't actually seem to work to add another "screen" in terms of what the X
 > Window Server sees. But still seem like useful commands to keep around until I do
 > figure out how this all works.
+
+A display in X11 can be made up of multiple monitors.
 
 Add a virtual monitor ([*courtesy of this GitHub issue*](https://github.com/pavlobu/deskreen/issues/42#issue-792962894)).
 
@@ -177,59 +249,6 @@ xrandr --listmonitors
 Other resources:
 
  - https://www.youtube.com/watch?v=N9KxpPyJMJA
- - `Xvfb`: X virtual framebuffer
-    - Also `xvfb-run` to run a command in a virtual framebuffer (this will start and stop xvfb for you)
-    - `xvfb-run --server-num 99 --server-args "-ac -screen 0 1920x1080x24" firefox`: Run Firefox in
-      a virtual framebuffer with a 1920x1080 screen with 24-bit color depth.
- - `Xephyr`: Nested X server that runs as an X application. It's basically a way to
-   create a new X11 screen that appears as a window on your desktop.
-    - `Xephyr :99 -screen 1920x1080x24`: Creates a new 1920x1080 screen with 24-bit
-      color depth. Then you can run `DISPLAY=:99 firefox` to run Firefox on that screen.
-    - `xdpyinfo -display :99` to see the display info.
- - https://github.com/a-ba/squint/: `squint` is command that duplicates the output of a monitor into a X11 window.
- - https://github.com/Xpra-org/xpra/: Has the ability to access existing desktop sessions via it's [shadowing feature](https://github.com/Xpra-org/xpra/blob/master/docs/Usage/Shadow.md).
-    - `xpra attach :99`: See an existing X11 session
-    - `xpra shadow :99`: start a shadow server (not necessary on the same machine since you can just `attach` to it directly) https://github.com/Xpra-org/xpra/issues/3320#issuecomment-955442713
-    - `xpra shadow ssh:DISPLAY_user@example.com:DISPLAY_number` https://wiki.archlinux.org/title/Xpra#Shadow_remote_desktop
- - https://looking-glass.io/: This is used for VM's but might be useful to peak on things
-
-On Manjaro (Arch-based), you can install these with:
-```
-pamac install xorg-server-xvfb
-pamac install xorg-server-xephyr
-pamac install xpra
-```
-
-Examples:
-
-(run these commands in separate terminals or put them in the background with `&`)
-```sh
-# Create a new screen with Xephyr
-Xephyr :99 -screen 1920x1080x24
-
-# Start an application in the new screen
-DISPLAY=:99 firefox
-
-# See the existing screen
-xpra attach :99
-```
-
-```sh
-# Create a new screen with Xvfb
-Xvfb :99 -s -ac -screen 0 1920x1080x24
-# Start an application in the new screen
-DISPLAY=:99 firefox
-
-# Alternatively, you can use `xvfb-run` to do the same thing
-xvfb-run --server-num 99 --server-args "-ac -screen 0 1920x1080x24" firefox
-
-# Start the shadow server (unlike `Xephyr`, the shadow server seems to be necessary to
-# be able to connect successfully probably because it's not considered a
-# "desktop"/"seamless" xpra session)
-xpra shadow :99
-# See the existing screen
-xpra attach :99
-```
 
 
 ## Setup SSH X11 forwarding
