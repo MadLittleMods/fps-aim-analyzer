@@ -136,11 +136,11 @@ Relevant tools:
  - `Xvfb`: X virtual framebuffer
     - Also `xvfb-run` to run a command in a virtual framebuffer (this will start and stop xvfb for you)
     - `xvfb-run --server-num 99 --server-args "-ac -screen 0 1920x1080x24" firefox`: Run Firefox in
-      a virtual framebuffer with a 1920x1080 screen with 24-bit color depth.
+      a virtual framebuffer with a 1920x1080 display with 24-bit color depth.
  - `Xephyr`: Nested X server that runs as an X application. It's basically a way to
    create a new X11 screen that appears as a window on your desktop.
-    - `Xephyr :99 -screen 1920x1080x24`: Creates a new 1920x1080 screen with 24-bit
-      color depth. Then you can run `DISPLAY=:99 firefox` to run Firefox on that screen.
+    - `Xephyr :99 -screen 1920x1080x24`: Creates a new 1920x1080 display with 24-bit
+      color depth. Then you can run `DISPLAY=:99 firefox` to run Firefox on that display.
     - `xdpyinfo -display :99` to see the display info.
  - https://github.com/a-ba/squint/: `squint` is command that duplicates the output of a monitor into a X11 window.
  - https://github.com/Xpra-org/xpra/: Has the ability to access existing desktop sessions via it's [shadowing feature](https://github.com/Xpra-org/xpra/blob/master/docs/Usage/Shadow.md).
@@ -162,20 +162,20 @@ Using `Xephyr`:
 
 (run these commands in separate terminals or put them in the background with `&`)
 ```sh
-# Create a new screen with Xephyr
+# Create a new display with Xephyr
 Xephyr :99 -screen 1920x1080x24
 
-# Start an application in the new screen
+# Start an application in the new display
 DISPLAY=:99 firefox
 
-# See the existing screen
+# See the existing display
 xpra attach :99
 ```
 
 Using `Xvfb`:
 
 ```sh
-# Create a new screen with Xvfb
+# Create a new display with Xvfb
 Xvfb :99 -s -ac -screen 0 1920x1080x24
 # Start an application in the new screen
 DISPLAY=:99 firefox
@@ -187,16 +187,23 @@ xvfb-run --server-num 99 --server-args "-ac -screen 0 1920x1080x24" firefox
 # be able to connect successfully probably because it's not considered a
 # "desktop"/"seamless" xpra session)
 xpra shadow :99
-# See the existing screen
+# See the existing display
 xpra attach :99
 ```
 
-## Testing with multiple monitors
+Record the display with `ffmpeg`:
 
-> [!WARNING]  
-> These steps don't actually seem to work to add another "screen" in terms of what the X
-> Window Server sees. But still seem like useful commands to keep around until I do
-> figure out how this all works.
+```sh
+# Create a new display with Xvfb
+Xvfb :99 -s -ac -screen 0 1920x1080x24
+# Start an application in the new display
+DISPLAY=:99 firefox
+
+# Record the display with ffmpeg
+ffmpeg -f x11grab -video_size 1920x1080 -i ":99" out.webm
+```
+
+## Testing with multiple monitors
 
 A display in X11 can be made up of multiple monitors.
 
