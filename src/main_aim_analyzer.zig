@@ -1,17 +1,21 @@
 const std = @import("std");
 const x = @import("x");
 const common = @import("x11/x11_common.zig");
-const x11_extension_utils = @import("x11//x11_extension_utils.zig");
+const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
-const render_utils = @import("render_utils.zig");
-const AppState = @import("app_state.zig").AppState;
-const buffer_utils = @import("buffer_utils.zig");
-
-var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-const allocator = arena.allocator();
+const render = @import("aim_analyzer/render.zig");
+const AppState = @import("aim_analyzer/app_state.zig").AppState;
+const render_utils = @import("utils/render_utils.zig");
 
 pub fn main() !u8 {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer switch (gpa.deinit()) {
+        .ok => {},
+        .leak => std.log.err("GPA allocator: Memory leak detected", .{}),
+    };
+
     try x.wsaStartup();
     const conn = try common.connect(allocator);
     defer std.os.shutdown(conn.sock, .both) catch {};
@@ -31,7 +35,7 @@ pub fn main() !u8 {
         break :blk screen;
     };
 
-    const ids = render_utils.Ids.init(
+    const ids = render.Ids.init(
         screen.root,
         conn.setup.fixed().resource_id_base,
     );
@@ -135,7 +139,7 @@ pub fn main() !u8 {
         .input = input_extension,
     };
 
-    try render_utils.createResources(
+    try render.createResources(
         conn.sock,
         &buffer,
         &ids,
@@ -169,7 +173,7 @@ pub fn main() !u8 {
     }
     const font_dims: render_utils.FontDims = blk: {
         const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
-        try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+        try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.ServerMsg.QueryTextExtents = @ptrCast(msg_reply);
@@ -196,7 +200,7 @@ pub fn main() !u8 {
         try conn.send(&msg);
     }
 
-    var render_context = render_utils.RenderContext{
+    var render_context = render.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,
         .extensions = &extensions,
@@ -302,5 +306,5 @@ pub fn main() !u8 {
     }
 
     // Clean-up
-    try render_utils.cleanupResources(ids);
+    try render.cleanupResources(ids);
 }

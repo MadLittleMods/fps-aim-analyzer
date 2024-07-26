@@ -1,7 +1,6 @@
 const std = @import("std");
 const x = @import("x");
 const common = @import("./x11_common.zig");
-const buffer_utils = @import("../buffer_utils.zig");
 
 /// X server extension info.
 pub const ExtensionInfo = struct {
@@ -36,7 +35,7 @@ pub fn getExtensionInfo(
         try common.send(sock, &message_buffer);
     }
     const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
     const optional_render_extension = blk: {
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {

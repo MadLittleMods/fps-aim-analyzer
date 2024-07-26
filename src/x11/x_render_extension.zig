@@ -9,7 +9,6 @@ const std = @import("std");
 const x = @import("x");
 const common = @import("./x11_common.zig");
 const x11_extension_utils = @import("./x11_extension_utils.zig");
-const buffer_utils = @import("../buffer_utils.zig");
 
 /// Check to make sure we're using a compatible version of the X Render extension
 /// that supports all of the features we need.
@@ -34,7 +33,7 @@ pub fn ensureCompatibleVersionOfXRenderExtension(
         try common.send(sock, &message_buffer);
     }
     const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
     switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
         .reply => |msg_reply| {
             const msg: *x.render.query_version.Reply = @ptrCast(msg_reply);
