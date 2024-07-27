@@ -121,7 +121,36 @@ default screen number:    0
 ```
 
 
-## Test with multiple X11 displays
+### The `DISPLAY` environment variable
+
+XClient libraries use the DISPLAY environment variable to know how to connect to the XServer. It uses this format:
+
+```
+[PROTOCOL/]HOST:DISPLAYNUM[.SCREEN]
+```
+
+Examples:
+
+```
+# connect to localhost port 6000, display 0
+:0
+
+# connect to localhost port 6000, display 0,
+# screen 0
+:0.0
+# screen 1
+:0.1
+
+# connect to host "foo" port 6003, display 3
+foo:3
+
+# connect to host "foo" port 6007, display 7, screen 5
+foo:7.5
+```
+
+
+
+### Test with multiple X11 displays
 
 > As far as the X window system is concerned, a display is a logical entity to which
 > applications can connect and on which they can display windows, receive input, and do a

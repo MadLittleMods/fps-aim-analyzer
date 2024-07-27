@@ -4,9 +4,9 @@ const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
+const render_utils = @import("utils/render_utils.zig");
 const render = @import("aim_analyzer/render.zig");
 const AppState = @import("aim_analyzer/app_state.zig").AppState;
-const render_utils = @import("utils/render_utils.zig");
 
 pub fn main() !u8 {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

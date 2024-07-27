@@ -1,4 +1,5 @@
 const std = @import("std");
+const MakeStruct = @import("../utils/make_struct.zig").MakeStruct;
 const x = @import("x");
 const common = @import("./x11_common.zig");
 
@@ -14,10 +15,25 @@ pub const ExtensionInfo = struct {
 };
 
 /// A map of X server extension names to their info.
-pub const Extensions = struct {
-    render: ExtensionInfo,
-    input: ExtensionInfo,
+// pub const Extensions = struct {
+//     render: ExtensionInfo,
+//     input: ExtensionInfo,
+// };
+
+const AvailableExtensions = enum {
+    render,
+    input,
 };
+
+/// A map of X server extension names to their info.
+pub fn Extensions(comptime extensions: []const AvailableExtensions) type {
+    var fields: [extensions.len]std.meta.Tuple(&.{ []const u8, type }) = undefined;
+    inline for (extensions, 0..) |ext, index| {
+        fields[index] = .{ @tagName(ext), ExtensionInfo };
+    }
+
+    return MakeStruct(fields);
+}
 
 /// Determines whether the extension is available on the server.
 pub fn getExtensionInfo(
