@@ -56,8 +56,6 @@ pub fn main() !u8 {
     var state = AppState{
         .root_screen_dimensions = root_screen_dimensions,
         .num_screenshots = starting_ammo_number - ending_ammo_number + 1,
-        .window_depth = 32,
-        .pixmap_depth = 24,
     };
 
     const pixmap_formats = try common.getPixmapFormatsFromConnectionSetup(conn.setup);
@@ -147,7 +145,11 @@ pub fn main() !u8 {
         .state = &state,
     };
 
-    const rgb_image = try RGBImage.loadImageFromFilePath("screenshot-data/halo-infinite/1080/default/36 - bazaar assault rifle.png", allocator);
+    const rgb_image = try RGBImage.loadImageFromFilePath(
+        // "screenshot-data/halo-infinite/1080/default/36 - bazaar assault rifle.png",
+        "/home/eric/Pictures/screenshots/2024-07-27_02-50.png",
+        allocator,
+    );
     defer rgb_image.deinit(allocator);
     try render_context.copyImageToPixmapAtIndex(rgb_image, 0, allocator);
 

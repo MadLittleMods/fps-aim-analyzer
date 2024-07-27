@@ -96,7 +96,7 @@ fn copyRgbImageToPixmap(
 
         var col: usize = 0;
         while (col < rgb_image.width) : (col += 1) {
-            const current_pixel_index = (col * rgb_image.width) + row;
+            const current_pixel_index = (row * rgb_image.width) + col;
             const current_pixel = rgb_image.pixels[current_pixel_index];
 
             const rgb24_color = current_pixel.toHexNumber();
@@ -465,7 +465,6 @@ pub const RenderContext = struct {
         const state = self.state.*;
         const pixmap_format = self.pixmap_format;
 
-        const root_screen_dimensions = state.root_screen_dimensions;
         const pixmap_depth = state.pixmap_depth;
 
         {
@@ -482,10 +481,11 @@ pub const RenderContext = struct {
                 .format = .z_pixmap,
                 .drawable_id = ids.pixmap,
                 .gc_id = ids.fg_gc,
-                .width = @intCast(root_screen_dimensions.width),
-                .height = @intCast(root_screen_dimensions.height),
+                .width = @intCast(rgb_image.width),
+                .height = @intCast(rgb_image.height),
                 .x = 0,
-                .y = @intCast(pixmap_index * root_screen_dimensions.height),
+                .y = @intCast(pixmap_index * rgb_image.height),
+                // "The left-pad must be zero for ZPixmap format"
                 .left_pad = 0,
                 .depth = pixmap_depth,
             });
