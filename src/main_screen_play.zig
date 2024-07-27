@@ -5,6 +5,8 @@ const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
 const render_utils = @import("utils/render_utils.zig");
+const image_conversion = @import("vision/image_conversion.zig");
+const RGBImage = image_conversion.RGBImage;
 const render = @import("screen_play/render.zig");
 const AppState = @import("screen_play/app_state.zig").AppState;
 
@@ -21,38 +23,56 @@ pub fn main() !u8 {
     try x.wsaStartup();
     const conn = try common.connect(allocator);
     defer std.os.shutdown(conn.sock, .both) catch {};
-
-    const screen = blk: {
-        const fixed = conn.setup.fixed();
-        inline for (@typeInfo(@TypeOf(fixed.*)).Struct.fields) |field| {
-            std.log.debug("{s}: {any}", .{ field.name, @field(fixed, field.name) });
+    defer conn.setup.deinit(allocator);
+    const conn_setup_fixed_fields = conn.setup.fixed();
+    // Print out some info about the X server we connected to
+    {
+        inline for (@typeInfo(@TypeOf(conn_setup_fixed_fields.*)).Struct.fields) |field| {
+            std.log.debug("{s}: {any}", .{ field.name, @field(conn_setup_fixed_fields, field.name) });
         }
-        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(fixed.vendor_len)});
-        const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
-        const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
-        var screen = conn.setup.getFirstScreenPtr(format_list_limit);
-        inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
-            std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
-        }
-        break :blk screen;
-    };
+        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
+    }
 
+    const screen = common.getFirstScreenFromConnectionSetup(conn.setup);
+    inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
+        std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
+    }
+
+    std.log.info("root window ID {0} 0x{0x}", .{screen.root});
     const ids = render.Ids.init(
         screen.root,
-        conn.setup.fixed().resource_id_base,
+        conn_setup_fixed_fields.resource_id_base,
     );
-
-    const depth = 32;
 
     const root_screen_dimensions = render_utils.Dimensions{
         .width = @intCast(screen.pixel_width),
         .height = @intCast(screen.pixel_height),
     };
 
+    // Range is inclusive
+    const starting_ammo_number = 36;
+    const ending_ammo_number = 26;
+
     var state = AppState{
         .root_screen_dimensions = root_screen_dimensions,
-        // TODO
-        .num_screenshots = 1,
+        .num_screenshots = starting_ammo_number - ending_ammo_number + 1,
+        .window_depth = 32,
+        .pixmap_depth = 24,
+    };
+
+    const pixmap_formats = try common.getPixmapFormatsFromConnectionSetup(conn.setup);
+    const pixmap_format = try common.findMatchingPixmapFormatForDepth(
+        pixmap_formats,
+        state.pixmap_depth,
+    );
+
+    const image_byte_order: std.builtin.Endian = switch (conn_setup_fixed_fields.image_byte_order) {
+        .lsb_first => .Little,
+        .msb_first => .Big,
+        else => |order| {
+            std.log.err("unknown image-byte-order {}", .{order});
+            return 1;
+        },
     };
 
     // Create a big buffer that we can use to read messages and replies from the X server.
@@ -106,7 +126,6 @@ pub fn main() !u8 {
         &ids,
         screen,
         &extensions,
-        depth,
         &state,
     );
 
@@ -123,8 +142,14 @@ pub fn main() !u8 {
         .sock = &conn.sock,
         .ids = &ids,
         .extensions = &extensions,
+        .image_byte_order = image_byte_order,
+        .pixmap_format = pixmap_format,
         .state = &state,
     };
+
+    const rgb_image = try RGBImage.loadImageFromFilePath("screenshot-data/halo-infinite/1080/default/36 - bazaar assault rifle.png", allocator);
+    defer rgb_image.deinit(allocator);
+    try render_context.copyImageToPixmapAtIndex(rgb_image, 0, allocator);
 
     while (true) {
         {

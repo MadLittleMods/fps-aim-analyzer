@@ -241,3 +241,20 @@ pub fn getPixmapFormatsFromConnectionSetup(conn_setup: x.ConnectSetup) ![]const 
 
     return pixmap_formats;
 }
+
+/// Returns the number of bytes required to store the image data in a PutImage request.
+pub fn getPutImageDataLenBytes(
+    width: usize,
+    height: usize,
+    format: x.Format,
+) usize {
+    const bytes_per_pixel = format.bits_per_pixel / 8;
+    const scanline_len = std.mem.alignForward(
+        u16,
+        @as(u16, @intCast(bytes_per_pixel * width)),
+        format.scanline_pad / 8,
+    );
+    const data_len_bytes = height * scanline_len;
+
+    return data_len_bytes;
+}

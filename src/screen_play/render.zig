@@ -4,6 +4,8 @@ const common = @import("../x11/x11_common.zig");
 const x11_extension_utils = @import("../x11/x11_extension_utils.zig");
 const AppState = @import("app_state.zig").AppState;
 const render_utils = @import("../utils/render_utils.zig");
+const image_conversion = @import("../vision/image_conversion.zig");
+const RGBImage = image_conversion.RGBImage;
 
 /// Given an unsigned integer type, returns a signed integer type that can hold the
 /// entire positive range of the unsigned integer type.
@@ -74,6 +76,57 @@ pub const Ids = struct {
     }
 };
 
+/// Copy the `rgb_image` data to the pixmap `data_buffer`.
+fn copyRgbImageToPixmap(
+    rgb_image: RGBImage,
+    x_image_format: x.Format,
+    image_byte_order: std.builtin.Endian,
+    data_buffer: []u8,
+) void {
+    const bytes_per_pixel = x_image_format.bits_per_pixel / 8;
+    const scanline_len = std.mem.alignForward(
+        u16,
+        @as(u16, @intCast(bytes_per_pixel * rgb_image.width)),
+        x_image_format.scanline_pad / 8,
+    );
+
+    var row: usize = 0;
+    while (row < rgb_image.height) : (row += 1) {
+        var data_offset: usize = row * scanline_len;
+
+        var col: usize = 0;
+        while (col < rgb_image.width) : (col += 1) {
+            const current_pixel_index = (col * rgb_image.width) + row;
+            const current_pixel = rgb_image.pixels[current_pixel_index];
+
+            const rgb24_color = current_pixel.toHexNumber();
+
+            switch (x_image_format.depth) {
+                16 => std.mem.writeInt(
+                    u16,
+                    data_buffer[data_offset..][0..2],
+                    x.rgb24To16(rgb24_color),
+                    image_byte_order,
+                ),
+                24 => std.mem.writeInt(
+                    u24,
+                    data_buffer[data_offset..][0..3],
+                    rgb24_color,
+                    image_byte_order,
+                ),
+                32 => std.mem.writeInt(
+                    u32,
+                    data_buffer[data_offset..][0..4],
+                    rgb24_color,
+                    image_byte_order,
+                ),
+                else => std.debug.panic("TODO: implement image depth {}", .{x_image_format.depth}),
+            }
+            data_offset += (x_image_format.bits_per_pixel / 8);
+        }
+    }
+}
+
 /// Bootstraps all of the X resources we will need use when rendering the UI.
 pub fn createResources(
     sock: std.os.socket_t,
@@ -81,13 +134,14 @@ pub fn createResources(
     ids: *const Ids,
     screen: *align(4) x.Screen,
     extensions: *const x11_extension_utils.Extensions(&.{.render}),
-    depth: u8,
     state: *const AppState,
 ) !void {
     const reader = common.SocketReader{ .context = sock };
     const buffer_limit = buffer.half_len;
 
     const root_screen_dimensions = state.root_screen_dimensions;
+    const window_depth = state.window_depth;
+    const pixmap_depth = state.pixmap_depth;
     const num_screenshots = state.num_screenshots;
 
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -95,7 +149,7 @@ pub fn createResources(
     const allocator = arena_allocator.allocator();
     // We need to find a visual type that matches the depth of our window that we want to create.
     const matching_visual_type = try screen.findMatchingVisualType(
-        depth,
+        window_depth,
         .true_color,
         allocator,
     );
@@ -124,7 +178,7 @@ pub fn createResources(
             // Color depth:
             // - 24 for RGB
             // - 32 for ARGB
-            .depth = depth,
+            .depth = window_depth,
             // Place it in the top-right corner of the screen
             .x = 0,
             .y = 0,
@@ -210,9 +264,9 @@ pub fn createResources(
         x.create_pixmap.serialize(&message_buffer, .{
             .id = ids.pixmap,
             .drawable_id = ids.window,
-            .depth = depth,
+            .depth = pixmap_depth,
             .width = @intCast(root_screen_dimensions.width),
-            .height = @intCast(num_screenshots * root_screen_dimensions.width),
+            .height = @intCast(num_screenshots * root_screen_dimensions.height),
         });
         try common.send(sock, &message_buffer);
     }
@@ -255,7 +309,15 @@ pub fn createResources(
         }
     };
     const picture_formats_data = optional_picture_formats_data orelse @panic("Matching picture formats not found");
-    const matching_picture_format = switch (depth) {
+    const matching_picture_format_for_window = switch (window_depth) {
+        24 => picture_formats_data.matching_picture_format_24,
+        32 => picture_formats_data.matching_picture_format_32,
+        else => |captured_depth| {
+            std.log.err("Matching picture format not found for depth {}", .{captured_depth});
+            @panic("Matching picture format not found for depth");
+        },
+    };
+    const matching_picture_format_for_pixmap = switch (pixmap_depth) {
         24 => picture_formats_data.matching_picture_format_24,
         32 => picture_formats_data.matching_picture_format_32,
         else => |captured_depth| {
@@ -289,7 +351,7 @@ pub fn createResources(
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
             .picture_id = ids.picture_window,
             .drawable_id = ids.window,
-            .format_id = matching_picture_format.picture_format_id,
+            .format_id = matching_picture_format_for_window.picture_format_id,
             .options = .{},
         });
         try common.send(sock, message_buffer[0..len]);
@@ -301,7 +363,7 @@ pub fn createResources(
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
             .picture_id = ids.picture_pixmap,
             .drawable_id = ids.pixmap,
-            .format_id = matching_picture_format.picture_format_id,
+            .format_id = matching_picture_format_for_pixmap.picture_format_id,
             .options = .{},
         });
         try common.send(sock, message_buffer[0..len]);
@@ -336,6 +398,8 @@ pub const RenderContext = struct {
     sock: *const std.os.socket_t,
     ids: *const Ids,
     extensions: *const x11_extension_utils.Extensions(&.{.render}),
+    image_byte_order: std.builtin.Endian,
+    pixmap_format: x.Format,
     state: *AppState,
 
     /// Renders the UI to our window.
@@ -393,54 +457,39 @@ pub const RenderContext = struct {
         }
     }
 
-    /// Copy an image/screenshot and store it in our pixmap on the X server to use later.
-    pub fn copyImageToPixmap(self: *@This()) !void {
+    /// Store an image/screenshot on our pixmap on the X server to use later.
+    pub fn copyImageToPixmapAtIndex(self: *@This(), rgb_image: RGBImage, pixmap_index: u8, allocator: std.mem.Allocator) !void {
         const sock = self.sock.*;
         const ids = self.ids.*;
-        const extensions = self.extensions.*;
+        // const extensions = self.extensions.*;
         const state = self.state.*;
+        const pixmap_format = self.pixmap_format;
 
         const root_screen_dimensions = state.root_screen_dimensions;
-        const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
-        const max_screenshots_shown = state.max_screenshots_shown;
-        const next_screenshot_index = state.next_screenshot_index;
+        const pixmap_depth = state.pixmap_depth;
 
-        const capture_x = @divFloor(root_screen_dimensions.width, 2) - @divFloor(screenshot_capture_dimensions.width, 2);
-        const capture_y = @divFloor(root_screen_dimensions.height, 2) - @divFloor(screenshot_capture_dimensions.height, 2);
-
-        std.log.debug("captureScreenshotToPixmap index={} from x={}, y={}, width={}, height={}", .{
-            next_screenshot_index,
-            capture_x,
-            capture_y,
-            screenshot_capture_dimensions.width,
-            screenshot_capture_dimensions.height,
-        });
         {
-            // We use the `x.render.composite` request to copy the root window into our
-            // pixmap instead of `x.copy_area` because that requires the depths to match and
-            // we're using a 32-bit depth on our window and trying to copy from the 24-bit
-            // depth root window.
-            var msg: [x.render.composite.len]u8 = undefined;
-            x.render.composite.serialize(&msg, extensions.render.opcode, .{
-                .picture_operation = .over,
-                .src_picture_id = ids.picture_root,
-                .mask_picture_id = 0,
-                .dst_picture_id = ids.picture_pixmap,
-                .src_x = capture_x,
-                .src_y = capture_y,
-                .mask_x = 0,
-                .mask_y = 0,
-                .dst_x = 0,
-                // We store all captured screenshots in the same `pixmap` in a film
-                // strip layout stacked on top of each other. We only keep track of the
-                // N most recent screenshots (defined by max_screenshots_shown).
-                .dst_y = next_screenshot_index * screenshot_capture_dimensions.height,
-                .width = @intCast(screenshot_capture_dimensions.width),
-                .height = @intCast(screenshot_capture_dimensions.height),
+            const data_len = common.getPutImageDataLenBytes(rgb_image.width, rgb_image.height, self.pixmap_format);
+            var put_image_msg = try allocator.alloc(u8, x.put_image.getLen(@intCast(data_len)));
+            defer allocator.free(put_image_msg);
+            copyRgbImageToPixmap(
+                rgb_image,
+                pixmap_format,
+                self.image_byte_order,
+                put_image_msg[x.put_image.data_offset..],
+            );
+            x.put_image.serializeNoDataCopy(put_image_msg.ptr, @intCast(data_len), .{
+                .format = .z_pixmap,
+                .drawable_id = ids.pixmap,
+                .gc_id = ids.fg_gc,
+                .width = @intCast(root_screen_dimensions.width),
+                .height = @intCast(root_screen_dimensions.height),
+                .x = 0,
+                .y = @intCast(pixmap_index * root_screen_dimensions.height),
+                .left_pad = 0,
+                .depth = pixmap_depth,
             });
-            try common.send(sock, &msg);
+            try common.send(sock, put_image_msg);
         }
-
-        self.state.next_screenshot_index = @rem(next_screenshot_index + 1, max_screenshots_shown);
     }
 };
