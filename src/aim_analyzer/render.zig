@@ -81,7 +81,7 @@ pub fn createResources(
     buffer: *x.ContiguousReadBuffer,
     ids: *const Ids,
     screen: *align(4) x.Screen,
-    extensions: *const x11_extension_utils.Extensions,
+    extensions: *const x11_extension_utils.Extensions(&.{ .render, .input }),
     depth: u8,
     state: *const AppState,
 ) !void {
@@ -339,7 +339,7 @@ pub fn cleanupResources(
 pub const RenderContext = struct {
     sock: *const std.os.socket_t,
     ids: *const Ids,
-    extensions: *const x11_extension_utils.Extensions,
+    extensions: *const x11_extension_utils.Extensions(&.{ .render, .input }),
     font_dims: *const FontDims,
     state: *AppState,
 

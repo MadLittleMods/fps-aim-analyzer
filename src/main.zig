@@ -134,7 +134,7 @@ pub fn main() !u8 {
     );
 
     // Assemble a map of X extension info
-    const extensions = x11_extension_utils.Extensions{
+    const extensions = x11_extension_utils.Extensions(&.{ .render, .input }){
         .render = render_extension,
         .input = input_extension,
     };
