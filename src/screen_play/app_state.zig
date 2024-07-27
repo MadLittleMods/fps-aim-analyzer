@@ -6,8 +6,7 @@ pub const AppState = struct {
     /// The pixel dimensions of the screen/monitor
     root_screen_dimensions: render_utils.Dimensions,
     window_depth: u8 = 32,
-    // TODO: We should be able to get this to 24
-    pixmap_depth: u8 = 32,
+    pixmap_depth: u8 = 24,
 
     /// The total number of screenshots we show
     num_screenshots: u8,

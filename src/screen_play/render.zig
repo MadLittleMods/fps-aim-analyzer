@@ -36,13 +36,16 @@ pub const Ids = struct {
 
     /// The drawable ID of our window
     window: u32 = 0,
+    /// The drawable ID of the pixmap that we store screenshots in
+    pixmap: u32 = 0,
+
     colormap: u32 = 0,
     /// Background graphics context. Defines the
     bg_gc: u32 = 0,
     /// Foreground graphics context
     fg_gc: u32 = 0,
-    /// The drawable ID of the pixmap that we store screenshots in
-    pixmap: u32 = 0,
+    /// Graphics context to use on our pixmap
+    pixmap_gc: u32 = 0,
     // We need to create a "picture" version of every drawable for use with the X Render
     // extension.
     picture_root: u32 = 0,
@@ -117,6 +120,7 @@ fn copyRgbImageToPixmap(
                 32 => {
                     // Shift the alpha component all the way up to the top
                     const alpha = 0xff;
+                    // 0x000000ff -> 0xff000000
                     const alpha_shifted: u32 = alpha << 24;
 
                     std.mem.writeInt(
@@ -223,6 +227,19 @@ pub fn createResources(
         try common.send(sock, message_buffer[0..len]);
     }
 
+    // Create a pixmap drawable to capture the screenshot onto
+    {
+        var message_buffer: [x.create_pixmap.len]u8 = undefined;
+        x.create_pixmap.serialize(&message_buffer, .{
+            .id = ids.pixmap,
+            .drawable_id = ids.window,
+            .depth = pixmap_depth,
+            .width = @intCast(root_screen_dimensions.width),
+            .height = @intCast(num_screenshots * root_screen_dimensions.height),
+        });
+        try common.send(sock, &message_buffer);
+    }
+
     {
         const color_black: u32 = 0xff000000;
         const color_blue: u32 = 0xff0000ff;
@@ -263,18 +280,25 @@ pub fn createResources(
         });
         try common.send(sock, message_buffer[0..len]);
     }
-
-    // Create a pixmap drawable to capture the screenshot onto
     {
-        var message_buffer: [x.create_pixmap.len]u8 = undefined;
-        x.create_pixmap.serialize(&message_buffer, .{
-            .id = ids.pixmap,
-            .drawable_id = ids.window,
-            .depth = pixmap_depth,
-            .width = @intCast(root_screen_dimensions.width),
-            .height = @intCast(num_screenshots * root_screen_dimensions.height),
+        const color_black: u32 = 0xff000000;
+        const color_purple: u32 = 0xffff00ff;
+
+        std.log.info("pixmap_graphics_context_id {0} 0x{0x}", .{ids.pixmap_gc});
+        var message_buffer: [x.create_gc.max_len]u8 = undefined;
+        const len = x.create_gc.serialize(&message_buffer, .{
+            .gc_id = ids.pixmap_gc,
+            .drawable_id = ids.pixmap,
+        }, .{
+            .background = color_black,
+            .foreground = color_purple,
+            // This option will prevent `NoExposure` events when we send `CopyArea`.
+            // We're no longer using `CopyArea` in favor of X Render `Composite` though
+            // so this isn't of much use. Still seems applicable to keep around in the
+            // spirit of what we want to do.
+            .graphics_exposures = false,
         });
-        try common.send(sock, &message_buffer);
+        try common.send(sock, message_buffer[0..len]);
     }
 
     // Find some compatible picture formats for use with the X Render extension. We want
@@ -415,32 +439,31 @@ pub const RenderContext = struct {
         const extensions = self.extensions.*;
         const state = self.state.*;
 
-        const window_id = ids.window;
         const root_screen_dimensions = state.root_screen_dimensions;
         const screenshot_index = state.screenshot_index;
 
-        // Draw a big blue square in the middle of the window
-        {
-            var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
-            x.poly_fill_rectangle.serialize(&msg, .{
-                .drawable_id = window_id,
-                .gc_id = ids.bg_gc,
-            }, &[_]x.Rectangle{
-                .{ .x = 100, .y = 100, .width = 200, .height = 200 },
-            });
-            try common.send(sock, &msg);
-        }
-        // Make a cut-out in the middle of the blue square
-        {
-            var msg: [x.clear_area.len]u8 = undefined;
-            x.clear_area.serialize(&msg, false, window_id, .{
-                .x = 150,
-                .y = 150,
-                .width = 100,
-                .height = 100,
-            });
-            try common.send(sock, &msg);
-        }
+        // // Draw a big blue square in the middle of the window
+        // {
+        //     var msg: [x.poly_fill_rectangle.getLen(1)]u8 = undefined;
+        //     x.poly_fill_rectangle.serialize(&msg, .{
+        //         .drawable_id = ids.window,
+        //         .gc_id = ids.bg_gc,
+        //     }, &[_]x.Rectangle{
+        //         .{ .x = 100, .y = 100, .width = 200, .height = 200 },
+        //     });
+        //     try common.send(sock, &msg);
+        // }
+        // // Make a cut-out in the middle of the blue square
+        // {
+        //     var msg: [x.clear_area.len]u8 = undefined;
+        //     x.clear_area.serialize(&msg, false, ids.window, .{
+        //         .x = 150,
+        //         .y = 150,
+        //         .width = 100,
+        //         .height = 100,
+        //     });
+        //     try common.send(sock, &msg);
+        // }
 
         // Copy the screenshot to our window
         {
@@ -486,7 +509,7 @@ pub const RenderContext = struct {
             x.put_image.serializeNoDataCopy(put_image_msg.ptr, @intCast(data_len), .{
                 .format = .z_pixmap,
                 .drawable_id = ids.pixmap,
-                .gc_id = ids.fg_gc,
+                .gc_id = ids.pixmap_gc,
                 .width = @intCast(rgb_image.width),
                 .height = @intCast(rgb_image.height),
                 .x = 0,
