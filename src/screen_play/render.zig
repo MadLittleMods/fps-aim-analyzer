@@ -117,7 +117,7 @@ fn copyRgbImageToPixmap(
                 32 => {
                     // Shift the alpha component all the way up to the top
                     const alpha = 0xff;
-                    const alpha_shifted = @as(u32, @as(u32, alpha) << 24);
+                    const alpha_shifted: u32 = alpha << 24;
 
                     std.mem.writeInt(
                         u32,
