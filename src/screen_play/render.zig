@@ -114,12 +114,18 @@ fn copyRgbImageToPixmap(
                     rgb24_color,
                     image_byte_order,
                 ),
-                32 => std.mem.writeInt(
-                    u32,
-                    data_buffer[data_offset..][0..4],
-                    rgb24_color,
-                    image_byte_order,
-                ),
+                32 => {
+                    // Shift the alpha component all the way up to the top
+                    const alpha = 0xff;
+                    const alpha_shifted = @as(u32, @as(u32, alpha) << 24);
+
+                    std.mem.writeInt(
+                        u32,
+                        data_buffer[data_offset..][0..4],
+                        alpha_shifted | rgb24_color,
+                        image_byte_order,
+                    );
+                },
                 else => std.debug.panic("TODO: implement image depth {}", .{x_image_format.depth}),
             }
             data_offset += (x_image_format.bits_per_pixel / 8);
