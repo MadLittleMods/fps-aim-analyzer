@@ -145,14 +145,42 @@ pub fn main() !u8 {
         .state = &state,
     };
 
-    const rgb_image = try RGBImage.loadImageFromFilePath(
-        "screenshot-data/halo-infinite/1080/default/36 - bazaar assault rifle.png",
-        allocator,
-    );
-    defer rgb_image.deinit(allocator);
-    try render_context.copyImageToPixmapAtIndex(rgb_image, 0, allocator);
+    // Copy our screenshots to the pixmap on the x11 server so they're ready to be used
+    // on the main window
+    var ammo_number: u32 = starting_ammo_number;
+    var pixmap_index: u8 = 0;
+    while (ammo_number >= ending_ammo_number) : ({
+        ammo_number -= 1;
+        pixmap_index += 1;
+    }) {
+        const screenshot_file_path = try std.fmt.allocPrint(
+            allocator,
+            "screenshot-data/halo-infinite/1080/default/{d} - bazaar assault rifle.png",
+            .{ammo_number},
+        );
+        const rgb_image = try RGBImage.loadImageFromFilePath(
+            screenshot_file_path,
+            allocator,
+        );
+        defer rgb_image.deinit(allocator);
+        try render_context.copyImageToPixmapAtIndex(rgb_image, pixmap_index, allocator);
+    }
+
+    const start_time_ts = std.time.milliTimestamp();
 
     while (true) {
+        const current_ts = std.time.milliTimestamp();
+        const elapsed_ms = current_ts - start_time_ts;
+        const screenshot_index_before = state.screenshot_index;
+        state.screenshot_index = @intCast(@rem(@divFloor(elapsed_ms, 1000), state.num_screenshots));
+        std.log.info("Showing screenshot {}/{}", .{
+            state.screenshot_index,
+            state.num_screenshots,
+        });
+        if (screenshot_index_before != state.screenshot_index) {
+            try render_context.render();
+        }
+
         {
             const receive_buffer = buffer.nextReadBuffer();
             if (receive_buffer.len == 0) {

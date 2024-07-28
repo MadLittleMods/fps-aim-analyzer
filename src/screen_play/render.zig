@@ -474,7 +474,7 @@ pub const RenderContext = struct {
                 .mask_picture_id = 0,
                 .dst_picture_id = ids.picture_window,
                 .src_x = 0,
-                .src_y = @intCast(screenshot_index * root_screen_dimensions.height),
+                .src_y = @as(i16, screenshot_index) * root_screen_dimensions.height,
                 .mask_x = 0,
                 .mask_y = 0,
                 .dst_x = 0,
@@ -555,7 +555,7 @@ pub const RenderContext = struct {
                         .width = @intCast(rgb_image.width),
                         .height = @intCast(actual_height),
                         .x = 0,
-                        .y = @intCast(start_pixel_row),
+                        .y = @intCast((pixmap_index * rgb_image.height) + start_pixel_row),
                         // "The left-pad must be zero for ZPixmap format"
                         .left_pad = 0,
                         .depth = pixmap_depth,
