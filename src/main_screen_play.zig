@@ -146,8 +146,7 @@ pub fn main() !u8 {
     };
 
     const rgb_image = try RGBImage.loadImageFromFilePath(
-        // "screenshot-data/halo-infinite/1080/default/36 - bazaar assault rifle.png",
-        "/home/eric/Pictures/screenshots/2024-07-27_02-50.png",
+        "screenshot-data/halo-infinite/1080/default/36 - bazaar assault rifle.png",
         allocator,
     );
     defer rgb_image.deinit(allocator);

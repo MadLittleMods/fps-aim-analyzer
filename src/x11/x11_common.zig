@@ -3,6 +3,11 @@ const std = @import("std");
 const x = @import("x");
 const common = @This();
 
+/// The maximum length of an x11 request we can send to the server in bytes. To send
+/// bigger requests, we either need to split them up or support the Big Requests
+/// Extension.
+pub const MAX_REQUEST_LENGTH_BYTES = 262140;
+
 pub const SocketReader = std.io.Reader(std.os.socket_t, std.os.RecvFromError, readSocket);
 
 pub fn send(sock: std.os.socket_t, data: []const u8) !void {

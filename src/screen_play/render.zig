@@ -497,28 +497,94 @@ pub const RenderContext = struct {
         const pixmap_depth = state.pixmap_depth;
 
         {
-            const data_len = common.getPutImageDataLenBytes(rgb_image.width, rgb_image.height, self.pixmap_format);
-            var put_image_msg = try allocator.alloc(u8, x.put_image.getLen(@intCast(data_len)));
-            defer allocator.free(put_image_msg);
-            copyRgbImageToPixmap(
-                rgb_image,
-                pixmap_format,
-                self.image_byte_order,
-                put_image_msg[x.put_image.data_offset..],
+            const whole_data_len = common.getPutImageDataLenBytes(
+                rgb_image.width,
+                rgb_image.height,
+                self.pixmap_format,
             );
-            x.put_image.serializeNoDataCopy(put_image_msg.ptr, @intCast(data_len), .{
-                .format = .z_pixmap,
-                .drawable_id = ids.pixmap,
-                .gc_id = ids.pixmap_gc,
-                .width = @intCast(rgb_image.width),
-                .height = @intCast(rgb_image.height),
-                .x = 0,
-                .y = @intCast(pixmap_index * rgb_image.height),
-                // "The left-pad must be zero for ZPixmap format"
-                .left_pad = 0,
-                .depth = pixmap_depth,
-            });
-            try common.send(sock, put_image_msg);
+            const whole_request_len = x.put_image.data_offset + std.mem.alignForward(usize, whole_data_len, 4);
+            // If the request is too big, we need to split it up into multiple requests
+            if (whole_request_len > common.MAX_REQUEST_LENGTH_BYTES) {
+                // The minimum number of requests we could send if we could simply split
+                // the data into chunks of `MAX_REQUEST_LENGTH_BYTES` bytes. But we
+                // can't do that because we need to send rectangles of pixels, not just
+                // raw pixels.
+                const minimum_num_requests = try std.math.divCeil(
+                    usize,
+                    whole_data_len,
+                    (common.MAX_REQUEST_LENGTH_BYTES - x.put_image.data_offset),
+                );
+                // We add one to make sure we can floor at any pixel row and still have
+                // enough requests to send everything. We assume that one pixel row is
+                // below the limit.
+                const num_requests = minimum_num_requests + 1;
+
+                const rows_per_request = @divFloor(rgb_image.height, minimum_num_requests);
+                for (0..num_requests) |request_index| {
+                    const start_pixel_row = request_index * rows_per_request;
+                    const end_pixel_row = @min(start_pixel_row + rows_per_request, rgb_image.height);
+
+                    if (start_pixel_row >= rgb_image.height) {
+                        break;
+                    }
+
+                    const actual_height = end_pixel_row - start_pixel_row;
+                    const cropped_rgb_image = RGBImage{
+                        .width = rgb_image.width,
+                        .height = actual_height,
+                        .pixels = rgb_image.pixels[start_pixel_row * rgb_image.width .. end_pixel_row * rgb_image.width],
+                    };
+
+                    const data_len = common.getPutImageDataLenBytes(
+                        cropped_rgb_image.width,
+                        cropped_rgb_image.height,
+                        self.pixmap_format,
+                    );
+                    var put_image_msg = try allocator.alloc(u8, x.put_image.getLen(@intCast(data_len)));
+                    defer allocator.free(put_image_msg);
+                    copyRgbImageToPixmap(
+                        cropped_rgb_image,
+                        pixmap_format,
+                        self.image_byte_order,
+                        put_image_msg[x.put_image.data_offset..],
+                    );
+                    x.put_image.serializeNoDataCopy(put_image_msg.ptr, @intCast(data_len), .{
+                        .format = .z_pixmap,
+                        .drawable_id = ids.pixmap,
+                        .gc_id = ids.pixmap_gc,
+                        .width = @intCast(rgb_image.width),
+                        .height = @intCast(actual_height),
+                        .x = 0,
+                        .y = @intCast(start_pixel_row),
+                        // "The left-pad must be zero for ZPixmap format"
+                        .left_pad = 0,
+                        .depth = pixmap_depth,
+                    });
+                    try common.send(sock, put_image_msg);
+                }
+            } else {
+                var put_image_msg = try allocator.alloc(u8, whole_request_len);
+                defer allocator.free(put_image_msg);
+                copyRgbImageToPixmap(
+                    rgb_image,
+                    pixmap_format,
+                    self.image_byte_order,
+                    put_image_msg[x.put_image.data_offset..],
+                );
+                x.put_image.serializeNoDataCopy(put_image_msg.ptr, @intCast(whole_data_len), .{
+                    .format = .z_pixmap,
+                    .drawable_id = ids.pixmap,
+                    .gc_id = ids.pixmap_gc,
+                    .width = @intCast(rgb_image.width),
+                    .height = @intCast(rgb_image.height),
+                    .x = 0,
+                    .y = @intCast(pixmap_index * rgb_image.height),
+                    // "The left-pad must be zero for ZPixmap format"
+                    .left_pad = 0,
+                    .depth = pixmap_depth,
+                });
+                try common.send(sock, put_image_msg);
+            }
         }
     }
 };
