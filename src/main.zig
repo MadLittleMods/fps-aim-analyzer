@@ -308,3 +308,34 @@ pub fn main() !u8 {
     // Clean-up
     try render.cleanupResources(ids);
 }
+
+test "TODO" {
+    const allocator = std.testing.allocator;
+
+    const main_argv = [_][]const u8{ "zig", "build", "run-main" };
+    var main_process = std.ChildProcess.init(&main_argv, allocator);
+    // TODO
+    main_process.stdin_behavior = .Ignore;
+    main_process.stdout_behavior = .Ignore;
+    main_process.stderr_behavior = .Ignore;
+
+    try main_process.spawn();
+
+    const screen_play_argv = [_][]const u8{ "zig", "build", "run-screen_play" };
+    var screen_play_process = std.ChildProcess.init(&screen_play_argv, allocator);
+    // TODO
+    screen_play_process.stdin_behavior = .Ignore;
+    screen_play_process.stdout_behavior = .Ignore;
+    screen_play_process.stderr_behavior = .Ignore;
+
+    try screen_play_process.spawn();
+
+    // The process only ends after this call returns.
+    const screen_play_term = try screen_play_process.wait();
+
+    const main_term = try main_process.kill();
+
+    // Term can be .Exited, .Signal, .Stopped, .Unknown
+    try std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, screen_play_term);
+    try std.testing.expectEqual(std.ChildProcess.Term{ .Signal = std.os.SIG.TERM }, main_term);
+}

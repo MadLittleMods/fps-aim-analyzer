@@ -225,7 +225,7 @@ pub fn main() !u8 {
         .{ .timestamp_ms = 9000, .screenshot_index = 9 },
         .{ .timestamp_ms = 9998, .action = .left_click }, // 2ms input delay
         .{ .timestamp_ms = 10000, .screenshot_index = 10 },
-        // Padding for the end
+        // Padding for the end before exiting
         .{ .timestamp_ms = 11000 },
     };
 
