@@ -193,6 +193,7 @@ pub fn main() !u8 {
                 "screenshot-data/halo-infinite/1080/default/{d} - bazaar assault rifle.png",
                 .{ammo_number},
             );
+            defer allocator.free(screenshot_file_path);
             const rgb_image = try RGBImage.loadImageFromFilePath(
                 screenshot_file_path,
                 allocator,
@@ -276,11 +277,11 @@ pub fn main() !u8 {
             }
 
             current_keyframe_index += 1;
-        }
 
-        // We're done
-        if (current_keyframe_index >= keyframes.len) {
-            break :outer;
+            // We're done
+            if (current_keyframe_index >= keyframes.len) {
+                break :outer;
+            }
         }
 
         // {
