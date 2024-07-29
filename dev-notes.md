@@ -120,6 +120,26 @@ number of extensions:    28
 default screen number:    0
 ```
 
+Find which versions of the extensions that you have:
+```sh
+$ dpyinfo -ext all | grep version
+version number:    11.0
+X.Org version: 21.1.13
+Xlib:  extension "Multi-Buffering" missing on display ":0.0".
+MIT-SHM version 1.2 opcode: 130, base event: 65, base error: 128
+XKEYBOARD version 1.0 opcode: 135, base event: 85, base error: 137
+SHAPE version 1.1 opcode: 129, base event: 64
+SYNC version 3.1 opcode: 134, base event: 83, base error: 134
+XFree86-VidModeExtension version 2.2 opcode: 153, base error: 172
+XTEST version 2.2 opcode: 132
+DOUBLE-BUFFER version 1.0 opcode: 145, base error: 153
+RECORD version 1.13 opcode: 146, base error: 154
+XInputExtension version 2.4 opcode: 131, base event: 66, base error: 129
+RENDER version 0.11 opcode: 139, base error: 142
+Composite version 0.4 opcode: 142
+XINERAMA version 1.1 opcode: 141
+```
+
 
 ### The `DISPLAY` environment variable
 

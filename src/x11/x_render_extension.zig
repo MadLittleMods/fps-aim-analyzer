@@ -1,4 +1,4 @@
-// X Render Extension
+// X Render Extension (RENDER)
 //
 // - Docs:
 //    - https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
