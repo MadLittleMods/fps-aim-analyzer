@@ -312,18 +312,36 @@ pub fn main() !u8 {
 test "TODO" {
     const allocator = std.testing.allocator;
 
-    const main_argv = [_][]const u8{ "zig", "build", "run-main" };
+    // Ideally, we'd be able to build in run in the same command like `zig build
+    // run-main` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+    // able to kill the process cleanly. So we have to build and run in separate
+    // commands.
+    const build_argv = [_][]const u8{ "zig", "build", "all" };
+    var build_process = std.ChildProcess.init(&build_argv, allocator);
+    // Prevent writing to `stdout` so the test runner doesn't hang,
+    // see https://github.com/ziglang/zig/issues/15091
+    build_process.stdin_behavior = .Ignore;
+    build_process.stdout_behavior = .Ignore;
+    build_process.stderr_behavior = .Ignore;
+
+    try build_process.spawn();
+    const build_term = try build_process.wait();
+    try std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term);
+
+    const main_argv = [_][]const u8{"./zig-out/bin/main"};
     var main_process = std.ChildProcess.init(&main_argv, allocator);
-    // TODO
+    // Prevent writing to `stdout` so the test runner doesn't hang,
+    // see https://github.com/ziglang/zig/issues/15091
     main_process.stdin_behavior = .Ignore;
     main_process.stdout_behavior = .Ignore;
     main_process.stderr_behavior = .Ignore;
 
     try main_process.spawn();
 
-    const screen_play_argv = [_][]const u8{ "zig", "build", "run-screen_play" };
+    const screen_play_argv = [_][]const u8{"./zig-out/bin/screen_play"};
     var screen_play_process = std.ChildProcess.init(&screen_play_argv, allocator);
-    // TODO
+    // Prevent writing to `stdout` so the test runner doesn't hang,
+    // see https://github.com/ziglang/zig/issues/15091
     screen_play_process.stdin_behavior = .Ignore;
     screen_play_process.stdout_behavior = .Ignore;
     screen_play_process.stderr_behavior = .Ignore;
@@ -333,6 +351,10 @@ test "TODO" {
     // The process only ends after this call returns.
     const screen_play_term = try screen_play_process.wait();
 
+    // After the screen_play process ends, we can kill the main process since we're done
+    // testing.
+    //
+    // TODO: Analyze the results of the main process.
     const main_term = try main_process.kill();
 
     // Term can be .Exited, .Signal, .Stopped, .Unknown
