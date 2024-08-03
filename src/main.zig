@@ -330,6 +330,13 @@ pub fn main() !void {
     try main_program.run_main();
 }
 
+// This test is meant to run on a 1920x1080p display.
+//
+// FIXME: Ideally, this test should be able to be run standalone without any extra setup
+// outside to create right size display. By default, it should just run in a headless
+// environment and we'd have `Xvfb` as a dependency we build ourselves to run the tests.
+// I hate when projects require you to install extra system dependencies to get things
+// working. The only thing you should need is the right version of Zig.
 test "end-to-end: click to capture screenshot" {
     const allocator = std.testing.allocator;
 
