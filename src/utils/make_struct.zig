@@ -1,5 +1,6 @@
 const std = @import("std");
 
+// via https://mht.wtf/post/comptime-struct/
 pub fn MakeStruct(comptime in: anytype) type {
     var fields: [in.len]std.builtin.Type.StructField = undefined;
     for (in, 0..) |t, i| {

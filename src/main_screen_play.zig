@@ -25,8 +25,9 @@ const Keyframe = struct {
 };
 
 /// ScreenPlay: punny name for screenshot playback that we can use to mock gameplay and
-/// test the aim analyzer against.
-pub fn main() !u8 {
+/// test the aim analyzer against. This will display a series of screenshots in a window
+/// and simulate mouse clicks.
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer switch (gpa.deinit()) {
@@ -83,7 +84,7 @@ pub fn main() !u8 {
         .msb_first => .Big,
         else => |order| {
             std.log.err("unknown image-byte-order {}", .{order});
-            return 1;
+            return error.UnknownImageByteOrder;
         },
     };
 
@@ -371,5 +372,5 @@ pub fn main() !u8 {
     try render.cleanupResources(conn.sock, &ids);
 
     // Exited cleanly
-    return 0;
+    return;
 }
