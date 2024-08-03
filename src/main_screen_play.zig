@@ -151,6 +151,8 @@ pub fn main() !void {
     // Assemble a map of X extension info
     const extensions = x11_extension_utils.Extensions(&.{.render}){
         .render = render_extension,
+        // We don't use `test_extension` in our rendering, so we don't need to include
+        // it here.
     };
 
     try render.createResources(
