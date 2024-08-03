@@ -14,7 +14,8 @@ const MainProgram = struct {
     pub fn run_main(self: *@This()) !void {
         // FIXME: Ideally, we probably should be passing in an allocator here. But in
         // order to allow testing, we probably also need cooperative threading and add a
-        // way to signal the loop here to stop so everything can be cleaned up.
+        // way to signal the loop here to stop so everything can be cleaned up to avoid
+        // the testing allocator noticing the leaks.
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         const allocator = gpa.allocator();
         defer switch (gpa.deinit()) {
