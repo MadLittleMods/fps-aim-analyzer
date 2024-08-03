@@ -385,4 +385,8 @@ test "end-to-end: click to capture screenshot" {
     try std.testing.expect(main_program.state != null);
     try std.testing.expectEqual(main_program.state.?.max_screenshots_shown, 6);
     try std.testing.expectEqual(main_program.state.?.next_screenshot_index, 4);
+
+    // TODO: We need cooperative threading and have a way to signal the main thread to
+    // stop and have it clean up. It's fine that we kill it but the test fails because
+    // we're using the testing allocator which detects memory leaks.
 }
