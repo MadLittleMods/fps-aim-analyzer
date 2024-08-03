@@ -217,7 +217,8 @@ Xephyr :99 -screen 1920x1080x24
 # Start an application in the new display
 DISPLAY=:99 firefox
 
-# See the existing display
+# You will already be able to see what's happening in the Xephyr window,
+# but just as an example on using `xpra`, you can connect and watch an existing display
 xpra attach :99
 ```
 
