@@ -11,13 +11,17 @@ const AppState = @import("aim_analyzer/app_state.zig").AppState;
 const MainProgram = struct {
     state: ?*AppState = null,
 
-    pub fn deinit(self: *const @This(), allocator: std.mem.Allocator) void {
-        if (self.state) |state| {
-            allocator.destroy(state);
-        }
-    }
+    pub fn run_main(self: *@This()) !void {
+        // FIXME: Ideally, we probably should be passing in an allocator here. But in
+        // order to allow testing, we probably also need cooperative threading and add a
+        // way to signal the loop here to stop so everything can be cleaned up.
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        const allocator = gpa.allocator();
+        defer switch (gpa.deinit()) {
+            .ok => {},
+            .leak => std.log.err("GPA allocator: Memory leak detected", .{}),
+        };
 
-    pub fn run_main(self: *@This(), allocator: std.mem.Allocator) !void {
         try x.wsaStartup();
         const conn = try common.connect(allocator);
         defer std.os.shutdown(conn.sock, .both) catch {};
@@ -66,6 +70,11 @@ const MainProgram = struct {
 
         // Set the app state
         var state = try allocator.create(AppState);
+        self.state = state;
+        defer {
+            allocator.destroy(state);
+            self.state = null;
+        }
         state.* = .{
             .root_screen_dimensions = root_screen_dimensions,
             .window_dimensions = window_dimensions,
@@ -74,7 +83,6 @@ const MainProgram = struct {
             .margin = margin,
             .padding = padding,
         };
-        self.state = state;
 
         // Create a big buffer that we can use to read messages and replies from the X server.
         const double_buffer = try x.DoubleBuffer.init(
@@ -317,16 +325,8 @@ const MainProgram = struct {
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer switch (gpa.deinit()) {
-        .ok => {},
-        .leak => std.log.err("GPA allocator: Memory leak detected", .{}),
-    };
-
     var main_program = MainProgram{};
-    try main_program.run_main(allocator);
-    defer main_program.deinit(allocator);
+    try main_program.run_main();
 }
 
 test "end-to-end: click to capture screenshot" {
@@ -367,11 +367,10 @@ test "end-to-end: click to capture screenshot" {
 
     // Run the main aim_analyzer process in a background thread
     var main_program = MainProgram{};
-    defer main_program.deinit(allocator);
     const main_thread = try std.Thread.spawn(
         .{},
         MainProgram.run_main,
-        .{ &main_program, allocator },
+        .{&main_program},
     );
     main_thread.detach();
 
@@ -385,8 +384,4 @@ test "end-to-end: click to capture screenshot" {
     try std.testing.expect(main_program.state != null);
     try std.testing.expectEqual(main_program.state.?.max_screenshots_shown, 6);
     try std.testing.expectEqual(main_program.state.?.next_screenshot_index, 4);
-
-    // TODO: We need cooperative threading and have a way to signal the main thread to
-    // stop and have it clean up. It's fine that we kill it but the test fails because
-    // we're using the testing allocator which detects memory leaks.
 }
