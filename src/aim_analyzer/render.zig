@@ -1,9 +1,10 @@
 const std = @import("std");
 const x = @import("x");
-const common = @import("x11/x11_common.zig");
-const x11_extension_utils = @import("x11/x11_extension_utils.zig");
-const buffer_utils = @import("buffer_utils.zig");
+const common = @import("../x11/x11_common.zig");
+const x11_extension_utils = @import("../x11/x11_extension_utils.zig");
 const AppState = @import("app_state.zig").AppState;
+const render_utils = @import("../utils/render_utils.zig");
+const FontDims = render_utils.FontDims;
 
 /// Given an unsigned integer type, returns a signed integer type that can hold the
 /// entire positive range of the unsigned integer type.
@@ -19,11 +20,6 @@ fn GetEncompassingSignedInt(comptime unsigned_T: type) type {
         },
     });
 }
-
-pub const Dimensions = struct {
-    width: i16,
-    height: i16,
-};
 
 /// Stores the IDs of the all of the resources used when communicating with the X Window server.
 pub const Ids = struct {
@@ -79,25 +75,13 @@ pub const Ids = struct {
     }
 };
 
-/// Given a list of picture formats, finds the first one that matches the desired depth.
-pub fn findMatchingPictureFormat(
-    formats: []const x.render.PictureFormatInfo,
-    desired_depth: u8,
-) !x.render.PictureFormatInfo {
-    for (formats) |format| {
-        if (format.depth != desired_depth) continue;
-        return format;
-    }
-    return error.PictureFormatNotFound;
-}
-
 /// Bootstraps all of the X resources we will need use when rendering the UI.
 pub fn createResources(
     sock: std.os.socket_t,
     buffer: *x.ContiguousReadBuffer,
     ids: *const Ids,
     screen: *align(4) x.Screen,
-    extensions: *const x11_extension_utils.Extensions,
+    extensions: *const x11_extension_utils.Extensions(&.{ .render, .input }),
     depth: u8,
     state: *const AppState,
 ) !void {
@@ -246,7 +230,7 @@ pub fn createResources(
         try common.send(sock, &message_buffer);
     }
     const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
     const optional_picture_formats_data: ?struct { matching_picture_format_24: x.render.PictureFormatInfo, matching_picture_format_32: x.render.PictureFormatInfo } = blk: {
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
@@ -264,8 +248,8 @@ pub fn createResources(
                 //     });
                 // }
                 break :blk .{
-                    .matching_picture_format_24 = try findMatchingPictureFormat(msg.getPictureFormats()[0..], 24),
-                    .matching_picture_format_32 = try findMatchingPictureFormat(msg.getPictureFormats()[0..], 32),
+                    .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(msg.getPictureFormats()[0..], 24),
+                    .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(msg.getPictureFormats()[0..], 32),
                 };
             },
             else => |msg| {
@@ -349,41 +333,13 @@ pub fn cleanupResources(
     // TODO: x.render.free_picture
 }
 
-fn renderString(
-    sock: std.os.socket_t,
-    drawable_id: u32,
-    fg_gc_id: u32,
-    pos_x: i16,
-    pos_y: i16,
-    comptime fmt: []const u8,
-    args: anytype,
-) !void {
-    var msg: [x.image_text8.max_len]u8 = undefined;
-    const text_buf = msg[x.image_text8.text_offset .. x.image_text8.text_offset + 0xff];
-    const text_len: u8 = @intCast((std.fmt.bufPrint(text_buf, fmt, args) catch @panic("string too long")).len);
-    x.image_text8.serializeNoTextCopy(&msg, text_len, .{
-        .drawable_id = drawable_id,
-        .gc_id = fg_gc_id,
-        .x = pos_x,
-        .y = pos_y,
-    });
-    try common.send(sock, msg[0..x.image_text8.getLen(text_len)]);
-}
-
-pub const FontDims = struct {
-    width: u8,
-    height: u8,
-    font_left: i16, // pixels to the left of the text basepoint
-    font_ascent: i16, // pixels up from the text basepoint to the top of the text
-};
-
 /// Context struct pattern where we can hold some state that we can access in any of the
 /// methods. This is useful because we have to call `render()` in many places and we
 /// don't want to have to wrangle all of those arguments each time.
 pub const RenderContext = struct {
     sock: *const std.os.socket_t,
     ids: *const Ids,
-    extensions: *const x11_extension_utils.Extensions,
+    extensions: *const x11_extension_utils.Extensions(&.{ .render, .input }),
     font_dims: *const FontDims,
     state: *AppState,
 
@@ -429,7 +385,7 @@ pub const RenderContext = struct {
         // Render some text in the middle of the square cut-out
         const text_length = 11;
         const text_width = font_dims.width * text_length;
-        try renderString(
+        try render_utils.renderString(
             sock,
             window_id,
             ids.fg_gc,
