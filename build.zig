@@ -151,6 +151,8 @@ pub fn build(b: *std.Build) !void {
         unit_tests.addModule("zigimg", zigimg_dep.module("zigimg"));
 
         const run_unit_tests_cmd = b.addRunArtifact(unit_tests);
+        // This forces tests to always be re-run instead of returning the cached result.
+        run_unit_tests_cmd.has_side_effects = true;
 
         test_step.dependOn(&run_unit_tests_cmd.step);
     }
