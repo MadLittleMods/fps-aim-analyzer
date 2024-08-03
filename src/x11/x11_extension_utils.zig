@@ -14,12 +14,6 @@ pub const ExtensionInfo = struct {
     base_error_code: u8,
 };
 
-/// A map of X server extension names to their info.
-// pub const Extensions = struct {
-//     render: ExtensionInfo,
-//     input: ExtensionInfo,
-// };
-
 const AvailableExtensions = enum {
     render,
     input,
