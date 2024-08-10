@@ -208,28 +208,28 @@ pub fn main() !void {
 
     const keyframes = [_]Keyframe{
         .{ .timestamp_ms = 0, .screenshot_index = 0 },
-        .{ .timestamp_ms = 800, .action = .left_click }, // 200ms input delay
-        .{ .timestamp_ms = 1000, .screenshot_index = 1 },
-        .{ .timestamp_ms = 1800, .action = .left_click },
-        .{ .timestamp_ms = 2000, .screenshot_index = 2 },
-        .{ .timestamp_ms = 2900, .action = .left_click }, // 100ms input delay
-        .{ .timestamp_ms = 3000, .screenshot_index = 3 },
-        .{ .timestamp_ms = 3900, .action = .left_click },
-        .{ .timestamp_ms = 4000, .screenshot_index = 4 },
-        .{ .timestamp_ms = 4950, .action = .left_click }, // 50ms input delay
-        .{ .timestamp_ms = 5000, .screenshot_index = 5 },
-        .{ .timestamp_ms = 5950, .action = .left_click },
-        .{ .timestamp_ms = 6000, .screenshot_index = 6 },
-        .{ .timestamp_ms = 6980, .action = .left_click }, // 20ms input delay
-        .{ .timestamp_ms = 7000, .screenshot_index = 7 },
-        .{ .timestamp_ms = 7980, .action = .left_click },
-        .{ .timestamp_ms = 8000, .screenshot_index = 8 },
-        .{ .timestamp_ms = 8990, .action = .left_click }, // 10ms input delay
-        .{ .timestamp_ms = 9000, .screenshot_index = 9 },
-        .{ .timestamp_ms = 9998, .action = .left_click }, // 2ms input delay
-        .{ .timestamp_ms = 10000, .screenshot_index = 10 },
+        .{ .timestamp_ms = 400, .action = .left_click }, // 100ms input delay
+        .{ .timestamp_ms = 500, .screenshot_index = 1 },
+        .{ .timestamp_ms = 900, .action = .left_click },
+        .{ .timestamp_ms = 1000, .screenshot_index = 2 },
+        .{ .timestamp_ms = 1150, .action = .left_click }, // 50ms input delay
+        .{ .timestamp_ms = 1200, .screenshot_index = 3 },
+        .{ .timestamp_ms = 1350, .action = .left_click },
+        .{ .timestamp_ms = 1400, .screenshot_index = 4 },
+        .{ .timestamp_ms = 1570, .action = .left_click }, // 30ms input delay
+        .{ .timestamp_ms = 1600, .screenshot_index = 5 },
+        .{ .timestamp_ms = 1770, .action = .left_click },
+        .{ .timestamp_ms = 1800, .screenshot_index = 6 },
+        .{ .timestamp_ms = 1880, .action = .left_click }, // 20ms input delay
+        .{ .timestamp_ms = 1900, .screenshot_index = 7 },
+        .{ .timestamp_ms = 1980, .action = .left_click },
+        .{ .timestamp_ms = 2000, .screenshot_index = 8 },
+        .{ .timestamp_ms = 2090, .action = .left_click }, // 10ms input delay
+        .{ .timestamp_ms = 2100, .screenshot_index = 9 },
+        .{ .timestamp_ms = 2198, .action = .left_click }, // 2ms input delay
+        .{ .timestamp_ms = 2200, .screenshot_index = 10 },
         // Padding for the end before exiting
-        .{ .timestamp_ms = 11000 },
+        .{ .timestamp_ms = 2500 },
     };
 
     var current_keyframe_index: u8 = 0;
