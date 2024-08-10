@@ -3,6 +3,11 @@ const std = @import("std");
 const x = @import("x");
 const common = @This();
 
+/// The maximum length of an x11 request we can send to the server in bytes. To send
+/// bigger requests, we either need to split them up or support the Big Requests
+/// Extension.
+pub const MAX_REQUEST_LENGTH_BYTES = 262140;
+
 pub const SocketReader = std.io.Reader(std.os.socket_t, std.os.RecvFromError, readSocket);
 
 pub fn send(sock: std.os.socket_t, data: []const u8) !void {
@@ -186,4 +191,75 @@ pub fn asReply(comptime T: type, msg_bytes: []align(4) u8) !*T {
 
 fn readSocket(sock: std.os.socket_t, buffer: []u8) !usize {
     return x.readSock(sock, buffer, 0);
+}
+
+/// Sanity check that we're not running into data integrity (corruption) issues caused
+/// by overflowing and wrapping around to the front ofq the buffer.
+pub fn checkMessageLengthFitsInBuffer(message_length: usize, buffer_limit: usize) !void {
+    if (message_length > buffer_limit) {
+        std.debug.panic("Reply is bigger than our buffer (data corruption will ensue) {} > {}. In order to fix, increase the buffer size.", .{
+            message_length,
+            buffer_limit,
+        });
+    }
+}
+
+/// Given a list of picture formats, finds the first one that matches the desired depth.
+pub fn findMatchingPictureFormatForDepth(
+    formats: []const x.render.PictureFormatInfo,
+    desired_depth: u8,
+) !x.render.PictureFormatInfo {
+    for (formats) |format| {
+        if (format.depth != desired_depth) continue;
+        return format;
+    }
+    return error.PictureFormatNotFound;
+}
+
+pub fn findMatchingPixmapFormatForDepth(
+    formats: []const x.Format,
+    desired_depth: u8,
+) !x.Format {
+    for (formats) |format| {
+        if (format.depth != desired_depth) continue;
+        return format;
+    }
+    return error.PixmapFormatNotFound;
+}
+
+pub fn getFirstScreenFromConnectionSetup(conn_setup: x.ConnectSetup) *x.Screen {
+    const fixed = conn_setup.fixed();
+
+    const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
+    const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
+    const screen_ptr = conn_setup.getFirstScreenPtr(format_list_limit);
+
+    return screen_ptr;
+}
+
+pub fn getPixmapFormatsFromConnectionSetup(conn_setup: x.ConnectSetup) ![]const x.Format {
+    const fixed = conn_setup.fixed();
+
+    const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
+    const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
+    const pixmap_formats = try conn_setup.getFormatList(format_list_offset, format_list_limit);
+
+    return pixmap_formats;
+}
+
+/// Returns the number of bytes required to store the image data in a PutImage request.
+pub fn getPutImageDataLenBytes(
+    width: usize,
+    height: usize,
+    format: x.Format,
+) usize {
+    const bytes_per_pixel = format.bits_per_pixel / 8;
+    const scanline_len = std.mem.alignForward(
+        u16,
+        @as(u16, @intCast(bytes_per_pixel * width)),
+        format.scanline_pad / 8,
+    );
+    const data_len_bytes = height * scanline_len;
+
+    return data_len_bytes;
 }

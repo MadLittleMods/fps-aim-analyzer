@@ -1,10 +1,17 @@
 .{
     .name = "aim-analyzer",
     .version = "0.1.0",
+    .paths = .{
+        "",
+    },
     .dependencies = .{
         .zigx = .{
-            .url = "https://github.com/MadLittleMods/zigx/archive/e705925e859e9c271f1292f10774b6d2eabf4872.tar.gz",
-            .hash = "1220781c33a02bbf069233a4f9007b067b4f6f4846b98d5324274fae058a9ab9abcb",
+            .url = "https://github.com/MadLittleMods/zigx/archive/46a751c486d25832954412440dc7082476ae49a9.tar.gz",
+            .hash = "1220b8e05f669793b32a654f0215dbd4fcc22a44aa4c79da849a2c21f461d5d25b69",
+        },
+        .zigimg = .{
+            .url = "https://github.com/MadLittleMods/zigimg/archive/ccf9197ccf96dd43d1d31c98a86f21e74187d0c4.tar.gz",
+            .hash = "1220b5d63472f189226b4bd753d41401797a9d58e2e11a8b7aa84fce3971b90eca76",
         },
     },
 }
