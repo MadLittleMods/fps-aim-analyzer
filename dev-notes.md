@@ -249,7 +249,8 @@ Xvfb :99 -s -ac -screen 0 1920x1080x24
 # Start an application in the new display
 DISPLAY=:99 firefox
 
-# Record the display with ffmpeg
+# Record the display with ffmpeg (press `q` to stop recording, using `Ctrl + c` (SIGINT)
+# seems to corrupt the video file since it exits immediately)
 ffmpeg -f x11grab -video_size 1920x1080 -i ":99" out.webm
 ```
 

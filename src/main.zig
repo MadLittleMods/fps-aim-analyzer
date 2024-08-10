@@ -330,7 +330,9 @@ pub fn main() !void {
     try main_program.run_main();
 }
 
-// This test is meant to run on a 1920x1080p display.
+// This test is meant to run on a 1920x1080p display. Create a virtual display (via Xvfb
+// or Xephyr) and point the tests to that display by setting the `DISPLAY` environment
+// variable (`DISPLAY=:99 zig build test`).
 //
 // FIXME: Ideally, this test should be able to be run standalone without any extra setup
 // outside to create right size display. By default, it should just run in a headless
@@ -371,6 +373,11 @@ test "end-to-end: click to capture screenshot" {
     // Sleep a little bit so the main aim_analyzer process will display on top of the
     // screen_play process. The delay allows the screen_play process to "map_window"
     // before we start the main process.
+    //
+    // FIXME: It would be better to detect this properly instead of sleeping for an
+    // arbitrary amount of time. We could wait to see `map_window` request to the X11
+    // server or maybe we could listen for the `map_notify` event, or maybe just have
+    // the process emit some ready signal that we can detect.
     std.time.sleep(0.5 * std.time.ns_per_s);
 
     // Run the main aim_analyzer process in a background thread
