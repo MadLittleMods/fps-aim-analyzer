@@ -42,7 +42,11 @@ pub fn build(b: *std.Build) !void {
         name: []const u8,
         src: []const u8,
     }{
+        // zig build run-main
         .{ .name = "main", .src = "src/main.zig" },
+        // zig build run-screen_play
+        .{ .name = "screen_play", .src = "src/main_screen_play.zig" },
+        // zig build run-train_ocr
         .{ .name = "train_ocr", .src = "src/main_train_ocr_neural_network.zig" },
     }) |exe_cfg| {
         const exe_name = exe_cfg.name;
@@ -156,6 +160,8 @@ pub fn build(b: *std.Build) !void {
         unit_tests.addModule("zig-neural-networks", neural_networks_dep.module("zig-neural-networks"));
 
         const run_unit_tests_cmd = b.addRunArtifact(unit_tests);
+        // This forces tests to always be re-run instead of returning the cached result.
+        run_unit_tests_cmd.has_side_effects = true;
 
         test_step.dependOn(&run_unit_tests_cmd.step);
     }

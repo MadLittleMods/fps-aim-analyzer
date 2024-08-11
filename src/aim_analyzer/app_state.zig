@@ -1,5 +1,7 @@
-const render_utils = @import("utils/render_utils.zig");
-const halo_text_vision = @import("vision/halo_text_vision.zig");
+const std = @import("std");
+const MakeStruct = @import("../utils/make_struct.zig").MakeStruct;
+const render_utils = @import("../utils/render_utils.zig");
+const halo_text_vision = @import("../vision/halo_text_vision.zig");
 const ScreenshotRegion = halo_text_vision.ScreenshotRegion;
 
 /// Holds the overall state of the application. In an ideal world, this would be

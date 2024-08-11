@@ -1,7 +1,7 @@
 const std = @import("std");
+const MakeStruct = @import("../utils/make_struct.zig").MakeStruct;
 const x = @import("x");
 const common = @import("./x11_common.zig");
-const buffer_utils = @import("../utils/buffer_utils.zig");
 
 /// X server extension info.
 pub const ExtensionInfo = struct {
@@ -14,12 +14,21 @@ pub const ExtensionInfo = struct {
     base_error_code: u8,
 };
 
-/// A map of X server extension names to their info.
-pub const Extensions = struct {
-    render: ExtensionInfo,
-    input: ExtensionInfo,
-    shape: ExtensionInfo,
+const AvailableExtensions = enum {
+    render,
+    input,
+    shape,
 };
+
+/// A map of X server extension names to their info.
+pub fn Extensions(comptime extensions: []const AvailableExtensions) type {
+    var fields: [extensions.len]std.meta.Tuple(&.{ []const u8, type }) = undefined;
+    inline for (extensions, 0..) |ext, index| {
+        fields[index] = .{ @tagName(ext), ExtensionInfo };
+    }
+
+    return MakeStruct(fields);
+}
 
 /// Determines whether the extension is available on the server.
 pub fn getExtensionInfo(
@@ -37,7 +46,7 @@ pub fn getExtensionInfo(
         try common.send(sock, &message_buffer);
     }
     const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try buffer_utils.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
     const optional_extension = blk: {
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
