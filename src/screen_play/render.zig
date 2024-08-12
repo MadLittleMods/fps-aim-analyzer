@@ -315,21 +315,16 @@ pub fn createResources(
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.render.query_pict_formats.Reply = @ptrCast(msg_reply);
-                // std.log.debug("RENDER extension: pict formats num_formats={}, num_screens={}, num_depths={}, num_visuals={}", .{
-                //     msg.num_formats,
-                //     msg.num_screens,
-                //     msg.num_depths,
-                //     msg.num_visuals,
-                // });
-                // for (msg.getPictureFormats(), 0..) |format, i| {
-                //     std.log.debug("RENDER extension: pict format ({}) {any}", .{
-                //         i,
-                //         format,
-                //     });
-                // }
+                const picture_formats = msg.getPictureFormats();
                 break :blk .{
-                    .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(msg.getPictureFormats()[0..], 24),
-                    .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(msg.getPictureFormats()[0..], 32),
+                    .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(
+                        picture_formats[0..],
+                        24,
+                    ),
+                    .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(
+                        picture_formats[0..],
+                        32,
+                    ),
                 };
             },
             else => |msg| {

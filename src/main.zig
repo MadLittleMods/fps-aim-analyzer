@@ -230,9 +230,8 @@ const MainProgram = struct {
             },
         );
 
-        // We use the X Input extension to detect clicks on the game window (or whatever
-        // window) they happen to be on. Useful because we can detect clicks even when our
-        // window is not focused and doesn't have to be directly clicked.
+        // We use the X Shape extension to make the debug window click-through-able. If
+        // you're familiar with CSS, we use this to apply `pointer-events: none;`.
         const optional_shape_extension = try x11_extension_utils.getExtensionInfo(
             conn.sock,
             &buffer,
@@ -328,8 +327,22 @@ const MainProgram = struct {
             try conn.send(&msg);
         }
 
-        // Since the debug window covers the whole screen, we want to make it so that mouse
-        // events aren't affected by it all. Make it completely click-through-able.
+        // TODO: Maybe remove. Just trying to make this window always on top (above
+        // `screen_play` in the tests)
+        {
+            var msg: [x.configure_window.max_len]u8 = undefined;
+            const len = x.configure_window.serialize(&msg, .{
+                .window_id = ids.window,
+            }, .{
+                .stack_mode = .above,
+            });
+            try conn.send(msg[0..len]);
+        }
+
+        // Since the debug window covers the whole screen, we want to make it so that
+        // mouse events aren't affected by it all. Make it completely
+        // click-through-able. If you're familiar with CSS, we use this to apply
+        // `pointer-events: none;`.
         {
             const rectangle_list = [_]x.Rectangle{
                 .{ .x = 0, .y = 0, .width = 0, .height = 0 },
@@ -650,5 +663,5 @@ test "end-to-end: click to capture screenshot" {
     // Analyze the state of the main process after we've simulated some game play.
     try std.testing.expect(main_program.state != null);
     try std.testing.expectEqual(main_program.state.?.max_screenshots_shown, 6);
-    try std.testing.expectEqual(main_program.state.?.next_screenshot_index, 4);
+    try std.testing.expectEqual(main_program.state.?.next_interesting_screenshot_index, 4);
 }
