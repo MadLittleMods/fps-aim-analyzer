@@ -217,9 +217,15 @@ pub fn createResources(
             //
             // Whether this window overrides structure control facilities. Basically, a
             // suggestion whether the window manager to decorate this window (false) or
-            // we want to override the behavior. We set this to true to disable the
-            // window controls (basically a borderless window).
-            .override_redirect = true,
+            // we want to override the behavior.
+            //
+            // Normally if we set this to `true`, this would be a dead-simple way to get
+            // a border-less window without decorations. But we set this to `false` so
+            // that it doesn't try to fight with us in our test environment to be on
+            // top. We should instead be setting window properties to hint that it's
+            // full screen to the window manager. And when there is no window manager
+            // we don't need to worry about setting the properties anyway.
+            .override_redirect = false,
             // .save_under = true,
             .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
             // .dont_propagate = 1,
