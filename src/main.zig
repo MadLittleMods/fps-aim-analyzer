@@ -607,6 +607,13 @@ test {
 test "end-to-end: click to capture screenshot" {
     const allocator = std.testing.allocator;
 
+    // FIXME: Without a "compositing manager", the window will not show up as
+    // transparent. We could make a basic one from scratch using the X `COMPOSITE`
+    // extension. See https://magcius.github.io/xplain/article/composite.html for a
+    // breakdown on how compositing works. Normally, you'd get this same functionality
+    // for free via your desktop environment's window manager which probably includes a
+    // "compositing manager".
+
     // Ideally, we'd be able to build in run in the same command like `zig build
     // run-main` but https://github.com/ziglang/zig/issues/20853 prevents us from being
     // able to kill the process cleanly. So we have to build and run in separate
