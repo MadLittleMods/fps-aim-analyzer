@@ -173,10 +173,6 @@ pub fn main() !void {
         try conn.send(&msg);
     }
 
-    // TODO: Set window properties (play nice with window managers):
-    // - `_NET_WM_STATE`: `_NET_WM_STATE_FULLSCREEN`
-    // - `_NET_FRAME_EXTENTS`: 0, 0, 0, 0
-
     var render_context = render.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,

@@ -233,6 +233,11 @@ pub fn createResources(
         try common.send(sock, message_buffer[0..len]);
     }
 
+    // TODO: Set window properties to indicate that we are trying to be fullscreen and
+    // play nice with window managers:
+    // - `_NET_WM_STATE`: `_NET_WM_STATE_FULLSCREEN`
+    // - `_NET_FRAME_EXTENTS`: 0, 0, 0, 0
+
     // Create a pixmap drawable to capture the screenshot onto
     {
         var message_buffer: [x.create_pixmap.len]u8 = undefined;
