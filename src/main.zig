@@ -614,7 +614,7 @@ test "end-to-end: click to capture screenshot" {
     // for free via your desktop environment's window manager which probably includes a
     // "compositing manager".
 
-    // Ideally, we'd be able to build in run in the same command like `zig build
+    // Ideally, we'd be able to build and run in the same command like `zig build
     // run-main` but https://github.com/ziglang/zig/issues/20853 prevents us from being
     // able to kill the process cleanly. So we have to build and run in separate
     // commands.
