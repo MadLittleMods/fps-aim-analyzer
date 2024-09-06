@@ -215,6 +215,18 @@ const MainProgram = struct {
             try conn.send(&msg);
         }
 
+        // TODO: Maybe remove. Just trying to make this window always on top (above
+        // `screen_play` in the tests)
+        {
+            var msg: [x.configure_window.max_len]u8 = undefined;
+            const len = x.configure_window.serialize(&msg, .{
+                .window_id = ids.window,
+            }, .{
+                .stack_mode = .above,
+            });
+            try conn.send(msg[0..len]);
+        }
+
         var render_context = render.RenderContext{
             .sock = &conn.sock,
             .ids = &ids,
@@ -342,7 +354,14 @@ pub fn main() !void {
 test "end-to-end: click to capture screenshot" {
     const allocator = std.testing.allocator;
 
-    // Ideally, we'd be able to build in run in the same command like `zig build
+    // FIXME: Without a "compositing manager", the window will not show up as
+    // transparent. We could make a basic one from scratch using the X `COMPOSITE`
+    // extension. See https://magcius.github.io/xplain/article/composite.html for a
+    // breakdown on how compositing works. Normally, you'd get this same functionality
+    // for free via your desktop environment's window manager which probably includes a
+    // "compositing manager".
+
+    // Ideally, we'd be able to build and run in the same command like `zig build
     // run-main` but https://github.com/ziglang/zig/issues/20853 prevents us from being
     // able to kill the process cleanly. So we have to build and run in separate
     // commands.
