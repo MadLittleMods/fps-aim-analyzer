@@ -237,8 +237,8 @@ pub fn createResources(
                 const msg: *x.render.query_pict_formats.Reply = @ptrCast(msg_reply);
                 const picture_formats = msg.getPictureFormats();
                 break :blk .{
-                    .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(picture_formats[0..], 24),
-                    .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(picture_formats[0..], 32),
+                    .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(picture_formats, 24),
+                    .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(picture_formats, 32),
                 };
             },
             else => |msg| {
