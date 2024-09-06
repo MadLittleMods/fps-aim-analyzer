@@ -215,8 +215,9 @@ const MainProgram = struct {
             try conn.send(&msg);
         }
 
-        // TODO: Maybe remove. Just trying to make this window always on top (above
-        // `screen_play` in the tests)
+        // Try to make this window always on top (above `screen_play` in the tests). The
+        // real magic is the `override_redirect: false` but this is also the proper hint
+        // to send.
         {
             var msg: [x.configure_window.max_len]u8 = undefined;
             const len = x.configure_window.serialize(&msg, .{
@@ -389,17 +390,8 @@ test "end-to-end: click to capture screenshot" {
     // keyframes
     try screen_play_process.spawn();
 
-    // Sleep a little bit so the main aim_analyzer process will display on top of the
-    // screen_play process. The delay allows the screen_play process to "map_window"
-    // before we start the main process.
-    //
-    // FIXME: It would be better to detect this properly instead of sleeping for an
-    // arbitrary amount of time. We could wait to see `map_window` request to the X11
-    // server or maybe we could listen for the `map_notify` event, or maybe just have
-    // the process emit some ready signal that we can detect.
-    std.time.sleep(0.5 * std.time.ns_per_s);
-
-    // Run the main aim_analyzer process in a background thread
+    // Run the main aim_analyzer process in a background thread We use a thread instead
+    // of a child process so we can inspect the internal app state.
     var main_program = MainProgram{};
     const main_thread = try std.Thread.spawn(
         .{},

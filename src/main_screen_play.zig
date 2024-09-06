@@ -173,6 +173,18 @@ pub fn main() !void {
         try conn.send(&msg);
     }
 
+    // Try to make this window on the bottom (below the main `aim_analyzer` in the
+    // tests).
+    {
+        var msg: [x.configure_window.max_len]u8 = undefined;
+        const len = x.configure_window.serialize(&msg, .{
+            .window_id = ids.window,
+        }, .{
+            .stack_mode = .below,
+        });
+        try conn.send(msg[0..len]);
+    }
+
     var render_context = render.RenderContext{
         .sock = &conn.sock,
         .ids = &ids,
