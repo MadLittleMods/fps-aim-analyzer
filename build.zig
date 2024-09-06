@@ -28,6 +28,10 @@ pub fn build(b: *std.Build) !void {
     // https://github.com/marler8997/image-viewer/blob/f189f2547890d61a1770327e105b01fc704f98c4/build.zig#L43-L44
     const zigx_dep = b.dependency("zigx", .{});
     const zigimg_dep = b.dependency("zigimg", .{});
+    const neural_networks_dep = b.dependency("zig-neural-networks", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     // Building executables
     // ============================================
@@ -42,6 +46,8 @@ pub fn build(b: *std.Build) !void {
         .{ .name = "main", .src = "src/main.zig" },
         // zig build run-screen_play
         .{ .name = "screen_play", .src = "src/main_screen_play.zig" },
+        // zig build run-train_ocr
+        .{ .name = "train_ocr", .src = "src/main_train_ocr_neural_network.zig" },
     }) |exe_cfg| {
         const exe_name = exe_cfg.name;
         const exe_src = exe_cfg.src;
@@ -72,6 +78,8 @@ pub fn build(b: *std.Build) !void {
         example_exe.addModule("x", zigx_dep.module("zigx"));
         // Make the `zigimg` module available to be imported via `@import("zigimg")`
         example_exe.addModule("zigimg", zigimg_dep.module("zigimg"));
+        // Make the `zig-neural-networks` module available to be imported via `@import("zig-neural-networks")`
+        example_exe.addModule("zig-neural-networks", neural_networks_dep.module("zig-neural-networks"));
 
         // install the artifact - depending on the "example"
         const example_build_step = b.addInstallArtifact(example_exe, .{});
@@ -149,6 +157,7 @@ pub fn build(b: *std.Build) !void {
         });
         unit_tests.addModule("x", zigx_dep.module("zigx"));
         unit_tests.addModule("zigimg", zigimg_dep.module("zigimg"));
+        unit_tests.addModule("zig-neural-networks", neural_networks_dep.module("zig-neural-networks"));
 
         const run_unit_tests_cmd = b.addRunArtifact(unit_tests);
         // This forces tests to always be re-run instead of returning the cached result.

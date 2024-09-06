@@ -6,12 +6,16 @@
     },
     .dependencies = .{
         .zigx = .{
-            .url = "https://github.com/MadLittleMods/zigx/archive/46a751c486d25832954412440dc7082476ae49a9.tar.gz",
-            .hash = "1220b8e05f669793b32a654f0215dbd4fcc22a44aa4c79da849a2c21f461d5d25b69",
+            .url = "https://github.com/MadLittleMods/zigx/archive/7012ac6ae0923a8c55385bcd9124fa8ea273992d.tar.gz",
+            .hash = "1220209ddad630b88fbc996f44cc9e70a79c7ba0d51726f24a77b5f08a4873c74b3c",
         },
         .zigimg = .{
             .url = "https://github.com/MadLittleMods/zigimg/archive/ccf9197ccf96dd43d1d31c98a86f21e74187d0c4.tar.gz",
             .hash = "1220b5d63472f189226b4bd753d41401797a9d58e2e11a8b7aa84fce3971b90eca76",
+        },
+        .@"zig-neural-networks" = .{
+            .url = "https://github.com/madlittlemods/zig-neural-networks/archive/9495c13c945b1c5954ef85b3a911e52c2a747d73.tar.gz",
+            .hash = "122063af43b7289509d7108a927f7e535f0e2f00b5d902ca4b10fbf2f43bf797c5d2",
         },
     },
 }
