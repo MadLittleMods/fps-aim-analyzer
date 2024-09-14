@@ -390,7 +390,7 @@ test "end-to-end: click to capture screenshot" {
     // keyframes
     try screen_play_process.spawn();
 
-    // Run the main aim_analyzer process in a background thread We use a thread instead
+    // Run the main aim_analyzer process in a background thread. We use a thread instead
     // of a child process so we can inspect the internal app state.
     var main_program = MainProgram{};
     const main_thread = try std.Thread.spawn(
