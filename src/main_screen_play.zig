@@ -204,7 +204,7 @@ pub fn main() !void {
                 {
                     var msg_buf: [x.get_property.len]u8 = undefined;
                     x.get_property.serialize(&msg_buf, .{
-                        .window_id = ids.window,
+                        .window_id = window_id,
                         .property = custom_app_id_atom,
                         .type = x.Atom.STRING,
                         .offset = 0,
