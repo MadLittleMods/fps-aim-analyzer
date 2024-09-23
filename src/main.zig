@@ -47,6 +47,7 @@ const MainProgram = struct {
             screen.root,
             conn.setup.fixed().resource_id_base,
         );
+        std.log.debug("ids: {any}", .{ids});
 
         const depth = 32;
 
@@ -164,6 +165,48 @@ const MainProgram = struct {
             state,
         );
 
+        // Set the window name
+        {
+            const window_name = comptime x.Slice(u16, [*]const u8).initComptime("Aim Analyzer");
+            const change_property = x.change_property.withFormat(u8);
+            var msg_buf: [change_property.getLen(window_name.len)]u8 = undefined;
+            change_property.serialize(&msg_buf, .{
+                .mode = .replace,
+                .window_id = ids.window,
+                .property = x.Atom.WM_NAME,
+                .type = x.Atom.STRING,
+                .values = window_name,
+            });
+            try conn.send(msg_buf[0..]);
+        }
+
+        // Set a custom application ID property that we can use to find the window from
+        // our screen_play app in the tests. This is better than just relying on the
+        // window name because other applications might be named the same thing and the
+        // window name could change during the lifetime of the application.
+        {
+            // Figure out the atom for our custom application ID property
+            const custom_app_id_atom = try common.intern_atom(
+                conn.sock,
+                &buffer,
+                comptime x.Slice(u16, [*]const u8).initComptime("madlittlemods.app_id"),
+            );
+
+            {
+                const window_name = comptime x.Slice(u16, [*]const u8).initComptime("aim_analyzer");
+                const change_property = x.change_property.withFormat(u8);
+                var msg_buf: [change_property.getLen(window_name.len)]u8 = undefined;
+                change_property.serialize(&msg_buf, .{
+                    .mode = .replace,
+                    .window_id = ids.window,
+                    .property = custom_app_id_atom,
+                    .type = x.Atom.STRING,
+                    .values = window_name,
+                });
+                try conn.send(msg_buf[0..]);
+            }
+        }
+
         // Register for events from the X Input extension for when the mouse is clicked
         {
             var event_masks = [_]x.inputext.EventMask{.{
@@ -216,8 +259,9 @@ const MainProgram = struct {
         }
 
         // Try to make this window always on top (above `screen_play` in the tests). The
-        // real magic is the `override_redirect: false` but this is also the proper hint
-        // to send.
+        // real magic is the `override_redirect: false` (which would put this on top of
+        // everything with a proper window manager) but this is also the proper hint to
+        // send in any case.
         {
             var msg: [x.configure_window.max_len]u8 = undefined;
             const len = x.configure_window.serialize(&msg, .{
@@ -259,6 +303,7 @@ const MainProgram = struct {
                 if (data.len < msg_len)
                     break;
                 buffer.release(msg_len);
+
                 //buf.resetIfEmpty();
                 switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
                     .err => |msg| {

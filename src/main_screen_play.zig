@@ -96,7 +96,7 @@ pub fn main() !void {
     defer double_buffer.deinit(); // not necessary but good to test
     std.log.info("Read buffer capacity is {}", .{double_buffer.half_len});
     var buffer = double_buffer.contiguousReadBuffer();
-    // const buffer_limit = buffer.half_len;
+    const buffer_limit = buffer.half_len;
 
     // TODO: maybe need to call conn.setup.verify or something?
 
@@ -164,6 +164,92 @@ pub fn main() !void {
         &state,
     );
 
+    // During tests, find the `aim_analyzer` window so we can stack our window below it.
+    {
+        {
+            var msg_buf: [x.query_tree.len]u8 = undefined;
+            x.query_tree.serialize(&msg_buf, screen.root);
+            try conn.send(msg_buf[0..]);
+        }
+        const window_list = blk: {
+            const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
+            try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+            switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+                .reply => |msg_reply| {
+                    const msg: *x.query_tree.Reply = @ptrCast(msg_reply);
+                    std.log.debug("query_tree found {d} child windows", .{msg.num_windows});
+
+                    const owned_window_list = try allocator.alignedAlloc(u32, 4, msg.num_windows);
+                    @memcpy(owned_window_list, msg.getWindowList());
+
+                    break :blk owned_window_list;
+                },
+                else => |msg| {
+                    std.log.err("expected a reply for `x.query_tree` but got {}", .{msg});
+                    return error.ExpectedReplyForQueryTree;
+                },
+            }
+        };
+        defer allocator.free(window_list);
+        // Figure out the atom for our custom application ID property
+        const custom_app_id_atom = try common.intern_atom(
+            conn.sock,
+            &buffer,
+            comptime x.Slice(u16, [*]const u8).initComptime("madlittlemods.app_id"),
+        );
+        // Find the matching window ID with the custom application ID property of "aim_analyzer"
+        const opt_aim_analyzer_window_id = blk: {
+            for (window_list) |window_id| {
+                // Fetch the custom application ID property for each window
+                {
+                    var msg_buf: [x.get_property.len]u8 = undefined;
+                    x.get_property.serialize(&msg_buf, .{
+                        .window_id = ids.window,
+                        .property = custom_app_id_atom,
+                        .type = x.Atom.STRING,
+                        .offset = 0,
+                        .len = 64,
+                        .delete = false,
+                    });
+                    try conn.send(msg_buf[0..]);
+                }
+                const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
+                try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+                switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+                    .reply => |msg_reply| {
+                        const msg: *x.get_property.Reply = @ptrCast(msg_reply);
+                        const opt_application_id = try msg.getValueBytes();
+                        if (opt_application_id) |application_id| {
+                            if (std.mem.eql(u8, application_id, "aim_analyzer")) {
+                                break :blk window_id;
+                            }
+                        }
+                    },
+                    else => |msg| {
+                        std.log.err("expected a reply for `x.get_property` but got {}", .{msg});
+                        return error.ExpectedReplyForGetProperty;
+                    },
+                }
+            }
+
+            break :blk null;
+        };
+
+        // Try to make this window on the bottom (below the main `aim_analyzer` in the
+        // tests).
+        if (opt_aim_analyzer_window_id) |aim_analyzer_window_id| {
+            std.log.debug("Stacking screen_play window below aim_analyzer window ID {}", .{aim_analyzer_window_id});
+            var msg: [x.configure_window.max_len]u8 = undefined;
+            const len = x.configure_window.serialize(&msg, .{
+                .window_id = ids.window,
+            }, .{
+                .stack_mode = .below,
+                .sibling = aim_analyzer_window_id,
+            });
+            try conn.send(msg[0..len]);
+        }
+    }
+
     // Show the window. In the X11 protocol is called mapping a window, and hiding a
     // window is called unmapping. When windows are initially created, they are unmapped
     // (or hidden).
@@ -171,18 +257,6 @@ pub fn main() !void {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, ids.window);
         try conn.send(&msg);
-    }
-
-    // Try to make this window on the bottom (below the main `aim_analyzer` in the
-    // tests).
-    {
-        var msg: [x.configure_window.max_len]u8 = undefined;
-        const len = x.configure_window.serialize(&msg, .{
-            .window_id = ids.window,
-        }, .{
-            .stack_mode = .below,
-        });
-        try conn.send(msg[0..len]);
     }
 
     var render_context = render.RenderContext{

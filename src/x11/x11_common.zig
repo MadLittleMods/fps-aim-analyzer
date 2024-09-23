@@ -263,3 +263,31 @@ pub fn getPutImageDataLenBytes(
 
     return data_len_bytes;
 }
+
+pub fn intern_atom(sock: std.os.socket_t, buffer: *x.ContiguousReadBuffer, comptime atom_name: x.Slice(u16, [*]const u8)) !x.Atom {
+    const reader = common.SocketReader{ .context = sock };
+
+    {
+        var msg_buf: [x.intern_atom.getLen(atom_name.len)]u8 = undefined;
+        x.intern_atom.serialize(&msg_buf, .{
+            .only_if_exists = false,
+            .name = atom_name,
+        });
+        try common.send(sock, msg_buf[0..]);
+    }
+    const atom: x.Atom = blk: {
+        _ = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
+        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+            .reply => |msg_reply| {
+                const atom = x.readIntNative(u32, msg_reply.reserve_min[0..]);
+                break :blk @as(x.Atom, @enumFromInt(atom));
+            },
+            else => |msg| {
+                std.log.err("expected a reply for `x.intern_atom` but got {}", .{msg});
+                return error.ExpectedReplyForInternAtom;
+            },
+        }
+    };
+
+    return atom;
+}
