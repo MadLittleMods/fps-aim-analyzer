@@ -166,6 +166,7 @@ pub fn main() !void {
 
     // During tests, find the `aim_analyzer` window so we can stack our window below it.
     {
+        // First, list all the child windows of the root window
         {
             var message_buffer: [x.query_tree.len]u8 = undefined;
             x.query_tree.serialize(&message_buffer, screen.root);
@@ -198,6 +199,7 @@ pub fn main() !void {
             &buffer,
             comptime x.Slice(u16, [*]const u8).initComptime("madlittlemods.app_id"),
         );
+
         // Find the matching window ID with the custom application ID property of "aim_analyzer"
         const opt_aim_analyzer_window_id = blk: {
             for (window_list) |window_id| {
@@ -236,8 +238,7 @@ pub fn main() !void {
             break :blk null;
         };
 
-        // Try to make this window on the bottom (below the main `aim_analyzer` in the
-        // tests).
+        // Update the window to be below the main `aim_analyzer` in the tests.
         if (opt_aim_analyzer_window_id) |aim_analyzer_window_id| {
             std.log.debug("Stacking screen_play window below aim_analyzer window ID {}", .{aim_analyzer_window_id});
             var msg: [x.configure_window.max_len]u8 = undefined;
