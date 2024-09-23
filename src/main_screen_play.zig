@@ -167,9 +167,9 @@ pub fn main() !void {
     // During tests, find the `aim_analyzer` window so we can stack our window below it.
     {
         {
-            var msg_buf: [x.query_tree.len]u8 = undefined;
-            x.query_tree.serialize(&msg_buf, screen.root);
-            try conn.send(msg_buf[0..]);
+            var message_buffer: [x.query_tree.len]u8 = undefined;
+            x.query_tree.serialize(&message_buffer, screen.root);
+            try conn.send(message_buffer[0..]);
         }
         const window_list = blk: {
             const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
@@ -203,8 +203,8 @@ pub fn main() !void {
             for (window_list) |window_id| {
                 // Fetch the custom application ID property for each window
                 {
-                    var msg_buf: [x.get_property.len]u8 = undefined;
-                    x.get_property.serialize(&msg_buf, .{
+                    var message_buffer: [x.get_property.len]u8 = undefined;
+                    x.get_property.serialize(&message_buffer, .{
                         .window_id = window_id,
                         .property = custom_app_id_atom,
                         .type = x.Atom.STRING,
@@ -212,7 +212,7 @@ pub fn main() !void {
                         .len = 64,
                         .delete = false,
                     });
-                    try conn.send(msg_buf[0..]);
+                    try conn.send(message_buffer[0..]);
                 }
                 const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
                 try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);

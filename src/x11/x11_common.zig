@@ -156,10 +156,10 @@ pub fn connect(allocator: std.mem.Allocator) !ConnectResult {
 
         // Try no authentication
         std.log.debug("trying no auth", .{});
-        var msg_buf: [x.connect_setup.getLen(0, 0)]u8 = undefined;
+        var message_buffer: [x.connect_setup.getLen(0, 0)]u8 = undefined;
         if (try connectSetup(
             sock,
-            &msg_buf,
+            &message_buffer,
             .{ .ptr = undefined, .len = 0 },
             .{ .ptr = undefined, .len = 0 },
         )) |reply_len| {
@@ -268,12 +268,12 @@ pub fn intern_atom(sock: std.os.socket_t, buffer: *x.ContiguousReadBuffer, compt
     const reader = common.SocketReader{ .context = sock };
 
     {
-        var msg_buf: [x.intern_atom.getLen(atom_name.len)]u8 = undefined;
-        x.intern_atom.serialize(&msg_buf, .{
+        var message_buffer: [x.intern_atom.getLen(atom_name.len)]u8 = undefined;
+        x.intern_atom.serialize(&message_buffer, .{
             .only_if_exists = false,
             .name = atom_name,
         });
-        try common.send(sock, msg_buf[0..]);
+        try common.send(sock, message_buffer[0..]);
     }
     const atom: x.Atom = blk: {
         _ = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));

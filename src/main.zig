@@ -169,15 +169,15 @@ const MainProgram = struct {
         {
             const window_name = comptime x.Slice(u16, [*]const u8).initComptime("Aim Analyzer");
             const change_property = x.change_property.withFormat(u8);
-            var msg_buf: [change_property.getLen(window_name.len)]u8 = undefined;
-            change_property.serialize(&msg_buf, .{
+            var message_buffer: [change_property.getLen(window_name.len)]u8 = undefined;
+            change_property.serialize(&message_buffer, .{
                 .mode = .replace,
                 .window_id = ids.window,
                 .property = x.Atom.WM_NAME,
                 .type = x.Atom.STRING,
                 .values = window_name,
             });
-            try conn.send(msg_buf[0..]);
+            try conn.send(message_buffer[0..]);
         }
 
         // Set a custom application ID property that we can use to find the window from
@@ -195,15 +195,15 @@ const MainProgram = struct {
             {
                 const window_name = comptime x.Slice(u16, [*]const u8).initComptime("aim_analyzer");
                 const change_property = x.change_property.withFormat(u8);
-                var msg_buf: [change_property.getLen(window_name.len)]u8 = undefined;
-                change_property.serialize(&msg_buf, .{
+                var message_buffer: [change_property.getLen(window_name.len)]u8 = undefined;
+                change_property.serialize(&message_buffer, .{
                     .mode = .replace,
                     .window_id = ids.window,
                     .property = custom_app_id_atom,
                     .type = x.Atom.STRING,
                     .values = window_name,
                 });
-                try conn.send(msg_buf[0..]);
+                try conn.send(message_buffer[0..]);
             }
         }
 
