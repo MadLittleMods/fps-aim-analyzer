@@ -17,6 +17,7 @@ Documentation:
  - `xcb` client library for C projects:
     - Docs: https://xcb.freedesktop.org/
     - Source: https://gitlab.freedesktop.org/xorg/lib/libxcb
+    - Protocol XML definitions: https://gitlab.freedesktop.org/xorg/proto/xcbproto
 
 Guides:
 
@@ -49,7 +50,111 @@ not the same thing.
 x11trace ./zig-out/bin/aim-analyzer
 ```
 
-Determine the color depth of your window or the root window ([via
+For other tools, the first thing you'll need is the window ID. One easy option is to use
+`xwininfo` to find the window ID of a window:
+```sh
+# Run this command and click on the window to get the window ID and a bunch of other info
+xwininfo
+
+# Get the window tree
+xwininfo -root -tree
+
+# Get the window ID of the window under the cursor
+xdotool getmouselocation
+```
+
+You can use `xev` to monitor X events (you can use the hex or decimal version of the window ID).
+
+```sh
+# Listen for events for the specific window ID
+xev -id 0xcc00003
+```
+
+`xev` has an `-event` mask option but it only works as an allowlist, not a
+denylist. We can use `awk` to filter out and exclude the events that are really noisy.
+```sh
+xev -id 0xd000003 | awk '/^(MotionNotify|KeyPress|KeyRelease|KeymapNotify|EnterNotify|LeaveNotify|FocusIn|FocusOut)/ {skip=1} skip==1 && NF==0 {skip=0; next} !skip'
+```
+
+Explaination of the `awk` command:
+
+ 1. `/^(MotionNotify|KeyPress|KeyRelease|KeymapNotify|EnterNotify|LeaveNotify|FocusIn|FocusOut)/ {skip=1}`
+    - This pattern matches lines starting with any of the specified event types.
+    - When a match is found, it sets the skip variable to `1`.
+ 1. `skip==1 && NF==0 {skip=0; next}`
+    - This condition checks if `skip` is `1` (we're in skipping mode) and if the current line is empty (`NF==0`).
+    - If both are true, it sets `skip` back to `0` and uses next to move to the next line without printing.
+    - This effectively skips the empty line that ends the block we want to omit.
+ 1. `!skip`
+    - This is the condition for printing a line.
+    - It prints the line if skip is `0` (false).
+    - When `skip` is 1, this condition is false, so lines are not printed.
+
+
+You can use `xprop` to get the properties of a window. These are more relevant when
+running with a window manager that will pick up these hints and apply them to the
+window.
+```sh
+# Example is from a borderless fullscreen Halo Infinite window
+# (notice `_NET_WM_STATE_FULLSCREEN`, and `_NET_FRAME_EXTENTS = 0, 0, 0, 0`)
+$ xprop -id 0xd000003
+_NET_WM_ICON_GEOMETRY(CARDINAL) = 1810, 2100, 60, 60
+_NET_FRAME_EXTENTS(CARDINAL) = 0, 0, 0, 0
+_NET_WM_ALLOWED_ACTIONS(ATOM) = _NET_WM_ACTION_CLOSE, _NET_WM_ACTION_ABOVE, _NET_WM_ACTION_BELOW, _NET_WM_ACTION_FULLSCREEN, _NET_WM_ACTION_MOVE, _NET_WM_ACTION_CHANGE_DESKTOP, _NET_WM_ACTION_STICK
+WM_STATE(WM_STATE):
+                window state: Normal
+                icon window: 0x141aa700
+_NET_WM_DESKTOP(CARDINAL) = 0
+_NET_WM_ICON(CARDINAL) =        Icon (16 x 16):
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+        ████████████████████████████████
+
+
+_NET_WM_BYPASS_COMPOSITOR(CARDINAL) = 1
+_NET_WM_STATE(ATOM) = _NET_WM_STATE_FULLSCREEN
+_NET_WM_NAME(UTF8_STRING) = "Halo Infinite"
+WM_ICON_NAME(STRING) = "Halo Infinite"
+WM_NAME(STRING) = "Halo Infinite"
+_WINE_HWND_EXSTYLE(CARDINAL) = 0
+_WINE_HWND_STYLE(CARDINAL) = 335544320
+WM_HINTS(WM_HINTS):
+                Client accepts input or input focus: True
+                Initial state is Normal State.
+                bitmap id # to use for icon: 0xdc00023
+                bitmap id # of mask for icon: 0xdc00025
+                window id # of group leader: 0xde00003
+_NET_WM_WINDOW_TYPE(ATOM) = _NET_WM_WINDOW_TYPE_NORMAL
+_MOTIF_WM_HINTS(_MOTIF_WM_HINTS) = 0x3, 0x26, 0x0, 0x0, 0x0
+WM_NORMAL_HINTS(WM_SIZE_HINTS):
+                program specified location: 0, 0
+                window gravity: Static
+_NET_WM_USER_TIME_WINDOW(WINDOW): window id # 0xdc00012
+XdndAware(ATOM) = BITMAP
+_NET_WM_PID(CARDINAL) = 925027
+WM_LOCALE_NAME(STRING) = "en_US.UTF-8"
+WM_CLIENT_MACHINE(STRING) = "some-pc"
+WM_CLASS(STRING) = "steam_app_1240440", "steam_app_1240440"
+WM_PROTOCOLS(ATOM): protocols  WM_DELETE_WINDOW, _NET_WM_PING
+STEAM_GAME(CARDINAL) = 1240440
+```
+
+##### Determine the color depth of your window or the root window
+
+([via
 StackOverflow](https://stackoverflow.com/a/12345678/1097920)):
 
 ```diff
@@ -83,7 +188,7 @@ StackOverflow](https://stackoverflow.com/a/12345678/1097920)):
   [...]
 ```
 
-Finding installed extensions to the X.org server:
+##### Finding installed extensions to the X.org server:
 
 ([via StackOverflow](https://askubuntu.com/questions/995954/how-to-list-extensions-of-x-server-in-ubuntu-16-04/995962#995962))
 ```sh

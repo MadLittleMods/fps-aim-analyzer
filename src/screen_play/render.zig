@@ -217,14 +217,60 @@ pub fn createResources(
             //
             // Whether this window overrides structure control facilities. Basically, a
             // suggestion whether the window manager to decorate this window (false) or
-            // we want to override the behavior. We set this to true to disable the
-            // window controls (basically a borderless window).
-            .override_redirect = true,
+            // we want to override the behavior.
+            //
+            // Normally if we set this to `true`, this would be a dead-simple way to get
+            // a border-less window without decorations. But we set this to `false` so
+            // that it doesn't try to fight with us in our test environment to be on
+            // top. We instead be set window properties to hint that it's fullscreen to
+            // the window manager and stack it below the `aim_analyzer window if it
+            // exists. And when there is no window manager we don't need to worry about
+            // setting the properties anyway.
+            .override_redirect = false,
             // .save_under = true,
             .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
             // .dont_propagate = 1,
         });
         try common.send(sock, message_buffer[0..len]);
+    }
+
+    // Set window properties to indicate/hint that we are trying to be fullscreen and
+    // play nice with window managers:
+    // - `_NET_WM_STATE`(`ATOM`): `_NET_WM_STATE_FULLSCREEN`
+    {
+        const wm_state_atom = try common.intern_atom(
+            sock,
+            buffer,
+            comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_STATE"),
+        );
+        const wm_state_fullscreen_atom = try common.intern_atom(
+            sock,
+            buffer,
+            comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_STATE_FULLSCREEN"),
+        );
+
+        // Set the property
+        //
+        // FIXME: According to the spec
+        // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.8),
+        // we should be using `x.send_event` to send a `_NET_WM_STATE` client event to
+        // the root window instead of setting this directly. Practically, using
+        // `x.change_property` to set the property directly works but may not work with
+        // all window managers.
+        {
+            const values = [_]u32{@intFromEnum(wm_state_fullscreen_atom)};
+
+            const change_property = x.change_property.withFormat(u32);
+            var message_buffer: [change_property.getLen(1)]u8 = undefined;
+            change_property.serialize(&message_buffer, .{
+                .mode = .replace,
+                .window_id = ids.window,
+                .property = wm_state_atom,
+                .type = x.Atom.ATOM,
+                .values = x.Slice(u16, [*]const u32){ .ptr = &values, .len = values.len },
+            });
+            try common.send(sock, message_buffer[0..]);
+        }
     }
 
     // Create a pixmap drawable to capture the screenshot onto
@@ -315,21 +361,16 @@ pub fn createResources(
         switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.render.query_pict_formats.Reply = @ptrCast(msg_reply);
-                // std.log.debug("RENDER extension: pict formats num_formats={}, num_screens={}, num_depths={}, num_visuals={}", .{
-                //     msg.num_formats,
-                //     msg.num_screens,
-                //     msg.num_depths,
-                //     msg.num_visuals,
-                // });
-                // for (msg.getPictureFormats(), 0..) |format, i| {
-                //     std.log.debug("RENDER extension: pict format ({}) {any}", .{
-                //         i,
-                //         format,
-                //     });
-                // }
+                const picture_formats = msg.getPictureFormats();
                 break :blk .{
-                    .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(msg.getPictureFormats()[0..], 24),
-                    .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(msg.getPictureFormats()[0..], 32),
+                    .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(
+                        picture_formats,
+                        24,
+                    ),
+                    .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(
+                        picture_formats,
+                        32,
+                    ),
                 };
             },
             else => |msg| {
