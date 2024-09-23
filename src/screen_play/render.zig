@@ -233,10 +233,44 @@ pub fn createResources(
         try common.send(sock, message_buffer[0..len]);
     }
 
-    // TODO: Set window properties to indicate that we are trying to be fullscreen and
+    // Set window properties to indicate/hint that we are trying to be fullscreen and
     // play nice with window managers:
-    // - `_NET_WM_STATE`: `_NET_WM_STATE_FULLSCREEN`
-    // - `_NET_FRAME_EXTENTS`: 0, 0, 0, 0
+    // - `_NET_WM_STATE`(`ATOM`): `_NET_WM_STATE_FULLSCREEN`
+    {
+        const wm_state_atom = try common.intern_atom(
+            sock,
+            buffer,
+            comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_STATE"),
+        );
+        const wm_state_fullscreen_atom = try common.intern_atom(
+            sock,
+            buffer,
+            comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_STATE_FULLSCREEN"),
+        );
+
+        // Set the property
+        //
+        // FIXME: According to the spec
+        // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.8),
+        // we should be using `x.send_event` to send a `_NET_WM_STATE` client event to
+        // the root window instead of setting this directly. Practically, using
+        // `x.change_property` to set the property directly works but may not work with
+        // all window managers.
+        {
+            const values = [_]u32{@intFromEnum(wm_state_fullscreen_atom)};
+
+            const change_property = x.change_property.withFormat(u32);
+            var message_buffer: [change_property.getLen(1)]u8 = undefined;
+            change_property.serialize(&message_buffer, .{
+                .mode = .replace,
+                .window_id = ids.window,
+                .property = wm_state_atom,
+                .type = x.Atom.ATOM,
+                .values = x.Slice(u16, [*]const u32){ .ptr = &values, .len = values.len },
+            });
+            try common.send(sock, message_buffer[0..]);
+        }
+    }
 
     // Create a pixmap drawable to capture the screenshot onto
     {

@@ -191,6 +191,7 @@ pub fn main() !void {
             }
         };
         defer allocator.free(window_list);
+
         // Figure out the atom for our custom application ID property
         const custom_app_id_atom = try common.intern_atom(
             conn.sock,
