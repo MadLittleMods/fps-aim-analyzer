@@ -375,85 +375,87 @@ pub fn main() !void {
             }
         }
 
-        // {
-        //     const receive_buffer = buffer.nextReadBuffer();
-        //     if (receive_buffer.len == 0) {
-        //         std.log.err("buffer size {} not big enough!", .{buffer.half_len});
-        //         return 1;
-        //     }
-        //     const len = try x.readSock(conn.sock, receive_buffer, 0);
-        //     if (len == 0) {
-        //         std.log.info("X server connection closed", .{});
-        //         return 0;
-        //     }
-        //     buffer.reserve(len);
-        // }
-
         // while (true) {
-        //     const data = buffer.nextReservedBuffer();
-        //     if (data.len < 32)
-        //         break;
-        //     const msg_len = x.parseMsgLen(data[0..32].*);
-        //     if (data.len < msg_len)
-        //         break;
-        //     buffer.release(msg_len);
-        //     //buf.resetIfEmpty();
-        //     switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
-        //         .err => |msg| {
-        //             std.log.err("Received X error: {}", .{msg});
+        //     {
+        //         const receive_buffer = buffer.nextReadBuffer();
+        //         if (receive_buffer.len == 0) {
+        //             std.log.err("buffer size {} not big enough!", .{buffer.half_len});
         //             return 1;
-        //         },
-        //         .reply => |msg| {
-        //             std.log.info("todo: handle a reply message {}", .{msg});
-        //             return error.TodoHandleReplyMessage;
-        //         },
-        //         .generic_extension_event => |msg| {
-        //             std.log.info("TODO: handle a GE generic event {}", .{msg});
-        //             return error.TodoHandleGenericExtensionEvent;
-        //         },
-        //         .key_press => |msg| {
-        //             std.log.info("key_press: keycode={}", .{msg.keycode});
-        //         },
-        //         .key_release => |msg| {
-        //             std.log.info("key_release: keycode={}", .{msg.keycode});
-        //         },
-        //         .button_press => |msg| {
-        //             std.log.info("button_press: {}", .{msg});
-        //         },
-        //         .button_release => |msg| {
-        //             std.log.info("button_release: {}", .{msg});
-        //         },
-        //         .enter_notify => |msg| {
-        //             std.log.info("enter_window: {}", .{msg});
-        //         },
-        //         .leave_notify => |msg| {
-        //             std.log.info("leave_window: {}", .{msg});
-        //         },
-        //         .motion_notify => |msg| {
-        //             // too much logging
-        //             //std.log.info("pointer_motion: {}", .{msg});
-        //             _ = msg;
-        //         },
-        //         .keymap_notify => |msg| {
-        //             std.log.info("keymap_state: {}", .{msg});
-        //         },
-        //         .expose => |msg| {
-        //             std.log.info("expose: {}", .{msg});
-        //             try render_context.render();
-        //         },
-        //         .mapping_notify => |msg| {
-        //             std.log.info("mapping_notify: {}", .{msg});
-        //         },
-        //         .no_exposure => |msg| std.debug.panic("unexpected no_exposure {}", .{msg}),
-        //         .unhandled => |msg| {
-        //             std.log.info("todo: server msg {}", .{msg});
-        //             return error.UnhandledServerMsg;
-        //         },
-        //         .map_notify,
-        //         .reparent_notify,
-        //         .configure_notify,
-        //         // We did not register for these
-        //         => @panic("Received unexpected event event that we did not register for"),
+        //         }
+        //         const len = try x.readSock(conn.sock, receive_buffer, 0);
+        //         if (len == 0) {
+        //             std.log.info("X server connection closed", .{});
+        //             return 0;
+        //         }
+        //         buffer.reserve(len);
+        //     }
+
+        //     while (true) {
+        //         const data = buffer.nextReservedBuffer();
+        //         if (data.len < 32)
+        //             break;
+        //         const msg_len = x.parseMsgLen(data[0..32].*);
+        //         if (data.len < msg_len)
+        //             break;
+        //         buffer.release(msg_len);
+        //         //buf.resetIfEmpty();
+        //         switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
+        //             .err => |msg| {
+        //                 std.log.err("Received X error: {}", .{msg});
+        //                 return 1;
+        //             },
+        //             .reply => |msg| {
+        //                 std.log.info("todo: handle a reply message {}", .{msg});
+        //                 return error.TodoHandleReplyMessage;
+        //             },
+        //             .generic_extension_event => |msg| {
+        //                 std.log.info("TODO: handle a GE generic event {}", .{msg});
+        //                 return error.TodoHandleGenericExtensionEvent;
+        //             },
+        //             .key_press => |msg| {
+        //                 std.log.info("key_press: keycode={}", .{msg.keycode});
+        //             },
+        //             .key_release => |msg| {
+        //                 std.log.info("key_release: keycode={}", .{msg.keycode});
+        //             },
+        //             .button_press => |msg| {
+        //                 std.log.info("button_press: {}", .{msg});
+        //             },
+        //             .button_release => |msg| {
+        //                 std.log.info("button_release: {}", .{msg});
+        //             },
+        //             .enter_notify => |msg| {
+        //                 std.log.info("enter_window: {}", .{msg});
+        //             },
+        //             .leave_notify => |msg| {
+        //                 std.log.info("leave_window: {}", .{msg});
+        //             },
+        //             .motion_notify => |msg| {
+        //                 // too much logging
+        //                 //std.log.info("pointer_motion: {}", .{msg});
+        //                 _ = msg;
+        //             },
+        //             .keymap_notify => |msg| {
+        //                 std.log.info("keymap_state: {}", .{msg});
+        //             },
+        //             .expose => |msg| {
+        //                 std.log.info("expose: {}", .{msg});
+        //                 try render_context.render();
+        //             },
+        //             .mapping_notify => |msg| {
+        //                 std.log.info("mapping_notify: {}", .{msg});
+        //             },
+        //             .no_exposure => |msg| std.debug.panic("unexpected no_exposure {}", .{msg}),
+        //             .unhandled => |msg| {
+        //                 std.log.info("todo: server msg {}", .{msg});
+        //                 return error.UnhandledServerMsg;
+        //             },
+        //             .map_notify,
+        //             .reparent_notify,
+        //             .configure_notify,
+        //             // We did not register for these
+        //             => @panic("Received unexpected event event that we did not register for"),
+        //         }
         //     }
         // }
     }
