@@ -156,10 +156,10 @@ pub fn connect(allocator: std.mem.Allocator) !ConnectResult {
 
         // Try no authentication
         std.log.debug("trying no auth", .{});
-        var msg_buf: [x.connect_setup.getLen(0, 0)]u8 = undefined;
+        var message_buffer: [x.connect_setup.getLen(0, 0)]u8 = undefined;
         if (try connectSetup(
             sock,
-            &msg_buf,
+            &message_buffer,
             .{ .ptr = undefined, .len = 0 },
             .{ .ptr = undefined, .len = 0 },
         )) |reply_len| {
@@ -262,4 +262,32 @@ pub fn getPutImageDataLenBytes(
     const data_len_bytes = height * scanline_len;
 
     return data_len_bytes;
+}
+
+pub fn intern_atom(sock: std.os.socket_t, buffer: *x.ContiguousReadBuffer, comptime atom_name: x.Slice(u16, [*]const u8)) !x.Atom {
+    const reader = common.SocketReader{ .context = sock };
+
+    {
+        var message_buffer: [x.intern_atom.getLen(atom_name.len)]u8 = undefined;
+        x.intern_atom.serialize(&message_buffer, .{
+            .only_if_exists = false,
+            .name = atom_name,
+        });
+        try common.send(sock, message_buffer[0..]);
+    }
+    const atom: x.Atom = blk: {
+        _ = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
+        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+            .reply => |msg_reply| {
+                const atom = x.readIntNative(u32, msg_reply.reserve_min[0..]);
+                break :blk @as(x.Atom, @enumFromInt(atom));
+            },
+            else => |msg| {
+                std.log.err("expected a reply for `x.intern_atom` but got {}", .{msg});
+                return error.ExpectedReplyForInternAtom;
+            },
+        }
+    };
+
+    return atom;
 }

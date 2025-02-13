@@ -96,7 +96,7 @@ pub fn main() !void {
     defer double_buffer.deinit(); // not necessary but good to test
     std.log.info("Read buffer capacity is {}", .{double_buffer.half_len});
     var buffer = double_buffer.contiguousReadBuffer();
-    // const buffer_limit = buffer.half_len;
+    const buffer_limit = buffer.half_len;
 
     // TODO: maybe need to call conn.setup.verify or something?
 
@@ -163,6 +163,94 @@ pub fn main() !void {
         &extensions,
         &state,
     );
+
+    // During tests, find the `aim_analyzer` window so we can stack our window below it.
+    {
+        // First, list all the child windows of the root window
+        {
+            var message_buffer: [x.query_tree.len]u8 = undefined;
+            x.query_tree.serialize(&message_buffer, screen.root);
+            try conn.send(message_buffer[0..]);
+        }
+        const window_list = blk: {
+            const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
+            try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+            switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+                .reply => |msg_reply| {
+                    const msg: *x.query_tree.Reply = @ptrCast(msg_reply);
+                    std.log.debug("query_tree found {d} child windows", .{msg.num_windows});
+
+                    const owned_window_list = try allocator.alignedAlloc(u32, 4, msg.num_windows);
+                    @memcpy(owned_window_list, msg.getWindowList());
+
+                    break :blk owned_window_list;
+                },
+                else => |msg| {
+                    std.log.err("expected a reply for `x.query_tree` but got {}", .{msg});
+                    return error.ExpectedReplyForQueryTree;
+                },
+            }
+        };
+        defer allocator.free(window_list);
+
+        // Figure out the atom for our custom application ID property
+        const custom_app_id_atom = try common.intern_atom(
+            conn.sock,
+            &buffer,
+            comptime x.Slice(u16, [*]const u8).initComptime("madlittlemods.app_id"),
+        );
+
+        // Find the matching window ID with the custom application ID property of "aim_analyzer"
+        const opt_aim_analyzer_window_id = blk: {
+            for (window_list) |window_id| {
+                // Fetch the custom application ID property for each window
+                {
+                    var message_buffer: [x.get_property.len]u8 = undefined;
+                    x.get_property.serialize(&message_buffer, .{
+                        .window_id = window_id,
+                        .property = custom_app_id_atom,
+                        .type = x.Atom.STRING,
+                        .offset = 0,
+                        .len = 64,
+                        .delete = false,
+                    });
+                    try conn.send(message_buffer[0..]);
+                }
+                const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
+                try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
+                switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+                    .reply => |msg_reply| {
+                        const msg: *x.get_property.Reply = @ptrCast(msg_reply);
+                        const opt_application_id = try msg.getValueBytes();
+                        if (opt_application_id) |application_id| {
+                            if (std.mem.eql(u8, application_id, "aim_analyzer")) {
+                                break :blk window_id;
+                            }
+                        }
+                    },
+                    else => |msg| {
+                        std.log.err("expected a reply for `x.get_property` but got {}", .{msg});
+                        return error.ExpectedReplyForGetProperty;
+                    },
+                }
+            }
+
+            break :blk null;
+        };
+
+        // Update the window to be below the main `aim_analyzer` in the tests.
+        if (opt_aim_analyzer_window_id) |aim_analyzer_window_id| {
+            std.log.debug("Stacking screen_play window below aim_analyzer window ID {}", .{aim_analyzer_window_id});
+            var msg: [x.configure_window.max_len]u8 = undefined;
+            const len = x.configure_window.serialize(&msg, .{
+                .window_id = ids.window,
+            }, .{
+                .stack_mode = .below,
+                .sibling = aim_analyzer_window_id,
+            });
+            try conn.send(msg[0..len]);
+        }
+    }
 
     // Show the window. In the X11 protocol is called mapping a window, and hiding a
     // window is called unmapping. When windows are initially created, they are unmapped
@@ -287,85 +375,87 @@ pub fn main() !void {
             }
         }
 
-        // {
-        //     const receive_buffer = buffer.nextReadBuffer();
-        //     if (receive_buffer.len == 0) {
-        //         std.log.err("buffer size {} not big enough!", .{buffer.half_len});
-        //         return 1;
-        //     }
-        //     const len = try x.readSock(conn.sock, receive_buffer, 0);
-        //     if (len == 0) {
-        //         std.log.info("X server connection closed", .{});
-        //         return 0;
-        //     }
-        //     buffer.reserve(len);
-        // }
-
         // while (true) {
-        //     const data = buffer.nextReservedBuffer();
-        //     if (data.len < 32)
-        //         break;
-        //     const msg_len = x.parseMsgLen(data[0..32].*);
-        //     if (data.len < msg_len)
-        //         break;
-        //     buffer.release(msg_len);
-        //     //buf.resetIfEmpty();
-        //     switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
-        //         .err => |msg| {
-        //             std.log.err("Received X error: {}", .{msg});
+        //     {
+        //         const receive_buffer = buffer.nextReadBuffer();
+        //         if (receive_buffer.len == 0) {
+        //             std.log.err("buffer size {} not big enough!", .{buffer.half_len});
         //             return 1;
-        //         },
-        //         .reply => |msg| {
-        //             std.log.info("todo: handle a reply message {}", .{msg});
-        //             return error.TodoHandleReplyMessage;
-        //         },
-        //         .generic_extension_event => |msg| {
-        //             std.log.info("TODO: handle a GE generic event {}", .{msg});
-        //             return error.TodoHandleGenericExtensionEvent;
-        //         },
-        //         .key_press => |msg| {
-        //             std.log.info("key_press: keycode={}", .{msg.keycode});
-        //         },
-        //         .key_release => |msg| {
-        //             std.log.info("key_release: keycode={}", .{msg.keycode});
-        //         },
-        //         .button_press => |msg| {
-        //             std.log.info("button_press: {}", .{msg});
-        //         },
-        //         .button_release => |msg| {
-        //             std.log.info("button_release: {}", .{msg});
-        //         },
-        //         .enter_notify => |msg| {
-        //             std.log.info("enter_window: {}", .{msg});
-        //         },
-        //         .leave_notify => |msg| {
-        //             std.log.info("leave_window: {}", .{msg});
-        //         },
-        //         .motion_notify => |msg| {
-        //             // too much logging
-        //             //std.log.info("pointer_motion: {}", .{msg});
-        //             _ = msg;
-        //         },
-        //         .keymap_notify => |msg| {
-        //             std.log.info("keymap_state: {}", .{msg});
-        //         },
-        //         .expose => |msg| {
-        //             std.log.info("expose: {}", .{msg});
-        //             try render_context.render();
-        //         },
-        //         .mapping_notify => |msg| {
-        //             std.log.info("mapping_notify: {}", .{msg});
-        //         },
-        //         .no_exposure => |msg| std.debug.panic("unexpected no_exposure {}", .{msg}),
-        //         .unhandled => |msg| {
-        //             std.log.info("todo: server msg {}", .{msg});
-        //             return error.UnhandledServerMsg;
-        //         },
-        //         .map_notify,
-        //         .reparent_notify,
-        //         .configure_notify,
-        //         // We did not register for these
-        //         => @panic("Received unexpected event event that we did not register for"),
+        //         }
+        //         const len = try x.readSock(conn.sock, receive_buffer, 0);
+        //         if (len == 0) {
+        //             std.log.info("X server connection closed", .{});
+        //             return 0;
+        //         }
+        //         buffer.reserve(len);
+        //     }
+
+        //     while (true) {
+        //         const data = buffer.nextReservedBuffer();
+        //         if (data.len < 32)
+        //             break;
+        //         const msg_len = x.parseMsgLen(data[0..32].*);
+        //         if (data.len < msg_len)
+        //             break;
+        //         buffer.release(msg_len);
+        //         //buf.resetIfEmpty();
+        //         switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
+        //             .err => |msg| {
+        //                 std.log.err("Received X error: {}", .{msg});
+        //                 return 1;
+        //             },
+        //             .reply => |msg| {
+        //                 std.log.info("todo: handle a reply message {}", .{msg});
+        //                 return error.TodoHandleReplyMessage;
+        //             },
+        //             .generic_extension_event => |msg| {
+        //                 std.log.info("TODO: handle a GE generic event {}", .{msg});
+        //                 return error.TodoHandleGenericExtensionEvent;
+        //             },
+        //             .key_press => |msg| {
+        //                 std.log.info("key_press: keycode={}", .{msg.keycode});
+        //             },
+        //             .key_release => |msg| {
+        //                 std.log.info("key_release: keycode={}", .{msg.keycode});
+        //             },
+        //             .button_press => |msg| {
+        //                 std.log.info("button_press: {}", .{msg});
+        //             },
+        //             .button_release => |msg| {
+        //                 std.log.info("button_release: {}", .{msg});
+        //             },
+        //             .enter_notify => |msg| {
+        //                 std.log.info("enter_window: {}", .{msg});
+        //             },
+        //             .leave_notify => |msg| {
+        //                 std.log.info("leave_window: {}", .{msg});
+        //             },
+        //             .motion_notify => |msg| {
+        //                 // too much logging
+        //                 //std.log.info("pointer_motion: {}", .{msg});
+        //                 _ = msg;
+        //             },
+        //             .keymap_notify => |msg| {
+        //                 std.log.info("keymap_state: {}", .{msg});
+        //             },
+        //             .expose => |msg| {
+        //                 std.log.info("expose: {}", .{msg});
+        //                 try render_context.render();
+        //             },
+        //             .mapping_notify => |msg| {
+        //                 std.log.info("mapping_notify: {}", .{msg});
+        //             },
+        //             .no_exposure => |msg| std.debug.panic("unexpected no_exposure {}", .{msg}),
+        //             .unhandled => |msg| {
+        //                 std.log.info("todo: server msg {}", .{msg});
+        //                 return error.UnhandledServerMsg;
+        //             },
+        //             .map_notify,
+        //             .reparent_notify,
+        //             .configure_notify,
+        //             // We did not register for these
+        //             => @panic("Received unexpected event event that we did not register for"),
+        //         }
         //     }
         // }
     }

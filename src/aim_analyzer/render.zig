@@ -379,11 +379,11 @@ pub fn createResources(
                 const picture_formats = msg.getPictureFormats();
                 break :blk .{
                     .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(
-                        picture_formats[0..],
+                        picture_formats,
                         24,
                     ),
                     .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(
-                        picture_formats[0..],
+                        picture_formats,
                         32,
                     ),
                 };

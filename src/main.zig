@@ -115,6 +115,7 @@ const MainProgram = struct {
             screen.root,
             conn_setup_fixed_fields.resource_id_base,
         );
+        std.log.debug("ids: {any}", .{ids});
 
         const depth = 32;
 
@@ -270,6 +271,48 @@ const MainProgram = struct {
             allocator,
         );
 
+        // Set the window name
+        {
+            const window_name = comptime x.Slice(u16, [*]const u8).initComptime("Aim Analyzer");
+            const change_property = x.change_property.withFormat(u8);
+            var message_buffer: [change_property.getLen(window_name.len)]u8 = undefined;
+            change_property.serialize(&message_buffer, .{
+                .mode = .replace,
+                .window_id = ids.window,
+                .property = x.Atom.WM_NAME,
+                .type = x.Atom.STRING,
+                .values = window_name,
+            });
+            try conn.send(message_buffer[0..]);
+        }
+
+        // Set a custom application ID property that we can use to find the window from
+        // our screen_play app in the tests. This is better than just relying on the
+        // window name because other applications might be named the same thing and the
+        // window name could change during the lifetime of the application.
+        {
+            // Figure out the atom for our custom application ID property
+            const custom_app_id_atom = try common.intern_atom(
+                conn.sock,
+                &buffer,
+                comptime x.Slice(u16, [*]const u8).initComptime("madlittlemods.app_id"),
+            );
+
+            {
+                const window_name = comptime x.Slice(u16, [*]const u8).initComptime("aim_analyzer");
+                const change_property = x.change_property.withFormat(u8);
+                var message_buffer: [change_property.getLen(window_name.len)]u8 = undefined;
+                change_property.serialize(&message_buffer, .{
+                    .mode = .replace,
+                    .window_id = ids.window,
+                    .property = custom_app_id_atom,
+                    .type = x.Atom.STRING,
+                    .values = window_name,
+                });
+                try conn.send(message_buffer[0..]);
+            }
+        }
+
         // Register for events from the X Input extension for when the mouse is clicked
         {
             var event_masks = [_]x.inputext.EventMask{.{
@@ -378,6 +421,20 @@ const MainProgram = struct {
             allocator,
         );
 
+        // Try to make this window always on top (above `screen_play` in the tests). The
+        // real magic is the `override_redirect: false` (which would put this on top of
+        // everything with a proper window manager) but this is also the proper hint to
+        // send in any case.
+        {
+            var msg: [x.configure_window.max_len]u8 = undefined;
+            const len = x.configure_window.serialize(&msg, .{
+                .window_id = ids.window,
+            }, .{
+                .stack_mode = .above,
+            });
+            try conn.send(msg[0..len]);
+        }
+
         var render_context = render.RenderContext{
             .sock = &conn.sock,
             .ids = &ids,
@@ -416,6 +473,7 @@ const MainProgram = struct {
                 if (data.len < msg_len)
                     break;
                 buffer.release(msg_len);
+
                 //buf.resetIfEmpty();
                 switch (x.serverMsgTaggedUnion(@alignCast(data.ptr))) {
                     .err => |msg| {
@@ -570,9 +628,14 @@ const MainProgram = struct {
                         std.log.info("todo: unhandled server msg {}", .{msg});
                         return error.UnhandledServerMsg;
                     },
+                    .create_notify,
+                    .destroy_notify,
                     .map_notify,
+                    .unmap_notify,
                     .reparent_notify,
                     .configure_notify,
+                    .gravity_notify,
+                    .circulate_notify,
                     // We did not register for these
                     => @panic("Received unexpected event event that we did not register for"),
                 }
@@ -642,17 +705,8 @@ test "end-to-end: click to capture screenshot" {
     // keyframes
     try screen_play_process.spawn();
 
-    // Sleep a little bit so the main aim_analyzer process will display on top of the
-    // screen_play process. The delay allows the screen_play process to "map_window"
-    // before we start the main process.
-    //
-    // FIXME: It would be better to detect this properly instead of sleeping for an
-    // arbitrary amount of time. We could wait to see `map_window` request to the X11
-    // server or maybe we could listen for the `map_notify` event, or maybe just have
-    // the process emit some ready signal that we can detect.
-    std.time.sleep(0.5 * std.time.ns_per_s);
-
-    // Run the main aim_analyzer process in a background thread
+    // Run the main aim_analyzer process in a background thread. We use a thread instead
+    // of a child process so we can inspect the internal app state.
     var main_program = MainProgram{};
     const main_thread = try std.Thread.spawn(
         .{},
