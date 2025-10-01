@@ -25,6 +25,8 @@ const save_load_utils = @import("vision/ocr/save_load_utils.zig");
 const print_utils = @import("./utils/print_utils.zig");
 const formatEachItemInSlice = print_utils.formatEachItemInSlice;
 const printLabeledImage = print_utils.printLabeledImage;
+const child_process_utils = @import("utils/child_process_utils.zig");
+const ChildProcessRunner = child_process_utils.ChildProcessRunner;
 
 // We only expect the time between a left-click and the time it would take to see the
 // ammo counter go down by 1 to be at max 200ms.
@@ -363,24 +365,34 @@ const MainProgram = struct {
             x.map_window.serialize(&msg, ids.window);
             try conn.send(&msg);
         }
-        // Show the debug window
+        // Show the debug overlay window
         {
             var msg: [x.map_window.len]u8 = undefined;
             x.map_window.serialize(&msg, ids.debug_window);
             try conn.send(&msg);
         }
 
-        // TODO: Maybe remove. Just trying to make this window always on top (above
+        // Just trying to make the debug overlay window always on top (above
         // `screen_play` in the tests)
         {
             var msg: [x.configure_window.max_len]u8 = undefined;
             const len = x.configure_window.serialize(&msg, .{
-                .window_id = ids.window,
+                .window_id = ids.debug_window,
             }, .{
                 .stack_mode = .above,
             });
             try conn.send(msg[0..len]);
         }
+        // TODO: Maybe remove. Our app should be above everything else
+        // {
+        //     var msg: [x.configure_window.max_len]u8 = undefined;
+        //     const len = x.configure_window.serialize(&msg, .{
+        //         .window_id = ids.window,
+        //     }, .{
+        //         .stack_mode = .above,
+        //     });
+        //     try conn.send(msg[0..len]);
+        // }
 
         // Since the debug window covers the whole screen, we want to make it so that
         // mouse events aren't affected by it all. Make it completely
@@ -670,40 +682,50 @@ test {
 test "end-to-end: click to capture screenshot" {
     const allocator = std.testing.allocator;
 
-    // FIXME: Without a "compositing manager", the window will not show up as
-    // transparent. We could make a basic one from scratch using the X `COMPOSITE`
-    // extension. See https://magcius.github.io/xplain/article/composite.html for a
-    // breakdown on how compositing works. Normally, you'd get this same functionality
-    // for free via your desktop environment's window manager which probably includes a
-    // "compositing manager".
-
     // Ideally, we'd be able to build and run in the same command like `zig build
-    // run-main` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+    // run-screen_play` but https://github.com/ziglang/zig/issues/20853 prevents us from being
     // able to kill the process cleanly. So we have to build and run in separate
     // commands.
-    const build_argv = [_][]const u8{ "zig", "build", "screen_play" };
-    var build_process = std.ChildProcess.init(&build_argv, allocator);
-    // Prevent writing to `stdout` so the test runner doesn't hang,
-    // see https://github.com/ziglang/zig/issues/15091
-    build_process.stdin_behavior = .Ignore;
-    build_process.stdout_behavior = .Ignore;
-    build_process.stderr_behavior = .Ignore;
+    var x_compositing_manager_build_process_runner = try ChildProcessRunner.init(
+        "screen_play build",
+        &[_][]const u8{ "zig", "build", "x-compositing-manager" },
+        allocator,
+    );
+    defer x_compositing_manager_build_process_runner.deinit();
+    try x_compositing_manager_build_process_runner.waitForProcessToExitSuccessfully();
 
-    try build_process.spawn();
-    const build_term = try build_process.wait();
-    try std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term);
+    // Start the X compositing manager process. This is needed for transparent window
+    // support; useful for our debug overlay window which is transparent. Normally,
+    // you'd get this same functionality for free via your desktop environment's window
+    // manager which probably includes a "compositing manager" but virtual display
+    // environments like Xvfb and Xephyr do not include a window manager.
+    var x_compositing_manager_process_runner = try ChildProcessRunner.init(
+        "x-compositing-manager",
+        &[_][]const u8{"./zig-out/bin/x-compositing-manager"},
+        allocator,
+    );
+    defer x_compositing_manager_process_runner.deinit();
 
-    const screen_play_argv = [_][]const u8{"./zig-out/bin/screen_play"};
-    var screen_play_process = std.ChildProcess.init(&screen_play_argv, allocator);
-    // Prevent writing to `stdout` so the test runner doesn't hang,
-    // see https://github.com/ziglang/zig/issues/15091
-    screen_play_process.stdin_behavior = .Ignore;
-    screen_play_process.stdout_behavior = .Ignore;
-    screen_play_process.stderr_behavior = .Ignore;
+    // Ideally, we'd be able to build and run in the same command like `zig build
+    // run-screen_play` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+    // able to kill the process cleanly. So we have to build and run in separate
+    // commands.
+    var screen_play_build_process_runner = try ChildProcessRunner.init(
+        "screen_play build",
+        &[_][]const u8{ "zig", "build", "screen_play" },
+        allocator,
+    );
+    defer screen_play_build_process_runner.deinit();
+    try screen_play_build_process_runner.waitForProcessToExitSuccessfully();
 
     // Start the screen_play process. screen_play will start running through a series of
     // keyframes
-    try screen_play_process.spawn();
+    var screen_play_process_runner = try ChildProcessRunner.init(
+        "screen_play",
+        &[_][]const u8{"./zig-out/bin/screen_play"},
+        allocator,
+    );
+    defer screen_play_process_runner.deinit();
 
     // Run the main aim_analyzer process in a background thread. We use a thread instead
     // of a child process so we can inspect the internal app state.
@@ -717,9 +739,7 @@ test "end-to-end: click to capture screenshot" {
 
     // The screen_play process only ends after this call returns. screen_play will exit
     // after showing all keyframes.
-    const screen_play_term = try screen_play_process.wait();
-    // Term can be .Exited, .Signal, .Stopped, .Unknown
-    try std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, screen_play_term);
+    try screen_play_process_runner.waitForProcessToExitSuccessfully();
 
     // Analyze the state of the main process after we've simulated some game play.
     try std.testing.expect(main_program.state != null);
