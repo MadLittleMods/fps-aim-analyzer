@@ -30,6 +30,54 @@ pub const ConnectResult = struct {
     }
 };
 
+pub const XConnection = struct {
+    /// Connection to the X server.
+    socket: std.os.socket_t,
+    double_buffer: x.DoubleBuffer,
+    buffer: *x.ContiguousReadBuffer,
+    allocator: std.mem.Allocator,
+
+    pub fn init(
+        socket: std.os.socket_t,
+        /// Good rule of thumb is 1000 for events or 10000 for replies (for example, the
+        /// reply for `x.render.query_pict_formats` is 4888 bytes on my system)
+        buffer_size: usize,
+        allocator: std.mem.Allocator,
+    ) !@This() {
+        // Create a big buffer that we can use to read events and replies from the X server.
+        const double_buffer = try x.DoubleBuffer.init(
+            std.mem.alignForward(usize, buffer_size, std.mem.page_size),
+            .{ .memfd_name = "ZigX11DoubleBuffer" },
+        );
+        var buffer = try allocator.create(x.ContiguousReadBuffer);
+        buffer.* = double_buffer.contiguousReadBuffer();
+
+        return .{
+            .socket = socket,
+            .double_buffer = double_buffer,
+            .buffer = buffer,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *const XConnection) void {
+        self.double_buffer.deinit(); // not necessary but good to test
+        self.allocator.destroy(self.buffer);
+        // Shutdown the socket to wake up `std.os.recv(...)` with an error unblock the
+        // thread listening for events. The thread with the `recv()` call can close the
+        // socket the normal way, like a normal error happened. (see
+        // https://stackoverflow.com/questions/3589723/can-a-socket-be-closed-from-another-thread-when-a-send-recv-on-the-same-socket/27790293#27790293)
+        std.os.shutdown(self.socket, .both) catch {};
+    }
+
+    pub fn reader(self: @This()) SocketReader {
+        return .{ .context = self.socket };
+    }
+    pub fn send(self: @This(), data: []const u8) !void {
+        try common.send(self.socket, data);
+    }
+};
+
 pub fn connectSetupMaxAuth(
     sock: std.os.socket_t,
     comptime max_auth_len: usize,

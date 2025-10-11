@@ -24,31 +24,148 @@ const MainProgram = struct {
         };
 
         try x.wsaStartup();
-        const conn = try common.connect(allocator);
-        defer std.os.shutdown(conn.sock, .both) catch {};
-        defer conn.setup.deinit(allocator);
 
-        const screen = blk: {
-            const fixed = conn.setup.fixed();
-            inline for (@typeInfo(@TypeOf(fixed.*)).Struct.fields) |field| {
-                std.log.debug("{s}: {any}", .{ field.name, @field(fixed, field.name) });
+        // We establish two distinct connections to the X server:
+        //
+        // 1. Event Connection: Used for reading events in the main event loop.
+        //    - Make sure to call `x.change_window_attributes` on the windows you care about
+        //      listening for events on. Specify `.event_mask` with the events you want the
+        //      event loop to subscribe to.
+        // 2. Request Connection: Used for making one-shot requests and reading their replies.
+        //
+        // This dual-connection approach offers several benefits:
+        // - Clear Separation: It keeps event handling separate from one-shot requests.
+        // - Simplified Reply Handling: We can easily get replies to one-shot requests
+        //   without worrying about them being mixed with event messages.
+        // - No Complex Queuing: Unlike the xcb library, we avoid the need for a
+        //   cookie-based reply queue system.
+        //
+        // This design leads to cleaner, more maintainable code by reducing complexity
+        // in handling different types of X server interactions.
+        //
+        // 1. Create an X connection for the event loop
+        const x_event_connect_result = try common.connect(allocator);
+        defer x_event_connect_result.setup.deinit(allocator);
+        const x_event_connection = try common.XConnection.init(
+            x_event_connect_result.sock,
+            1000,
+            allocator,
+        );
+        defer x_event_connection.deinit();
+        // 2. Create an X connection for making one-off requests
+        const x_request_connect_result = try common.connect(allocator);
+        defer x_request_connect_result.setup.deinit(allocator);
+        const x_request_connection = try common.XConnection.init(
+            x_request_connect_result.sock,
+            8000,
+            allocator,
+        );
+        defer x_request_connection.deinit();
+
+        const conn_setup_fixed_fields = x_event_connect_result.setup.fixed();
+        // Print out some info about the X server we connected to
+        {
+            inline for (@typeInfo(@TypeOf(conn_setup_fixed_fields.*)).Struct.fields) |field| {
+                std.log.debug("{s}: {any}", .{ field.name, @field(conn_setup_fixed_fields, field.name) });
             }
-            std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(fixed.vendor_len)});
-            const format_list_offset = x.ConnectSetup.getFormatListOffset(fixed.vendor_len);
-            const format_list_limit = x.ConnectSetup.getFormatListLimit(format_list_offset, fixed.format_count);
-            var screen = conn.setup.getFirstScreenPtr(format_list_limit);
-            inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
-                std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
-            }
-            break :blk screen;
+            std.log.debug("vendor: {s}", .{try x_event_connect_result.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
+        }
+
+        const screen = common.getFirstScreenFromConnectionSetup(x_event_connect_result.setup);
+        inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
+            std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
+        }
+        std.log.info("root window ID {0} 0x{0x}", .{screen.root});
+
+        // We use the X Render extension for capturing screenshots and splatting them onto
+        // our window. Useful because their "composite" request works with mismatched depths
+        // between the source and destinations.
+        const optional_render_extension = try x11_extension_utils.getExtensionInfo(
+            x_request_connection,
+            "RENDER",
+        );
+        const render_extension = optional_render_extension orelse @panic("RENDER extension not found");
+
+        // We use the X Input extension to detect clicks on the game window (or whatever
+        // window) they happen to be on. Useful because we can detect clicks even when our
+        // window is not focused and doesn't have to be directly clicked.
+        const optional_input_extension = try x11_extension_utils.getExtensionInfo(
+            x_request_connection,
+            "XInputExtension",
+        );
+        const input_extension = optional_input_extension orelse @panic("XInputExtension extension not found");
+
+        // We must run the query_version request of each extension on every connection that
+        // interacts with the extension. Most extensions have this behavior in the spec that
+        // it will return a "request" error (BadRequest) if haven't negotiated the version
+        // of the extension.
+        //
+        // > The client must negotiate the version of the extension before executing
+        // > extension requests.  Behavior of the server is undefined otherwise.
+        //
+        // > The client must negotiate the version of the extension before executing
+        // > extension requests.  Otherwise, the server will return BadRequest for any
+        // > operations other than QueryVersion.
+        const x_connections = [_]common.XConnection{ x_event_connection, x_request_connection };
+        for (x_connections) |x_connection| {
+            try x_render_extension.ensureCompatibleVersionOfXRenderExtension(
+                x_connection,
+                &render_extension,
+                .{
+                    // We arbitrarily require version 0.11 of the X Render extension just
+                    // because it's the latest but came out in 2009 so it's pretty much
+                    // ubiquitous anyway. Feature-wise, we only use "Composite" which came out
+                    // in 0.0.
+                    //
+                    // For more info on what's changed in each version, see the "15. Extension
+                    // Versioning" section of the X Render extension protocol docs,
+                    // https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
+                    .major_version = 0,
+                    .minor_version = 11,
+                },
+            );
+
+            try x_input_extension.ensureCompatibleVersionOfXInputExtension(
+                x_connection,
+                &input_extension,
+                .{
+                    // We arbitrarily require version 0.11 of the X Render extension just
+                    // because it's the latest but came out in 2009 so it's pretty much
+                    // ubiquitous anyway. Feature-wise, we only use "Composite" which came out
+                    // in 0.0.
+                    //
+                    // For more info on what's changed in each version, see the "15. Extension
+                    // Versioning" section of the X Render extension protocol docs,
+                    // https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
+                    .major_version = 0,
+                    .minor_version = 11,
+                },
+            );
+        }
+
+        // Assemble a map of X extension info
+        const extensions = x11_extension_utils.Extensions(&.{ .render, .input }){
+            .render = render_extension,
+            .input = input_extension,
         };
 
+        // Since each connection has a `base_resource_id`, let's create most resources with
+        // the request connection since that's easier
         const ids = render.Ids.init(
             screen.root,
-            conn.setup.fixed().resource_id_base,
+            x_request_connect_result.setup.fixed().resource_id_base,
         );
         std.log.debug("ids: {any}", .{ids});
 
+        // There are a few X extensions that couple creating objects with receiving
+        // events from those objects. For example, they coupled creating the Damage
+        // object with tracking the DamageNotify events. In these cases, we have to use
+        // the event connection to create those objects.
+        // var event_connection_id_generator = render.IdGenerator.init(
+        //     x_event_connect_result.setup.fixed().resource_id_base,
+        // );
+
+        // We're using 32-bit depth so we can use ARGB colors that include alpha/transparency
         const depth = 32;
 
         const root_screen_dimensions = render_utils.Dimensions{
@@ -84,75 +201,6 @@ const MainProgram = struct {
             .max_screenshots_shown = max_screenshots_shown,
             .margin = margin,
             .padding = padding,
-        };
-
-        // Create a big buffer that we can use to read messages and replies from the X server.
-        const double_buffer = try x.DoubleBuffer.init(
-            std.mem.alignForward(usize, 8000, std.mem.page_size),
-            .{ .memfd_name = "ZigX11DoubleBuffer" },
-        );
-        defer double_buffer.deinit(); // not necessary but good to test
-        std.log.info("Read buffer capacity is {}", .{double_buffer.half_len});
-        var buffer = double_buffer.contiguousReadBuffer();
-        const buffer_limit = buffer.half_len;
-
-        // TODO: maybe need to call conn.setup.verify or something?
-
-        // We use the X Render extension for capturing screenshots and splatting them onto
-        // our window. Useful because their "composite" request works with mismatched depths
-        // between the source and destinations.
-        const optional_render_extension = try x11_extension_utils.getExtensionInfo(
-            conn.sock,
-            &buffer,
-            "RENDER",
-        );
-        const render_extension = optional_render_extension orelse @panic("RENDER extension not found");
-
-        try x_render_extension.ensureCompatibleVersionOfXRenderExtension(
-            conn.sock,
-            &buffer,
-            &render_extension,
-            .{
-                // We arbitrarily require version 0.11 of the X Render extension just
-                // because it's the latest but came out in 2009 so it's pretty much
-                // ubiquitous anyway. Feature-wise, we only use "Composite" which came out
-                // in 0.0.
-                //
-                // For more info on what's changed in each version, see the "15. Extension
-                // Versioning" section of the X Render extension protocol docs,
-                // https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
-                .major_version = 0,
-                .minor_version = 11,
-            },
-        );
-
-        // We use the X Input extension to detect clicks on the game window (or whatever
-        // window) they happen to be on. Useful because we can detect clicks even when our
-        // window is not focused and doesn't have to be directly clicked.
-        const optional_input_extension = try x11_extension_utils.getExtensionInfo(
-            conn.sock,
-            &buffer,
-            "XInputExtension",
-        );
-        const input_extension = optional_input_extension orelse @panic("XInputExtension extension not found");
-
-        try x_input_extension.ensureCompatibleVersionOfXInputExtension(
-            conn.sock,
-            &buffer,
-            &input_extension,
-            .{
-                // We arbitrarily require version 2.3 of the X Input extension
-                // because that's the latest version and is sufficiently old
-                // and ubiquitous.
-                .major_version = 2,
-                .minor_version = 3,
-            },
-        );
-
-        // Assemble a map of X extension info
-        const extensions = x11_extension_utils.Extensions(&.{ .render, .input }){
-            .render = render_extension,
-            .input = input_extension,
         };
 
         try render.createResources(
