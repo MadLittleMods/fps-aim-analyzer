@@ -273,6 +273,18 @@ const MainProgram = struct {
             allocator,
         );
 
+        // Set the `_NET_WM_PID` atom so we can later find the window ID by the PID
+        for ([_]u32{
+            // List any other windows we create from this process
+            ids.window,
+        }) |window_id| {
+            try common.set_window_pid_properties(
+                conn.sock,
+                &buffer,
+                window_id,
+            );
+        }
+
         // Set the window name
         {
             const window_name = comptime x.Slice(u16, [*]const u8).initComptime("Aim Analyzer");
