@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const x = @import("x");
 const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11/x11_extension_utils.zig");
@@ -171,62 +170,11 @@ const MainProgram = struct {
             // List any other windows we create from this process
             ids.window,
         }) |window_id| {
-            {
-                const wm_pid_atom = try common.intern_atom(
-                    conn.sock,
-                    &buffer,
-                    comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_PID"),
-                );
-
-                const pid: u32 = switch (builtin.os.tag) {
-                    .linux => blk: {
-                        const pid = std.os.linux.getpid();
-                        if (pid < 0) {
-                            std.log.err("Process ID (PID) unexpectedly negative (expected it to be positive) -> {d}", .{pid});
-                            return error.ProcessIdUnexpectedlyNegative;
-                        }
-
-                        break :blk @intCast(pid);
-                    },
-                    .windows => std.os.windows.kernel32.GetCurrentProcessId(),
-                    else => 0,
-                };
-
-                const pid_array = [_]u32{pid};
-                const change_property = x.change_property.withFormat(u32);
-                var message_buffer: [change_property.getLen(pid_array.len)]u8 = undefined;
-                change_property.serialize(&message_buffer, .{
-                    .mode = .replace,
-                    .window_id = window_id,
-                    .property = wm_pid_atom,
-                    .type = x.Atom.CARDINAL,
-                    .values = x.Slice(u16, [*]const u32){ .ptr = &pid_array, .len = pid_array.len },
-                });
-                try conn.send(message_buffer[0..]);
-            }
-            // "If _NET_WM_PID is set, the ICCCM-specified property WM_CLIENT_MACHINE MUST also be set."
-            // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
-            {
-                var host_name_buffer: [std.os.HOST_NAME_MAX]u8 = undefined;
-                // "While the ICCCM only requests that WM_CLIENT_MACHINE is set “ to a string
-                // that forms the name of the machine running the client as seen from the
-                // machine running the server” conformance to this specification requires that
-                // WM_CLIENT_MACHINE be set to the fully-qualified domain name of the client's
-                // host."
-                // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
-                const machine_name = try std.os.gethostname(&host_name_buffer);
-                const change_property = x.change_property.withFormat(u8);
-                var message_buffer = try allocator.alloc(u8, change_property.getLen(@intCast(machine_name.len)));
-                defer allocator.free(message_buffer);
-                change_property.serialize(message_buffer.ptr, .{
-                    .mode = .replace,
-                    .window_id = window_id,
-                    .property = x.Atom.WM_CLIENT_MACHINE,
-                    .type = x.Atom.STRING,
-                    .values = x.Slice(u16, [*]const u8){ .ptr = machine_name.ptr, .len = @intCast(machine_name.len) },
-                });
-                try conn.send(message_buffer[0..]);
-            }
+            try common.set_window_pid_properties(
+                conn.sock,
+                &buffer,
+                window_id,
+            );
         }
 
         // Set the window name
