@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assertions = @import("utils/assertions.zig");
 const assert = assertions.assert;
 const x = @import("x");
@@ -164,7 +165,19 @@ pub fn main() !void {
         &state,
     );
 
-    // During tests, find the `aim_analyzer` window so we can stack our window below it.
+    // Set the `_NET_WM_PID` atom so we can later find the window ID by the PID
+    for ([_]u32{
+        // List any other windows we create from this process
+        ids.window,
+    }) |window_id| {
+        try common.set_window_pid_properties(
+            conn.sock,
+            &buffer,
+            window_id,
+        );
+    }
+
+    // During tests, find the external `aim_analyzer` window so we can stack our window below it.
     {
         // First, list all the child windows of the root window
         {
