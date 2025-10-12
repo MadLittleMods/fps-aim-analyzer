@@ -11,7 +11,6 @@ const x_test_extension = @import("x11/x_test_extension.zig");
 const render_utils = @import("utils/render_utils.zig");
 const image_conversion = @import("vision/image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
-const resizeImage = @import("vision/image_resizing.zig").resizeImage;
 const render = @import("screen_play/render.zig");
 const AppState = @import("screen_play/app_state.zig").AppState;
 
@@ -305,17 +304,7 @@ pub fn main() !void {
             );
             defer rgb_image.deinit(allocator);
 
-            // Resize the image to fit the pixmap dimensions
-            const resized_image = try resizeImage(
-                rgb_image,
-                @intCast(root_screen_dimensions.width),
-                @intCast(root_screen_dimensions.height),
-                .bicubic,
-                allocator,
-            );
-            defer resized_image.deinit(allocator);
-
-            try render_context.copyImageToPixmapAtIndex(resized_image, pixmap_index, allocator);
+            try render_context.copyImageToPixmapAtIndex(rgb_image, pixmap_index, allocator);
         }
     }
 
