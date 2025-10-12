@@ -303,6 +303,7 @@ pub fn main() !void {
                 allocator,
             );
             defer rgb_image.deinit(allocator);
+
             try render_context.copyImageToPixmapAtIndex(rgb_image, pixmap_index, allocator);
         }
     }

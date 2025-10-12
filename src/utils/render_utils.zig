@@ -41,6 +41,7 @@ pub fn BoundingClientRect(comptime NumberType: type) type {
         }
     };
 }
+
 /// Find the intersection region between two BoundingClientRect's.
 pub fn findIntersection(rect1: anytype, rect2: @TypeOf(rect1)) ?@TypeOf(rect1) {
     const pos_x = @max(rect1.left(), rect2.left());
