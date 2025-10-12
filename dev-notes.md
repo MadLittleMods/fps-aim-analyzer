@@ -457,3 +457,22 @@ References:
  - https://unix.stackexchange.com/questions/12755/how-to-forward-x-over-ssh-to-run-graphics-applications-remotely/12772#12772
  - https://wiki.archlinux.org/title/OpenSSH#X11_forwarding
  - https://www.dedoimedo.com/computers/xephyr.html
+
+
+### Testing on macOS
+
+ 1. Install XQuartz: `brew install --cask xquartz`
+ 1. It seems to work automatically when you run an X11 application.
+ 1. The FPS Aim Analyzer project uses 32-bit color depth (ARGB) but the default `:0`
+    display from XQuartz only seems support 24-bit depth (it only has visual types for
+    24-bit color depth (RGB)) so you will run into `error.VisualTypeNotFound` when
+    trying to run `zig build run-main` directly.
+ 1. It seems like XQuartz comes bundled with `Xephyr` so you can use that to create a
+    nested X11 server/display that does support 32-bit color depth: `Xephyr :99 -screen
+    1280x720x24`
+ 1. Then you can use `DISPLAY=:99 zig build run-main` to run it on that new display.
+
+---
+
+If you were trying to run an application from within Docker, you could use
+`docker run -e DISPLAY=docker.for.mac.host.internal:0 sshipway/xclock`.

@@ -72,6 +72,44 @@ pub const RGBPixel = struct {
     }
 };
 
+/// All values are in the range [0, 1]
+pub const HSVPixel = struct {
+    h: f32,
+    s: f32,
+    v: f32,
+
+    // We can do some extra checks for hard-coded values during compilation but let's
+    // avoid the overhead if someone is creating a pixel dynamically.
+    pub fn init(comptime h: f32, comptime s: f32, comptime v: f32) @This() {
+        if (h < 0.0 or h > 1.0) {
+            @compileLog("h=", h);
+            @compileError("When creating an HSVPixel, h must be in the range [0, 1]");
+        }
+        if (s < 0.0 or s > 1.0) {
+            @compileLog("s=", s);
+            @compileError("When creating an HSVPixel, s must be in the range [0, 1]");
+        }
+        if (v < 0.0 or v > 1.0) {
+            @compileLog("v=", v);
+            @compileError("When creating an HSVPixel, v must be in the range [0, 1]");
+        }
+
+        return .{
+            .h = h,
+            .s = s,
+            .v = v,
+        };
+    }
+};
+
+pub const GrayscalePixel = struct {
+    value: f32,
+};
+
+pub const BinaryPixel = struct {
+    value: bool,
+};
+
 pub const RGBImage = struct {
     width: usize,
     height: usize,
@@ -161,3 +199,84 @@ pub const RGBImage = struct {
         try img.writeToFilePath(image_file_path, .{ .png = .{} });
     }
 };
+
+pub const BinaryImage = struct {
+    width: usize,
+    height: usize,
+    /// Row-major order (line by line)
+    pixels: []const BinaryPixel,
+
+    pub fn deinit(self: *const @This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.pixels);
+    }
+};
+
+pub fn getPixelValueFieldNames(comptime PixelType: type) []const []const u8 {
+    const pixel_value_field_names: []const []const u8 = comptime switch (PixelType) {
+        RGBPixel => &.{ "r", "g", "b" },
+        HSVPixel => &.{ "h", "s", "v" },
+        GrayscalePixel => &.{"value"},
+        BinaryPixel => &.{"value"},
+        else => {
+            @compileLog("PixelType=", @typeName(PixelType));
+            @compileError("getPixelValueFieldNames(...): Unknown pixel type");
+        },
+    };
+
+    return pixel_value_field_names;
+}
+
+/// Quick helper to convert a bunch of 0/1 into BinaryPixel's
+pub fn binaryPixelsfromIntArray(comptime int_pixels: []const u1) [int_pixels.len]BinaryPixel {
+    var binary_pixels = [_]BinaryPixel{BinaryPixel{ .value = false }} ** int_pixels.len;
+    for (int_pixels, 0..) |int_pixel, index| {
+        binary_pixels[index] = BinaryPixel{ .value = if (int_pixel == 1) true else false };
+    }
+
+    return binary_pixels;
+}
+
+pub fn getPixelIndexClamped(image: anytype, x: isize, y: isize) usize {
+    const x_clamped = @as(usize, @intCast(
+        std.math.clamp(x, 0, @as(isize, @intCast(image.width - 1))),
+    ));
+    const y_clamped = @as(usize, @intCast(
+        std.math.clamp(y, 0, @as(isize, @intCast(image.height - 1))),
+    ));
+    const pixel_index = (y_clamped * image.width) + x_clamped;
+    return pixel_index;
+}
+
+pub fn getPixelClamped(image: anytype, x: isize, y: isize) std.meta.Child(@TypeOf(image.pixels)) {
+    const pixel_index_clamped = getPixelIndexClamped(image, x, y);
+    return image.pixels[pixel_index_clamped];
+}
+
+test "getPixelIndexClamped" {
+    const image = BinaryImage{
+        .width = 5,
+        .height = 5,
+        .pixels = &binaryPixelsfromIntArray(&[_]u1{
+            0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
+            0, 0, 0, 1, 0,
+            0, 0, 0, 0, 0,
+        }),
+    };
+
+    // In bounds
+    try std.testing.expectEqual(@as(usize, 0), getPixelIndexClamped(image, 0, 0));
+    try std.testing.expectEqual(@as(usize, 4), getPixelIndexClamped(image, 4, 0));
+    try std.testing.expectEqual(@as(usize, 20), getPixelIndexClamped(image, 0, 4));
+    try std.testing.expectEqual(@as(usize, 24), getPixelIndexClamped(image, 4, 4));
+
+    // Out of bounds are clamped
+    try std.testing.expectEqual(@as(usize, 0), getPixelIndexClamped(image, -2, 0));
+    try std.testing.expectEqual(@as(usize, 4), getPixelIndexClamped(image, 6, 0));
+    try std.testing.expectEqual(@as(usize, 10), getPixelIndexClamped(image, -2, 2));
+    try std.testing.expectEqual(@as(usize, 0), getPixelIndexClamped(image, 0, -1));
+    try std.testing.expectEqual(@as(usize, 20), getPixelIndexClamped(image, 0, 6));
+    try std.testing.expectEqual(@as(usize, 22), getPixelIndexClamped(image, 2, 6));
+    try std.testing.expectEqual(@as(usize, 24), getPixelIndexClamped(image, 6, 6));
+}
