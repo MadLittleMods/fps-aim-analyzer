@@ -5,8 +5,8 @@ const render_utils = @import("../utils/render_utils.zig");
 pub const AppState = struct {
     /// The pixel dimensions of the screen/monitor
     root_screen_dimensions: render_utils.Dimensions,
-    // We don't need transparency (32-bit) for the window or the pixmap
-    // since we're just display opaque screenshots.
+    // We don't need transparency (32-bit, ARGB) for the window or the pixmap since we
+    // just display opaque screenshots, 24-bits is good (RGB).
     window_depth: u8 = 24,
     pixmap_depth: u8 = 24,
 

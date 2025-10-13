@@ -6,8 +6,8 @@
     },
     .dependencies = .{
         .zigx = .{
-            .url = "https://github.com/MadLittleMods/zigx/archive/33a9d18cc8edd7c39f0332d1d486f229fc1f506b.tar.gz",
-            .hash = "12201510274588b6467577208baaff9cc3ad640ba7b25fe3140279ad65a4460239f4",
+            .url = "https://github.com/MadLittleMods/zigx/archive/2aebd37c4ee8feee9bd7244f1171f9f06b6fc263.tar.gz",
+            .hash = "1220fb5afcbd8cd203fa29a9349a113eaadccdacffb7b505b36b02da64462cf82834",
         },
         .zigimg = .{
             .url = "https://github.com/MadLittleMods/zigimg/archive/ccf9197ccf96dd43d1d31c98a86f21e74187d0c4.tar.gz",

@@ -12,28 +12,24 @@ const x11_extension_utils = @import("./x11_extension_utils.zig");
 /// Check to make sure we're using a compatible version of the X Test extension
 /// that supports all of the features we need.
 pub fn ensureCompatibleVersionOfXTestExtension(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     test_extension: *const x11_extension_utils.ExtensionInfo,
     version: struct {
         major_version: u8,
         minor_version: u16,
     },
 ) !void {
-    const reader = common.SocketReader{ .context = sock };
-    const buffer_limit = buffer.half_len;
-
     {
         var message_buffer: [x.testext.get_version.len]u8 = undefined;
         x.testext.get_version.serialize(&message_buffer, test_extension.opcode, .{
             .major_version = version.major_version,
             .minor_version = version.minor_version,
         });
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
-    const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-    switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+    const message_length = try x.readOneMsg(x_connection.reader(), @alignCast(x_connection.buffer.nextReadBuffer()));
+    try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer.half_len);
+    switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
         .reply => |msg_reply| {
             const msg: *x.testext.get_version.Reply = @ptrCast(msg_reply);
             std.log.info("X Test extension: version {}.{}", .{ msg.major_version, msg.minor_version });
