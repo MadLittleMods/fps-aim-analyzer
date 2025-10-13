@@ -152,10 +152,13 @@ const MainProgram = struct {
         );
         std.log.debug("ids: {any}", .{ids});
 
-        // There are a few X extensions that couple creating objects with receiving
-        // events from those objects. For example, they coupled creating the Damage
-        // object with tracking the DamageNotify events. In these cases, we have to use
-        // the event connection to create those objects.
+        // There are a few X extensions that couple creating objects with
+        // subscribing/receiving events about those objects. For example, they coupled
+        // creating the `x.damage.create` object with tracking the `DamageNotify`
+        // events. In these cases, we have to use the event connection to create those
+        // objects. This also happens with `create_window` but you can additionally
+        // subscribe to events via `change_window_attributes` so there isn't a hard
+        // coupling here.
         // var event_connection_id_generator = render.IdGenerator.init(
         //     x_event_connect_result.setup.fixed().resource_id_base,
         // );
