@@ -30,6 +30,54 @@ pub const ConnectResult = struct {
     }
 };
 
+pub const XConnection = struct {
+    /// Connection to the X server.
+    socket: std.os.socket_t,
+    double_buffer: x.DoubleBuffer,
+    buffer: *x.ContiguousReadBuffer,
+    allocator: std.mem.Allocator,
+
+    pub fn init(
+        socket: std.os.socket_t,
+        /// Good rule of thumb is 1000 for events or 10000 for replies (for example, the
+        /// reply for `x.render.query_pict_formats` is 4888 bytes on my system)
+        buffer_size: usize,
+        allocator: std.mem.Allocator,
+    ) !@This() {
+        // Create a big buffer that we can use to read events and replies from the X server.
+        const double_buffer = try x.DoubleBuffer.init(
+            std.mem.alignForward(usize, buffer_size, std.mem.page_size),
+            .{ .memfd_name = "ZigX11DoubleBuffer" },
+        );
+        var buffer = try allocator.create(x.ContiguousReadBuffer);
+        buffer.* = double_buffer.contiguousReadBuffer();
+
+        return .{
+            .socket = socket,
+            .double_buffer = double_buffer,
+            .buffer = buffer,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *const XConnection) void {
+        self.double_buffer.deinit(); // not necessary but good to test
+        self.allocator.destroy(self.buffer);
+        // Shutdown the socket to wake up `std.os.recv(...)` with an error unblock the
+        // thread listening for events. The thread with the `recv()` call can close the
+        // socket the normal way, like a normal error happened. (see
+        // https://stackoverflow.com/questions/3589723/can-a-socket-be-closed-from-another-thread-when-a-send-recv-on-the-same-socket/27790293#27790293)
+        std.os.shutdown(self.socket, .both) catch {};
+    }
+
+    pub fn reader(self: @This()) SocketReader {
+        return .{ .context = self.socket };
+    }
+    pub fn send(self: @This(), data: []const u8) !void {
+        try common.send(self.socket, data);
+    }
+};
+
 pub fn connectSetupMaxAuth(
     sock: std.os.socket_t,
     comptime max_auth_len: usize,
@@ -265,20 +313,19 @@ pub fn getPutImageDataLenBytes(
     return data_len_bytes;
 }
 
-pub fn intern_atom(sock: std.os.socket_t, buffer: *x.ContiguousReadBuffer, comptime atom_name: x.Slice(u16, [*]const u8)) !x.Atom {
-    const reader = common.SocketReader{ .context = sock };
-
+pub fn intern_atom(x_connection: common.XConnection, comptime atom_name: x.Slice(u16, [*]const u8)) !x.Atom {
     {
         var message_buffer: [x.intern_atom.getLen(atom_name.len)]u8 = undefined;
         x.intern_atom.serialize(&message_buffer, .{
             .only_if_exists = false,
             .name = atom_name,
         });
-        try common.send(sock, message_buffer[0..]);
+        try x_connection.send(message_buffer[0..]);
     }
     const atom: x.Atom = blk: {
-        _ = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+        const message_length = try x.readOneMsg(x_connection.reader(), @alignCast(x_connection.buffer.nextReadBuffer()));
+        try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer.half_len);
+        switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const atom = x.readIntNative(u32, msg_reply.reserve_min[0..]);
                 break :blk @as(x.Atom, @enumFromInt(atom));
@@ -299,11 +346,10 @@ pub fn intern_atom(sock: std.os.socket_t, buffer: *x.ContiguousReadBuffer, compt
 /// Also sets `WM_CLIENT_MACHINE` to the machine hostname to comply with the specs: "If
 /// _NET_WM_PID is set, the ICCCM-specified property WM_CLIENT_MACHINE MUST also be
 /// set." (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
-pub fn set_window_pid_properties(sock: std.os.socket_t, buffer: *x.ContiguousReadBuffer, window_id: u32) !void {
+pub fn set_window_pid_properties(x_connection: common.XConnection, window_id: u32) !void {
     {
         const wm_pid_atom = try common.intern_atom(
-            sock,
-            buffer,
+            x_connection,
             comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_PID"),
         );
 
@@ -331,7 +377,7 @@ pub fn set_window_pid_properties(sock: std.os.socket_t, buffer: *x.ContiguousRea
             .type = x.Atom.CARDINAL,
             .values = x.Slice(u16, [*]const u32){ .ptr = &pid_array, .len = pid_array.len },
         });
-        try common.send(sock, message_buffer[0..]);
+        try x_connection.send(message_buffer[0..]);
     }
     // "If _NET_WM_PID is set, the ICCCM-specified property WM_CLIENT_MACHINE MUST also be set."
     // (https://specifications.freedesktop.org/wm-spec/1.3/ar01s05.html#id-1.6.14)
@@ -353,6 +399,6 @@ pub fn set_window_pid_properties(sock: std.os.socket_t, buffer: *x.ContiguousRea
             .type = x.Atom.STRING,
             .values = x.Slice(u16, [*]const u8){ .ptr = machine_name.ptr, .len = @intCast(machine_name.len) },
         });
-        try common.send(sock, message_buffer[0..change_property.getLen(@intCast(machine_name.len))]);
+        try x_connection.send(message_buffer[0..change_property.getLen(@intCast(machine_name.len))]);
     }
 }

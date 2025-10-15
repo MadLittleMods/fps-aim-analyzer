@@ -37,28 +37,142 @@ pub fn main() !void {
     };
 
     try x.wsaStartup();
-    const conn = try common.connect(allocator);
-    defer std.os.shutdown(conn.sock, .both) catch {};
-    defer conn.setup.deinit(allocator);
-    const conn_setup_fixed_fields = conn.setup.fixed();
+
+    // We establish two distinct connections to the X server:
+    //
+    // 1. Event Connection: Used for reading events in the main event loop.
+    //    - Make sure to call `x.change_window_attributes` on the windows you care about
+    //      listening for events on. Specify `.event_mask` with the events you want the
+    //      event loop to subscribe to.
+    // 2. Request Connection: Used for making one-shot requests and reading their replies.
+    //
+    // This dual-connection approach offers several benefits:
+    // - Clear Separation: It keeps event handling separate from one-shot requests.
+    // - Simplified Reply Handling: We can easily get replies to one-shot requests
+    //   without worrying about them being mixed with event messages.
+    // - No Complex Queuing: Unlike the xcb library, we avoid the need for a
+    //   cookie-based reply queue system.
+    //
+    // This design leads to cleaner, more maintainable code by reducing complexity
+    // in handling different types of X server interactions.
+    //
+    // 1. Create an X connection for the event loop
+    const x_event_connect_result = try common.connect(allocator);
+    defer x_event_connect_result.setup.deinit(allocator);
+    const x_event_connection = try common.XConnection.init(
+        x_event_connect_result.sock,
+        1000,
+        allocator,
+    );
+    defer x_event_connection.deinit();
+    // 2. Create an X connection for making one-off requests
+    const x_request_connect_result = try common.connect(allocator);
+    defer x_request_connect_result.setup.deinit(allocator);
+    const x_request_connection = try common.XConnection.init(
+        x_request_connect_result.sock,
+        8000,
+        allocator,
+    );
+    defer x_request_connection.deinit();
+
+    const conn_setup_fixed_fields = x_event_connect_result.setup.fixed();
     // Print out some info about the X server we connected to
     {
         inline for (@typeInfo(@TypeOf(conn_setup_fixed_fields.*)).Struct.fields) |field| {
             std.log.debug("{s}: {any}", .{ field.name, @field(conn_setup_fixed_fields, field.name) });
         }
-        std.log.debug("vendor: {s}", .{try conn.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
+        std.log.debug("vendor: {s}", .{try x_event_connect_result.setup.getVendorSlice(conn_setup_fixed_fields.vendor_len)});
     }
 
-    const screen = common.getFirstScreenFromConnectionSetup(conn.setup);
+    const screen = common.getFirstScreenFromConnectionSetup(x_event_connect_result.setup);
     inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
         std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
     }
-
     std.log.info("root window ID {0} 0x{0x}", .{screen.root});
+
+    // We use the X Render extension splatting images onto our window. Useful because
+    // their "composite" request works with mismatched depths between the source and
+    // destinations.
+    const optional_render_extension = try x11_extension_utils.getExtensionInfo(
+        x_request_connection,
+        "RENDER",
+    );
+    const render_extension = optional_render_extension orelse @panic("RENDER extension not found");
+
+    // We use the X Test extension to simulate mouse clicks.
+    const optional_test_extension = try x11_extension_utils.getExtensionInfo(
+        x_request_connection,
+        "XTEST",
+    );
+    const test_extension = optional_test_extension orelse @panic("XTEST extension not found");
+
+    // We must run the query_version request of each extension on every connection that
+    // interacts with the extension. Most extensions have this behavior in the spec that
+    // it will return a "request" error (BadRequest) if haven't negotiated the version
+    // of the extension.
+    //
+    // > The client must negotiate the version of the extension before executing
+    // > extension requests.  Behavior of the server is undefined otherwise.
+    //
+    // > The client must negotiate the version of the extension before executing
+    // > extension requests.  Otherwise, the server will return BadRequest for any
+    // > operations other than QueryVersion.
+    const x_connections = [_]common.XConnection{ x_event_connection, x_request_connection };
+    for (x_connections) |x_connection| {
+        try x_render_extension.ensureCompatibleVersionOfXRenderExtension(
+            x_connection,
+            &render_extension,
+            .{
+                // We arbitrarily require version 0.11 of the X Render extension just
+                // because it's the latest but came out in 2009 so it's pretty much
+                // ubiquitous anyway. Feature-wise, we only use "Composite" which came out
+                // in 0.0.
+                //
+                // For more info on what's changed in each version, see the "15. Extension
+                // Versioning" section of the X Render extension protocol docs,
+                // https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
+                .major_version = 0,
+                .minor_version = 11,
+            },
+        );
+
+        try x_test_extension.ensureCompatibleVersionOfXTestExtension(
+            x_connection,
+            &test_extension,
+            .{
+                // We require version 2.2 of the X Test extension because it supports raw
+                // device events.
+                .major_version = 2,
+                .minor_version = 2,
+            },
+        );
+    }
+
+    // Assemble a map of X extension info
+    const extensions = x11_extension_utils.Extensions(&.{.render}){
+        .render = render_extension,
+        // We don't use `test_extension` in our rendering, so we don't need to include
+        // it here.
+    };
+
+    // Since each connection has a `base_resource_id`, let's create most resources with
+    // the request connection since that's easier
     const ids = render.Ids.init(
         screen.root,
-        conn_setup_fixed_fields.resource_id_base,
+        x_request_connect_result.setup.fixed().resource_id_base,
     );
+    std.log.debug("ids: {any}", .{ids});
+
+    // There are a few X extensions that couple creating objects with
+    // subscribing/receiving events about those objects. For example, they coupled
+    // creating the `x.damage.create` object with tracking the `DamageNotify`
+    // events. In these cases, we have to use the event connection to create those
+    // objects. This also happens with `create_window` but you can additionally
+    // subscribe to events via `change_window_attributes` so there isn't a hard
+    // coupling here.
+    // var event_connection_id_generator = render.IdGenerator.init(
+    //     x_event_connect_result.setup.fixed().resource_id_base,
+    // );
 
     const root_screen_dimensions = render_utils.Dimensions{
         .width = @intCast(screen.pixel_width),
@@ -74,7 +188,7 @@ pub fn main() !void {
         .num_screenshots = starting_ammo_number - ending_ammo_number + 1,
     };
 
-    const pixmap_formats = try common.getPixmapFormatsFromConnectionSetup(conn.setup);
+    const pixmap_formats = try common.getPixmapFormatsFromConnectionSetup(x_event_connect_result.setup);
     const pixmap_format = try common.findMatchingPixmapFormatForDepth(
         pixmap_formats,
         state.pixmap_depth,
@@ -89,76 +203,8 @@ pub fn main() !void {
         },
     };
 
-    // Create a big buffer that we can use to read messages and replies from the X server.
-    const double_buffer = try x.DoubleBuffer.init(
-        std.mem.alignForward(usize, 8000, std.mem.page_size),
-        .{ .memfd_name = "ZigX11DoubleBuffer" },
-    );
-    defer double_buffer.deinit(); // not necessary but good to test
-    std.log.info("Read buffer capacity is {}", .{double_buffer.half_len});
-    var buffer = double_buffer.contiguousReadBuffer();
-    const buffer_limit = buffer.half_len;
-
-    // TODO: maybe need to call conn.setup.verify or something?
-
-    // We use the X Render extension splatting images onto our window. Useful because
-    // their "composite" request works with mismatched depths between the source and
-    // destinations.
-    const optional_render_extension = try x11_extension_utils.getExtensionInfo(
-        conn.sock,
-        &buffer,
-        "RENDER",
-    );
-    const render_extension = optional_render_extension orelse @panic("RENDER extension not found");
-
-    try x_render_extension.ensureCompatibleVersionOfXRenderExtension(
-        conn.sock,
-        &buffer,
-        &render_extension,
-        .{
-            // We arbitrarily require version 0.11 of the X Render extension just
-            // because it's the latest but came out in 2009 so it's pretty much
-            // ubiquitous anyway. Feature-wise, we only use "Composite" which came out
-            // in 0.0.
-            //
-            // For more info on what's changed in each version, see the "15. Extension
-            // Versioning" section of the X Render extension protocol docs,
-            // https://www.x.org/releases/X11R7.5/doc/renderproto/renderproto.txt
-            .major_version = 0,
-            .minor_version = 11,
-        },
-    );
-
-    // We use the X Test extension to simulate mouse clicks.
-    const optional_test_extension = try x11_extension_utils.getExtensionInfo(
-        conn.sock,
-        &buffer,
-        "XTEST",
-    );
-    const test_extension = optional_test_extension orelse @panic("XTEST extension not found");
-
-    try x_test_extension.ensureCompatibleVersionOfXTestExtension(
-        conn.sock,
-        &buffer,
-        &test_extension,
-        .{
-            // We require version 2.2 of the X Test extension because it supports raw
-            // device events.
-            .major_version = 2,
-            .minor_version = 2,
-        },
-    );
-
-    // Assemble a map of X extension info
-    const extensions = x11_extension_utils.Extensions(&.{.render}){
-        .render = render_extension,
-        // We don't use `test_extension` in our rendering, so we don't need to include
-        // it here.
-    };
-
     try render.createResources(
-        conn.sock,
-        &buffer,
+        x_request_connection,
         &ids,
         screen,
         &extensions,
@@ -171,8 +217,7 @@ pub fn main() !void {
         ids.window,
     }) |window_id| {
         try common.set_window_pid_properties(
-            conn.sock,
-            &buffer,
+            x_request_connection,
             window_id,
         );
     }
@@ -183,12 +228,12 @@ pub fn main() !void {
         {
             var message_buffer: [x.query_tree.len]u8 = undefined;
             x.query_tree.serialize(&message_buffer, screen.root);
-            try conn.send(message_buffer[0..]);
+            try x_request_connection.send(message_buffer[0..]);
         }
         const window_list = blk: {
-            const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
-            try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-            switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+            const message_length = try x.readOneMsg(x_request_connection.reader(), @alignCast(x_request_connection.buffer.nextReadBuffer()));
+            try common.checkMessageLengthFitsInBuffer(message_length, x_request_connection.buffer.half_len);
+            switch (x.serverMsgTaggedUnion(@alignCast(x_request_connection.buffer.double_buffer_ptr))) {
                 .reply => |msg_reply| {
                     const msg: *x.query_tree.Reply = @ptrCast(msg_reply);
                     std.log.debug("query_tree found {d} child windows", .{msg.num_windows});
@@ -208,8 +253,7 @@ pub fn main() !void {
 
         // Figure out the atom for our custom application ID property
         const custom_app_id_atom = try common.intern_atom(
-            conn.sock,
-            &buffer,
+            x_request_connection,
             comptime x.Slice(u16, [*]const u8).initComptime("madlittlemods.app_id"),
         );
 
@@ -227,11 +271,11 @@ pub fn main() !void {
                         .len = 64,
                         .delete = false,
                     });
-                    try conn.send(message_buffer[0..]);
+                    try x_request_connection.send(message_buffer[0..]);
                 }
-                const message_length = try x.readOneMsg(conn.reader(), @alignCast(buffer.nextReadBuffer()));
-                try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-                switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
+                const message_length = try x.readOneMsg(x_request_connection.reader(), @alignCast(x_request_connection.buffer.nextReadBuffer()));
+                try common.checkMessageLengthFitsInBuffer(message_length, x_request_connection.buffer.half_len);
+                switch (x.serverMsgTaggedUnion(@alignCast(x_request_connection.buffer.double_buffer_ptr))) {
                     .reply => |msg_reply| {
                         const msg: *x.get_property.Reply = @ptrCast(msg_reply);
                         const opt_application_id = try msg.getValueBytes();
@@ -261,8 +305,19 @@ pub fn main() !void {
                 .stack_mode = .below,
                 .sibling = aim_analyzer_window_id,
             });
-            try conn.send(msg[0..len]);
+            try x_request_connection.send(msg[0..len]);
         }
+    }
+
+    // Register for events from the window
+    {
+        var message_buffer: [x.change_window_attributes.max_len]u8 = undefined;
+        const len = x.change_window_attributes.serialize(&message_buffer, ids.window, .{
+            .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+        });
+        // XXX: Use the event connection so we get the events we subscribed to in the
+        // `.event_mask` in the event loop
+        try x_event_connection.send(message_buffer[0..len]);
     }
 
     // Show the window. In the X11 protocol is called mapping a window, and hiding a
@@ -271,11 +326,11 @@ pub fn main() !void {
     {
         var msg: [x.map_window.len]u8 = undefined;
         x.map_window.serialize(&msg, ids.window);
-        try conn.send(&msg);
+        try x_request_connection.send(&msg);
     }
 
     var render_context = render.RenderContext{
-        .sock = &conn.sock,
+        .x_connection = x_request_connection,
         .ids = &ids,
         .extensions = &extensions,
         .image_byte_order = image_byte_order,
@@ -355,7 +410,7 @@ pub fn main() !void {
                             .device_id = 1,
                         },
                     });
-                    try conn.send(&msg);
+                    try x_request_connection.send(&msg);
                 }
                 // release the left mouse button
                 {
@@ -369,7 +424,7 @@ pub fn main() !void {
                             .device_id = 1,
                         },
                     });
-                    try conn.send(&msg);
+                    try x_request_connection.send(&msg);
                 }
             }
 
@@ -480,7 +535,7 @@ pub fn main() !void {
     }
 
     // Clean-up
-    try render.cleanupResources(conn.sock, &ids);
+    try render.cleanupResources(x_request_connection, &ids);
 
     // Exited cleanly
     return;

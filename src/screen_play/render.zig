@@ -2,6 +2,7 @@ const std = @import("std");
 const x = @import("x");
 const common = @import("../x11/x11_common.zig");
 const x11_extension_utils = @import("../x11/x11_extension_utils.zig");
+const x11_render_extension = @import("../x11/x_render_extension.zig");
 const AppState = @import("app_state.zig").AppState;
 const render_utils = @import("../utils/render_utils.zig");
 const image_conversion = @import("../vision/image_conversion.zig");
@@ -140,16 +141,12 @@ fn copyRgbImageToPixmap(
 
 /// Bootstraps all of the X resources we will need use when rendering the UI.
 pub fn createResources(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     ids: *const Ids,
     screen: *align(4) x.Screen,
     extensions: *const x11_extension_utils.Extensions(&.{.render}),
     state: *const AppState,
 ) !void {
-    const reader = common.SocketReader{ .context = sock };
-    const buffer_limit = buffer.half_len;
-
     const root_screen_dimensions = state.root_screen_dimensions;
     const window_depth = state.window_depth;
     const pixmap_depth = state.pixmap_depth;
@@ -158,13 +155,65 @@ pub fn createResources(
     var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_allocator.deinit();
     const allocator = arena_allocator.allocator();
+
+    // Find some compatible picture formats for use with the X Render extension. We want
+    // to find a 24-bit depth format for use with the root window and a 32-bit depth
+    // format for use with our window.
+    //
     // We need to find a visual type that matches the depth of our window that we want to create.
-    const matching_visual_type = try screen.findMatchingVisualType(
+    const window_visual_type = try screen.findMatchingVisualType(
         window_depth,
         .true_color,
         allocator,
     );
-    std.log.debug("matching_visual_type {any}", .{matching_visual_type});
+    std.log.debug("window_visual_type {any}", .{window_visual_type});
+    const opt_window_picture_format = try x11_render_extension.findPictureFormatForVisualId(
+        x_connection,
+        window_visual_type.id,
+        &x11_extension_utils.Extensions(&.{.render}){
+            .render = extensions.render,
+        },
+    );
+    const window_picture_format = opt_window_picture_format orelse {
+        return error.NoMatchingPictureFormatForWindowVisualType;
+    };
+
+    // We need to find a visual type that matches the depth of our pixmap
+    const pixmap_visual_type = try screen.findMatchingVisualType(
+        pixmap_depth,
+        .true_color,
+        allocator,
+    );
+    std.log.debug("pixmap_visual_type {any}", .{pixmap_visual_type});
+    const opt_pixmap_picture_format = try x11_render_extension.findPictureFormatForVisualId(
+        x_connection,
+        pixmap_visual_type.id,
+        &x11_extension_utils.Extensions(&.{.render}){
+            .render = extensions.render,
+        },
+    );
+    const pixmap_picture_format = opt_pixmap_picture_format orelse {
+        return error.NoMatchingPictureFormatForWindowVisualType;
+    };
+
+    // We need to find a visual type that matches the depth of the root window.
+    const root_window_visual_type = try screen.findMatchingVisualType(
+        // FIXME: We assume the root window is always 24-bit depth
+        24,
+        .true_color,
+        allocator,
+    );
+    std.log.debug("root_window_visual_type {any}", .{root_window_visual_type});
+    const opt_root_window_picture_format = try x11_render_extension.findPictureFormatForVisualId(
+        x_connection,
+        root_window_visual_type.id,
+        &x11_extension_utils.Extensions(&.{.render}){
+            .render = extensions.render,
+        },
+    );
+    const root_window_picture_format = opt_root_window_picture_format orelse {
+        return error.NoMatchingPictureFormatForWindowVisualType;
+    };
 
     // We just need some colormap to provide when creating the window in order to avoid
     // a "bad" `match` error when working with a 32-bit depth.
@@ -174,10 +223,10 @@ pub fn createResources(
         x.create_colormap.serialize(&message_buffer, .{
             .id = ids.colormap,
             .window_id = ids.root,
-            .visual_id = matching_visual_type.id,
+            .visual_id = window_visual_type.id,
             .alloc = .none,
         });
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
     {
         std.log.debug("Creating window_id {0} 0x{0x}", .{ids.window});
@@ -199,7 +248,7 @@ pub fn createResources(
             // since it's one of the arguments.
             .border_width = 0,
             .class = .input_output,
-            .visual_id = matching_visual_type.id,
+            .visual_id = window_visual_type.id,
         }, .{
             .bg_pixmap = .none,
             // 0xAARRGGBB
@@ -229,10 +278,18 @@ pub fn createResources(
             // setting the properties anyway.
             .override_redirect = false,
             // .save_under = true,
-            .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+
+            // We're not setting this here as the window is probably being created with
+            // the `x_request_connection`. Since the event loop is running from the
+            // `x_event_connection`, we will later use a `x.change_window_attributes`
+            // request to set the event mask on the window after it's created so we
+            // actually receive events for it.
+            //
+            // .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+
             // .dont_propagate = 1,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     // Set window properties to indicate/hint that we are trying to be fullscreen and
@@ -240,13 +297,11 @@ pub fn createResources(
     // - `_NET_WM_STATE`(`ATOM`): `_NET_WM_STATE_FULLSCREEN`
     {
         const wm_state_atom = try common.intern_atom(
-            sock,
-            buffer,
+            x_connection,
             comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_STATE"),
         );
         const wm_state_fullscreen_atom = try common.intern_atom(
-            sock,
-            buffer,
+            x_connection,
             comptime x.Slice(u16, [*]const u8).initComptime("_NET_WM_STATE_FULLSCREEN"),
         );
 
@@ -270,11 +325,11 @@ pub fn createResources(
                 .type = x.Atom.ATOM,
                 .values = x.Slice(u16, [*]const u32){ .ptr = &values, .len = values.len },
             });
-            try common.send(sock, message_buffer[0..]);
+            try x_connection.send(message_buffer[0..]);
         }
     }
 
-    // Create a pixmap drawable to capture the screenshot onto
+    // Create a pixmap drawable to store our screenshots on
     {
         var message_buffer: [x.create_pixmap.len]u8 = undefined;
         x.create_pixmap.serialize(&message_buffer, .{
@@ -284,7 +339,7 @@ pub fn createResources(
             .width = @intCast(root_screen_dimensions.width),
             .height = @intCast(num_screenshots * root_screen_dimensions.height),
         });
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
 
     {
@@ -305,7 +360,7 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
     {
         const color_black: u32 = 0xff000000;
@@ -325,7 +380,7 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
     {
         const color_black: u32 = 0xff000000;
@@ -345,58 +400,8 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
-
-    // Find some compatible picture formats for use with the X Render extension. We want
-    // to find a 24-bit depth format for use with the root window and a 32-bit depth
-    // format for use with our window.
-    {
-        var message_buffer: [x.render.query_pict_formats.len]u8 = undefined;
-        x.render.query_pict_formats.serialize(&message_buffer, extensions.render.opcode);
-        try common.send(sock, &message_buffer);
-    }
-    const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-    const optional_picture_formats_data: ?struct { matching_picture_format_24: x.render.PictureFormatInfo, matching_picture_format_32: x.render.PictureFormatInfo } = blk: {
-        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
-            .reply => |msg_reply| {
-                const msg: *x.render.query_pict_formats.Reply = @ptrCast(msg_reply);
-                const picture_formats = msg.getPictureFormats();
-                break :blk .{
-                    .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(
-                        picture_formats,
-                        24,
-                    ),
-                    .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(
-                        picture_formats,
-                        32,
-                    ),
-                };
-            },
-            else => |msg| {
-                std.log.err("expected a reply for `x.render.query_pict_formats` but got {}", .{msg});
-                return error.ExpectedReplyButGotSomethingElse;
-            },
-        }
-    };
-    const picture_formats_data = optional_picture_formats_data orelse @panic("Matching picture formats not found");
-    const matching_picture_format_for_window = switch (window_depth) {
-        24 => picture_formats_data.matching_picture_format_24,
-        32 => picture_formats_data.matching_picture_format_32,
-        else => |captured_depth| {
-            std.log.err("Matching picture format not found for depth {}", .{captured_depth});
-            @panic("Matching picture format not found for depth");
-        },
-    };
-    const matching_picture_format_for_pixmap = switch (pixmap_depth) {
-        24 => picture_formats_data.matching_picture_format_24,
-        32 => picture_formats_data.matching_picture_format_32,
-        else => |captured_depth| {
-            std.log.err("Matching picture format not found for depth {}", .{captured_depth});
-            @panic("Matching picture format not found for depth");
-        },
-    };
 
     // We need to create a picture for every drawable that we want to use with the X
     // Render extension
@@ -408,13 +413,12 @@ pub fn createResources(
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
             .picture_id = ids.picture_root,
             .drawable_id = screen.root,
-            // The root window is always 24-bit depth
-            .format_id = picture_formats_data.matching_picture_format_24.picture_format_id,
+            .format_id = root_window_picture_format.picture_format_id,
             .options = .{
                 .subwindow_mode = .include_inferiors,
             },
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     // Create a picture for the our window that we can copy and composite things onto
@@ -423,10 +427,10 @@ pub fn createResources(
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
             .picture_id = ids.picture_window,
             .drawable_id = ids.window,
-            .format_id = matching_picture_format_for_window.picture_format_id,
+            .format_id = window_picture_format.picture_format_id,
             .options = .{},
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     // Create a picture for the pixmap that we store screenshots in
@@ -435,27 +439,27 @@ pub fn createResources(
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
             .picture_id = ids.picture_pixmap,
             .drawable_id = ids.pixmap,
-            .format_id = matching_picture_format_for_pixmap.picture_format_id,
+            .format_id = pixmap_picture_format.picture_format_id,
             .options = .{},
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 }
 
 pub fn cleanupResources(
-    sock: std.os.socket_t,
+    x_connection: common.XConnection,
     ids: *const Ids,
 ) !void {
     {
         var message_buffer: [x.free_pixmap.len]u8 = undefined;
         x.free_pixmap.serialize(&message_buffer, ids.pixmap);
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
 
     {
         var message_buffer: [x.free_colormap.len]u8 = undefined;
         x.free_colormap.serialize(&message_buffer, ids.colormap);
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
 
     // TODO: free_gc
@@ -467,7 +471,7 @@ pub fn cleanupResources(
 /// methods. This is useful because we have to call `render()` in many places and we
 /// don't want to have to wrangle all of those arguments each time.
 pub const RenderContext = struct {
-    sock: *const std.os.socket_t,
+    x_connection: common.XConnection,
     ids: *const Ids,
     extensions: *const x11_extension_utils.Extensions(&.{.render}),
     image_byte_order: std.builtin.Endian,
@@ -476,7 +480,7 @@ pub const RenderContext = struct {
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
         const ids = self.ids.*;
         const extensions = self.extensions.*;
         const state = self.state.*;
@@ -493,7 +497,7 @@ pub const RenderContext = struct {
         //     }, &[_]x.Rectangle{
         //         .{ .x = 100, .y = 100, .width = 200, .height = 200 },
         //     });
-        //     try common.send(sock, &msg);
+        //     try x_connection.send(&msg);
         // }
         // // Make a cut-out in the middle of the blue square
         // {
@@ -504,7 +508,7 @@ pub const RenderContext = struct {
         //         .width = 100,
         //         .height = 100,
         //     });
-        //     try common.send(sock, &msg);
+        //     try x_connection.send(&msg);
         // }
 
         // Copy the screenshot to our window
@@ -524,13 +528,13 @@ pub const RenderContext = struct {
                 .width = @intCast(root_screen_dimensions.width),
                 .height = @intCast(root_screen_dimensions.height),
             });
-            try common.send(sock, &msg);
+            try x_connection.send(&msg);
         }
     }
 
     /// Store an image/screenshot on our pixmap on the X server to use later.
     pub fn copyImageToPixmapAtIndex(self: *@This(), rgb_image: RGBImage, pixmap_index: u8, allocator: std.mem.Allocator) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
         const ids = self.ids.*;
         // const extensions = self.extensions.*;
         const state = self.state.*;
@@ -615,7 +619,7 @@ pub const RenderContext = struct {
                         .left_pad = 0,
                         .depth = pixmap_depth,
                     });
-                    try common.send(sock, put_image_msg);
+                    try x_connection.send(put_image_msg);
                 }
             } else {
                 var put_image_msg = try allocator.alloc(u8, whole_request_len);
@@ -638,7 +642,7 @@ pub const RenderContext = struct {
                     .left_pad = 0,
                     .depth = pixmap_depth,
                 });
-                try common.send(sock, put_image_msg);
+                try x_connection.send(put_image_msg);
             }
         }
     }

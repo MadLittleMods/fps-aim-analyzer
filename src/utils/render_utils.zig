@@ -138,7 +138,7 @@ pub const FontDims = struct {
 };
 
 pub fn renderString(
-    sock: std.os.socket_t,
+    x_connection: common.XConnection,
     drawable_id: u32,
     fg_gc_id: u32,
     pos_x: i16,
@@ -155,5 +155,5 @@ pub fn renderString(
         .x = pos_x,
         .y = pos_y,
     });
-    try common.send(sock, msg[0..x.image_text8.getLen(text_len)]);
+    try x_connection.send(msg[0..x.image_text8.getLen(text_len)]);
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 const x = @import("x");
 const common = @import("../x11/x11_common.zig");
 const x11_extension_utils = @import("../x11/x11_extension_utils.zig");
+const x11_render_extension = @import("../x11/x_render_extension.zig");
 const AppState = @import("app_state.zig").AppState;
 const image_conversion = @import("../vision/image_conversion.zig");
 const RGBImage = image_conversion.RGBImage;
@@ -13,6 +14,7 @@ const IsolateDiagnostics = halo_text_vision.IsolateDiagnostics;
 const CharacterRecognition = @import("../vision/ocr/character_recognition.zig").CharacterRecognition;
 const ParsedAmmoResult = @import("../vision/ocr/character_recognition.zig").ParsedAmmoResult;
 const render_utils = @import("../utils/render_utils.zig");
+const FontDims = render_utils.FontDims;
 const BoundingClientRect = render_utils.BoundingClientRect;
 const print_utils = @import("../utils/print_utils.zig");
 const printLabeledImage = print_utils.printLabeledImage;
@@ -130,8 +132,7 @@ pub fn getPixmapFormatsFromConnectionSetup(conn_setup: x.ConnectSetup) ![]const 
 
 /// Bootstraps all of the X resources we will need use when rendering the UI.
 pub fn createResources(
-    sock: std.os.socket_t,
-    buffer: *x.ContiguousReadBuffer,
+    x_connection: common.XConnection,
     ids: *const Ids,
     screen: *align(4) x.Screen,
     extensions: *const x11_extension_utils.Extensions(&.{ .render, .input, .shape }),
@@ -139,9 +140,6 @@ pub fn createResources(
     state: *const AppState,
     base_allocator: std.mem.Allocator,
 ) !void {
-    const reader = common.SocketReader{ .context = sock };
-    const buffer_limit = buffer.half_len;
-
     const root_screen_dimensions = state.root_screen_dimensions;
     const window_dimensions = state.window_dimensions;
     const screenshot_capture_dimensions = state.screenshot_capture_dimensions;
@@ -152,13 +150,47 @@ pub fn createResources(
     var arena_allocator = std.heap.ArenaAllocator.init(base_allocator);
     defer arena_allocator.deinit();
     const allocator = arena_allocator.allocator();
+
+    // Find some compatible picture formats for use with the X Render extension. We want
+    // to find a 24-bit depth format for use with the root window and a 32-bit depth
+    // format for use with our window.
+    //
     // We need to find a visual type that matches the depth of our window that we want to create.
-    const matching_visual_type = try screen.findMatchingVisualType(
+    const window_visual_type = try screen.findMatchingVisualType(
         depth,
         .true_color,
         allocator,
     );
-    std.log.debug("matching_visual_type {any}", .{matching_visual_type});
+    std.log.debug("window_visual_type {any}", .{window_visual_type});
+    const opt_window_picture_format = try x11_render_extension.findPictureFormatForVisualId(
+        x_connection,
+        window_visual_type.id,
+        &x11_extension_utils.Extensions(&.{.render}){
+            .render = extensions.render,
+        },
+    );
+    const window_picture_format = opt_window_picture_format orelse {
+        return error.NoMatchingPictureFormatForWindowVisualType;
+    };
+
+    // We need to find a visual type that matches the depth of the root window.
+    const root_window_visual_type = try screen.findMatchingVisualType(
+        // FIXME: We assume the root window is always 24-bit depth
+        24,
+        .true_color,
+        allocator,
+    );
+    std.log.debug("root_window_visual_type {any}", .{root_window_visual_type});
+    const opt_root_window_picture_format = try x11_render_extension.findPictureFormatForVisualId(
+        x_connection,
+        root_window_visual_type.id,
+        &x11_extension_utils.Extensions(&.{.render}){
+            .render = extensions.render,
+        },
+    );
+    const root_window_picture_format = opt_root_window_picture_format orelse {
+        return error.NoMatchingPictureFormatForWindowVisualType;
+    };
 
     // Our window resources
     // =============================================================================
@@ -171,10 +203,10 @@ pub fn createResources(
         x.create_colormap.serialize(&message_buffer, .{
             .id = ids.colormap,
             .window_id = ids.root,
-            .visual_id = matching_visual_type.id,
+            .visual_id = window_visual_type.id,
             .alloc = .none,
         });
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
     {
         std.log.debug("Creating window_id {0} 0x{0x}", .{ids.window});
@@ -196,7 +228,7 @@ pub fn createResources(
             // since it's one of the arguments.
             .border_width = 0,
             .class = .input_output,
-            .visual_id = matching_visual_type.id,
+            .visual_id = window_visual_type.id,
         }, .{
             .bg_pixmap = .none,
             // 0xAARRGGBB
@@ -219,10 +251,18 @@ pub fn createResources(
             // window controls (basically a borderless window).
             .override_redirect = true,
             // .save_under = true,
-            .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+
+            // We're not setting this here as the window is probably being created with
+            // the `x_request_connection`. Since the event loop is running from the
+            // `x_event_connection`, we will later use a `x.change_window_attributes`
+            // request to set the event mask on the window after it's created so we
+            // actually receive events for it.
+            //
+            // .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+
             // .dont_propagate = 1,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
     {
         std.log.debug("Creating debug window_id {0} 0x{0x}", .{ids.debug_window});
@@ -244,7 +284,7 @@ pub fn createResources(
             // since it's one of the arguments.
             .border_width = 0,
             .class = .input_output,
-            .visual_id = matching_visual_type.id,
+            .visual_id = window_visual_type.id,
         }, .{
             .bg_pixmap = .none,
             // 0xAARRGGBB
@@ -267,10 +307,18 @@ pub fn createResources(
             // window controls (basically a borderless window).
             .override_redirect = true,
             // .save_under = true,
-            .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+
+            // We're not setting this here as the window is probably being created with
+            // the `x_request_connection`. Since the event loop is running from the
+            // `x_event_connection`, we will later use a `x.change_window_attributes`
+            // request to set the event mask on the window after it's created so we
+            // actually receive events for it.
+            //
+            // .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+            
             // .dont_propagate = 1,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     {
@@ -291,7 +339,7 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     {
@@ -312,7 +360,7 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
     {
         const color_black: u32 = 0xff000000;
@@ -332,7 +380,7 @@ pub fn createResources(
             // spirit of what we want to do.
             .graphics_exposures = false,
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     // Create a scratchpad pixmap drawable to capture screenshots onto
@@ -345,7 +393,7 @@ pub fn createResources(
             .width = @intCast(screenshot_capture_dimensions.width),
             .height = @as(u16, @intCast(scratch_ring_buffer_size)) * @as(u16, @intCast(screenshot_capture_dimensions.height)),
         });
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
 
     // Create a pixmap drawable where we can copy from our scratchpad pixmap to a pixmap
@@ -359,50 +407,8 @@ pub fn createResources(
             .width = @intCast(screenshot_capture_dimensions.width),
             .height = @intCast(max_screenshots_shown * screenshot_capture_dimensions.height),
         });
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
-
-    // Find some compatible picture formats for use with the X Render extension. We want
-    // to find a 24-bit depth format for use with the root window and a 32-bit depth
-    // format for use with our window.
-    {
-        var message_buffer: [x.render.query_pict_formats.len]u8 = undefined;
-        x.render.query_pict_formats.serialize(&message_buffer, extensions.render.opcode);
-        try common.send(sock, &message_buffer);
-    }
-    const message_length = try x.readOneMsg(reader, @alignCast(buffer.nextReadBuffer()));
-    try common.checkMessageLengthFitsInBuffer(message_length, buffer_limit);
-    const optional_picture_formats_data: ?struct { matching_picture_format_24: x.render.PictureFormatInfo, matching_picture_format_32: x.render.PictureFormatInfo } = blk: {
-        switch (x.serverMsgTaggedUnion(@alignCast(buffer.double_buffer_ptr))) {
-            .reply => |msg_reply| {
-                const msg: *x.render.query_pict_formats.Reply = @ptrCast(msg_reply);
-                const picture_formats = msg.getPictureFormats();
-                break :blk .{
-                    .matching_picture_format_24 = try common.findMatchingPictureFormatForDepth(
-                        picture_formats,
-                        24,
-                    ),
-                    .matching_picture_format_32 = try common.findMatchingPictureFormatForDepth(
-                        picture_formats,
-                        32,
-                    ),
-                };
-            },
-            else => |msg| {
-                std.log.err("expected a reply for `x.render.query_pict_formats` but got {}", .{msg});
-                return error.ExpectedReplyButGotSomethingElse;
-            },
-        }
-    };
-    const picture_formats_data = optional_picture_formats_data orelse @panic("Matching picture formats not found");
-    const matching_picture_format = switch (depth) {
-        24 => picture_formats_data.matching_picture_format_24,
-        32 => picture_formats_data.matching_picture_format_32,
-        else => |captured_depth| {
-            std.log.err("Matching picture format not found for depth {}", .{captured_depth});
-            @panic("Matching picture format not found for depth");
-        },
-    };
 
     // We need to create a picture for every drawable that we want to use with the X
     // Render extension
@@ -414,13 +420,12 @@ pub fn createResources(
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
             .picture_id = ids.picture_root,
             .drawable_id = screen.root,
-            // The root window is always 24-bit depth
-            .format_id = picture_formats_data.matching_picture_format_24.picture_format_id,
+            .format_id = root_window_picture_format.picture_format_id,
             .options = .{
                 .subwindow_mode = .include_inferiors,
             },
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     // Create a picture for the our window that we can copy and composite things onto
@@ -429,10 +434,10 @@ pub fn createResources(
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
             .picture_id = ids.picture_window,
             .drawable_id = ids.window,
-            .format_id = matching_picture_format.picture_format_id,
+            .format_id = window_picture_format.picture_format_id,
             .options = .{},
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 
     // Create a picture for the pixmaps
@@ -441,55 +446,48 @@ pub fn createResources(
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
             .picture_id = ids.picture_scratch_pixmap,
             .drawable_id = ids.scratch_pixmap,
-            .format_id = matching_picture_format.picture_format_id,
+            .format_id = window_picture_format.picture_format_id,
             .options = .{},
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
     {
         var message_buffer: [x.render.create_picture.max_len]u8 = undefined;
         const len = x.render.create_picture.serialize(&message_buffer, extensions.render.opcode, .{
             .picture_id = ids.picture_screenshot_pixmap,
             .drawable_id = ids.screenshot_pixmap,
-            .format_id = matching_picture_format.picture_format_id,
+            .format_id = window_picture_format.picture_format_id,
             .options = .{},
         });
-        try common.send(sock, message_buffer[0..len]);
+        try x_connection.send(message_buffer[0..len]);
     }
 }
 
 pub fn cleanupResources(
-    sock: std.os.socket_t,
+    x_connection: common.XConnection,
     ids: *const Ids,
 ) !void {
     {
         var message_buffer: [x.free_pixmap.len]u8 = undefined;
         x.free_pixmap.serialize(&message_buffer, ids.scratch_pixmap);
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
     {
         var message_buffer: [x.free_pixmap.len]u8 = undefined;
         x.free_pixmap.serialize(&message_buffer, ids.screenshot_pixmap);
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
 
     {
         var message_buffer: [x.free_colormap.len]u8 = undefined;
         x.free_colormap.serialize(&message_buffer, ids.colormap);
-        try common.send(sock, &message_buffer);
+        try x_connection.send(&message_buffer);
     }
 
     // TODO: free_gc
 
     // TODO: x.render.free_picture
 }
-
-pub const FontDims = struct {
-    width: u8,
-    height: u8,
-    font_left: i16, // pixels to the left of the text basepoint
-    font_ascent: i16, // pixels up from the text basepoint to the top of the text
-};
 
 pub const GetImageRequestInfo = struct {
     /// The index of the request/screenshot in the ring buffer
@@ -514,7 +512,7 @@ pub const GetImageRequestInfo = struct {
 /// methods. This is useful because we have to call `render()` in many places and we
 /// don't want to have to wrangle all of those arguments each time.
 pub const RenderContext = struct {
-    sock: *const std.os.socket_t,
+    x_connection: common.XConnection,
     ids: *const Ids,
     root_screen_depth: u8,
     extensions: *const x11_extension_utils.Extensions(&.{ .render, .input, .shape }),
@@ -529,7 +527,7 @@ pub const RenderContext = struct {
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
         const ids = self.ids.*;
         const extensions = self.extensions.*;
         const font_dims = self.font_dims.*;
@@ -551,7 +549,7 @@ pub const RenderContext = struct {
         const text_length = 11;
         const text_width = font_dims.width * text_length;
         try render_utils.renderString(
-            sock,
+            x_connection,
             window_id,
             ids.fg_gc,
             @divFloor(window_dimensions.width - text_width, 2) + font_dims.font_left,
@@ -596,13 +594,13 @@ pub const RenderContext = struct {
                 .width = @intCast(screenshot_capture_dimensions.width),
                 .height = @intCast(screenshot_capture_dimensions.height),
             });
-            try common.send(sock, &msg);
+            try x_connection.send(&msg);
         }
     }
 
     /// Draw some debug gizmos on the screen like the current ammo counter bounding box
     pub fn drawDebugGizmos(self: *const @This()) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
         const ids = self.ids.*;
         const state = self.state.*;
 
@@ -624,7 +622,7 @@ pub const RenderContext = struct {
                 .width = @intCast(right_quadrant_bounding_box_width + 2),
                 .height = @intCast(right_quadrant_bounding_box_height + 2),
             });
-            try common.send(sock, &msg);
+            try x_connection.send(&msg);
         }
         // Draw a bounding box around where we're currently trying to capture the ammo counter in
         {
@@ -640,7 +638,7 @@ pub const RenderContext = struct {
                     .height = @intCast(state.ammo_counter_bounding_box.height + 2),
                 },
             });
-            try common.send(sock, &msg);
+            try x_connection.send(&msg);
         }
         // Make a cut-out from the bounding box rectangle so we only see the border around it
         {
@@ -651,14 +649,14 @@ pub const RenderContext = struct {
                 .width = @intCast(state.ammo_counter_bounding_box.width),
                 .height = @intCast(state.ammo_counter_bounding_box.height),
             });
-            try common.send(sock, &msg);
+            try x_connection.send(&msg);
         }
     }
 
     /// Capture a screenshot of the root window (whatever is displayed on the screen)
     /// and store it in our pixmap.
     pub fn captureScreenshotToPixmap(self: *@This(), scratch_index: u32) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
         const ids = self.ids.*;
         const extensions = self.extensions.*;
         const state = self.state.*;
@@ -699,14 +697,14 @@ pub const RenderContext = struct {
                 .width = @intCast(screenshot_capture_dimensions.width),
                 .height = @intCast(screenshot_capture_dimensions.height),
             });
-            try common.send(sock, &msg);
+            try x_connection.send(&msg);
         }
     }
 
     /// Copy a screenshot from the screenshot at the given index into our main
     /// screenshot of interest pixmap.
     pub fn copyScreenshotFromScratchpad(self: *@This(), scratch_index: u32) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
         const ids = self.ids.*;
         const extensions = self.extensions.*;
         const state = self.state.*;
@@ -741,7 +739,7 @@ pub const RenderContext = struct {
                 .width = @intCast(screenshot_capture_dimensions.width),
                 .height = @intCast(screenshot_capture_dimensions.height),
             });
-            try common.send(sock, &msg);
+            try x_connection.send(&msg);
         }
 
         // Advance the screenshot index
@@ -767,7 +765,7 @@ pub const RenderContext = struct {
         /// Resolution height that the game is rendering at
         game_resolution_height: usize,
     ) !void {
-        const sock = self.sock.*;
+        const x_connection = self.x_connection;
         const ids = self.ids.*;
 
         std.log.debug("enqueueGetImageRequest x={}, y={}, width={}, height={}", .{
@@ -788,7 +786,7 @@ pub const RenderContext = struct {
             .plane_mask = 0xffffffff,
         });
         // We handle the reply to this request above (see `analyzeScreenCapture`)
-        try common.send(sock, &get_image_msg);
+        try x_connection.send(&get_image_msg);
 
         // Keep track of the request so we can line it up when the reply comes in
         try self.get_image_request_queue.writeItem(.{
