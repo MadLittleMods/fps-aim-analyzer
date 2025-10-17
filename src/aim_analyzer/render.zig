@@ -315,7 +315,7 @@ pub fn createResources(
             // actually receive events for it.
             //
             // .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
-
+            
             // .dont_propagate = 1,
         });
         try x_connection.send(message_buffer[0..len]);
@@ -489,6 +489,25 @@ pub fn cleanupResources(
     // TODO: x.render.free_picture
 }
 
+pub const GetImageRequestInfo = struct {
+    /// The index of the request/screenshot in the ring buffer
+    scratch_index: u32,
+    /// `std.time.milliTimestamp()`
+    request_ts: i64,
+    /// The crop area from the screen that we requested
+    bounding_box: BoundingClientRect(usize),
+    /// Region type of the game window that was captured
+    screenshot_region: ScreenshotRegion,
+    /// Width of the entire game window
+    pre_crop_width: usize,
+    /// Height of the entire game window
+    pre_crop_height: usize,
+    /// Resolution width that the game is rendering at
+    game_resolution_width: usize,
+    /// Resolution height that the game is rendering at
+    game_resolution_height: usize,
+};
+
 /// Context struct pattern where we can hold some state that we can access in any of the
 /// methods. This is useful because we have to call `render()` in many places and we
 /// don't want to have to wrangle all of those arguments each time.
@@ -502,6 +521,9 @@ pub const RenderContext = struct {
     root_window_pixmap_format: x.Format,
     state: *AppState,
     character_recognition: *CharacterRecognition,
+    /// Keep track of the X GetImage requests we've sent along with the parameters so we
+    /// can line it up when the reply comes in.
+    get_image_request_queue: std.fifo.LinearFifo(GetImageRequestInfo, .{ .Static = 256 }),
 
     /// Renders the UI to our window.
     pub fn render(self: *const @This()) !void {
@@ -722,6 +744,191 @@ pub const RenderContext = struct {
 
         // Advance the screenshot index
         self.state.next_interesting_screenshot_index = @rem(current_screenshot_index + 1, max_screenshots_shown);
+    }
+
+    /// Make a new X GetImage request to capture a screenshot of a specific region of
+    /// the root screen. Also keep track of the request so we can line it up when the
+    /// reply comes in.
+    pub fn enqueueGetImageRequest(
+        self: *@This(),
+        scratch_index: u32,
+        /// The crop area from the screen that we requested
+        bounding_box: BoundingClientRect(usize),
+        /// Region type of the game window that was captured
+        screenshot_region: ScreenshotRegion,
+        /// Width of the entire game window
+        pre_crop_width: usize,
+        /// Height of the entire game window
+        pre_crop_height: usize,
+        /// Resolution width that the game is rendering at
+        game_resolution_width: usize,
+        /// Resolution height that the game is rendering at
+        game_resolution_height: usize,
+    ) !void {
+        const x_connection = self.x_connection;
+        const ids = self.ids.*;
+
+        std.log.debug("enqueueGetImageRequest x={}, y={}, width={}, height={}", .{
+            bounding_box.x,
+            bounding_box.y,
+            bounding_box.width,
+            bounding_box.height,
+        });
+
+        var get_image_msg: [x.get_image.len]u8 = undefined;
+        x.get_image.serialize(&get_image_msg, .{
+            .format = .z_pixmap,
+            .drawable_id = ids.root,
+            .x = @intCast(bounding_box.x),
+            .y = @intCast(bounding_box.y),
+            .width = @intCast(bounding_box.width),
+            .height = @intCast(bounding_box.height),
+            .plane_mask = 0xffffffff,
+        });
+        // We handle the reply to this request above (see `analyzeScreenCapture`)
+        try x_connection.send(&get_image_msg);
+
+        // Keep track of the request so we can line it up when the reply comes in
+        try self.get_image_request_queue.writeItem(.{
+            .scratch_index = scratch_index,
+            .request_ts = std.time.milliTimestamp(),
+            .bounding_box = bounding_box,
+            .screenshot_region = screenshot_region,
+            .pre_crop_width = pre_crop_width,
+            .pre_crop_height = pre_crop_height,
+            .game_resolution_width = game_resolution_width,
+            .game_resolution_height = game_resolution_height,
+        });
+    }
+
+    /// Process the next incoming X GetImage reply and convert it into a screenshot
+    pub fn processNextGetImageRequest(
+        self: *@This(),
+        get_image_reply: *x.get_image.Reply,
+        allocator: std.mem.Allocator,
+    ) !struct { screenshot: Screenshot(RGBImage), request_info: GetImageRequestInfo } {
+        const before_conversion_ts = std.time.milliTimestamp();
+        const opt_request_info = self.get_image_request_queue.readItem();
+        if (opt_request_info) |request_info| {
+            std.log.debug("Processing next image response {d}x{d} ({d}, {d}) - request time {}", .{
+                request_info.bounding_box.width,
+                request_info.bounding_box.height,
+                request_info.bounding_box.x,
+                request_info.bounding_box.y,
+                std.fmt.fmtDurationSigned((before_conversion_ts - request_info.request_ts) * std.time.ns_per_ms),
+            });
+
+            const screenshot = try self.convertXGetImageReplyToRGBImage(
+                get_image_reply,
+                request_info,
+                allocator,
+            );
+
+            // const after_conversion_ts = std.time.milliTimestamp();
+            // std.log.debug("Conversion time {}", .{
+            //     std.fmt.fmtDurationSigned((after_conversion_ts - before_conversion_ts) * std.time.ns_per_ms),
+            // });
+
+            return .{
+                .screenshot = screenshot,
+                .request_info = request_info,
+            };
+        }
+
+        return error.NoMatchingRequestForThisRepy;
+    }
+
+    /// Convert the raw image data from an X GetImage reply into an RGB image
+    fn convertXGetImageReplyToRGBImage(
+        self: *@This(),
+        get_image_reply: *x.get_image.Reply,
+        request_info: GetImageRequestInfo,
+        allocator: std.mem.Allocator,
+    ) !Screenshot(RGBImage) {
+        const image_data = get_image_reply.getData();
+
+        const capture_width = request_info.bounding_box.width;
+        const capture_height = request_info.bounding_box.height;
+        const bytes_per_pixel_in_data = x.get_image.Reply.scanline_pad_bytes;
+
+        // Given our request for an image with the width/height specified,
+        // make sure we got at least the right amount of data back to
+        // represent that size of image (there may also be padding at the
+        // end).
+        const expected_num_bytes = capture_width * capture_height * x.get_image.Reply.scanline_pad_bytes;
+        if (image_data.len < expected_num_bytes) {
+            std.log.err("Expected at least {} bytes of image data but only got {} bytes", .{
+                expected_num_bytes,
+                image_data.len,
+            });
+            return error.ExpectedMoreImageData;
+        }
+
+        const rgb_pixels = try allocator.alloc(RGBPixel, capture_width * capture_height);
+        const rgb_image = RGBImage{
+            .width = capture_width,
+            .height = capture_height,
+            .pixels = rgb_pixels,
+        };
+
+        var x_index: usize = 0;
+        var y_index: usize = 0;
+        var image_data_index: u32 = 0;
+        while ((image_data_index + bytes_per_pixel_in_data) < image_data.len) : (image_data_index += bytes_per_pixel_in_data) {
+            // Move on to the next row if we've reached the end of the current row
+            if (x_index >= capture_width) {
+                x_index = 0;
+                y_index += 1;
+                // For Debugging: Print a newline after each row
+                // std.debug.print("\n", .{});
+            }
+
+            //  The image data might have padding on the end so make sure to stop when
+            //  we expect the image to end
+            if (y_index >= capture_height) {
+                break;
+            }
+
+            const pixel_index: usize = y_index * capture_width + x_index;
+
+            const padded_pixel_value = image_data[image_data_index..(image_data_index + bytes_per_pixel_in_data)];
+            // Read the raw value into a normal u32 (taking into account the byte order)
+            const pixel_value = std.mem.readVarInt(
+                u32,
+                padded_pixel_value,
+                self.image_byte_order,
+            );
+            // For Debugging: Print out the pixels
+            // std.debug.print("0x{x} ", .{pixel_value});
+
+            // Break down the pixel value into its ARGB components
+            //
+            // const alpha = @as(u8, @intCast((pixel_value >> 24) & 0xff));
+            const red = @as(u8, @intCast((pixel_value >> 16) & 0xff));
+            const green = @as(u8, @intCast((pixel_value >> 8) & 0xff));
+            const blue = @as(u8, @intCast(pixel_value & 0xff));
+
+            rgb_pixels[pixel_index] = RGBPixel{
+                .r = @as(f32, @floatFromInt(red)) / 255.0,
+                .g = @as(f32, @floatFromInt(green)) / 255.0,
+                .b = @as(f32, @floatFromInt(blue)) / 255.0,
+            };
+
+            x_index += 1;
+        }
+
+        const screenshot: Screenshot(RGBImage) = .{
+            .image = rgb_image,
+            .crop_region = request_info.screenshot_region,
+            .crop_region_x = @intCast(request_info.bounding_box.x),
+            .crop_region_y = @intCast(request_info.bounding_box.y),
+            .pre_crop_width = request_info.pre_crop_width,
+            .pre_crop_height = request_info.pre_crop_height,
+            .game_resolution_width = request_info.game_resolution_width,
+            .game_resolution_height = request_info.game_resolution_height,
+        };
+
+        return screenshot;
     }
 
     /// Grab the pixels from the window after we've rendered to it using `get_image` and
