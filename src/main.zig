@@ -7,7 +7,6 @@ const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
 const x_shape_extension = @import("x11/x_shape_extension.zig");
 const render = @import("aim_analyzer/render.zig");
-const GetImageRequestInfo = render.GetImageRequestInfo;
 const AppState = @import("aim_analyzer/app_state.zig").AppState;
 const render_utils = @import("utils/render_utils.zig");
 const Dimensions = render_utils.Dimensions;
@@ -38,27 +37,28 @@ fn projectSrcPath() []const u8 {
     return file_source_path;
 }
 
-/// Capture a screenshot of the ammo counter tp analyze and the reticle at the same time.
+/// Capture a screenshot of the ammo counter to analyze and the reticle at the same time.
 fn captureScreenshots(render_context: *render.RenderContext, state: *AppState) !void {
     const scratch_ring_buffer_size = state.scratch_ring_buffer_size;
     const current_scratch_index = state.next_scratch_index;
 
-    // Request a screenshot of the ammo counter
+    // Capture a screenshot of the reticle so if we later determine the ammo counter
+    // went down, we have the corresponding view of what you were shooting at.
+    try render_context.captureScreenshotToPixmap(current_scratch_index);
+
+    // At the same time, request a screenshot of the ammo counter so we can analyze it
+    // locally
     try render_context.enqueueGetImageRequest(
         current_scratch_index,
         state.ammo_counter_bounding_box,
         state.ammo_counter_screenshot_region,
         @intCast(state.root_screen_dimensions.width),
         @intCast(state.root_screen_dimensions.height),
-        // We assume the game is being rendered 1:1 (100%), so the game
+        // FIXME: We assume the game is being rendered 1:1 (100%), so the game
         // resolution is the same as the image resolution
         @intCast(state.root_screen_dimensions.width),
         @intCast(state.root_screen_dimensions.height),
     );
-    // Also capture a screenshot of the reticle at the same time
-    // so if we determine the ammo counter went down, we have
-    // the corresponding view of what you were shooting at.
-    try render_context.captureScreenshotToPixmap(current_scratch_index);
 
     // Advance the scratch index
     state.next_scratch_index = @rem(current_scratch_index + 1, scratch_ring_buffer_size);
@@ -529,7 +529,6 @@ const MainProgram = struct {
             .root_window_pixmap_format = root_window_pixmap_format,
             .state = state,
             .character_recognition = &character_recognition,
-            .get_image_request_queue = std.fifo.LinearFifo(GetImageRequestInfo, .{ .Static = 256 }).init(),
         };
 
         while (true) {
@@ -563,82 +562,12 @@ const MainProgram = struct {
                         return error.ReceivedXError;
                     },
                     .reply => |msg| {
-                        // Note: We assume any reply here will be to the `get_image` request
-                        // but normally you would want some state machine sequencer to match
-                        // up requests with replies.
-                        const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
-
-                        // Convert the X image format to an `RGBImage` we can use in our vision code
-                        const processed_results = try render_context.processNextGetImageRequest(
-                            get_image_reply,
-                            allocator,
+                        std.log.err(
+                            "Unexpectedly received X reply on the `x_event_connection` (event-loop) " ++
+                                "(did you mean to make this request using `x_request_connection`?): {}",
+                            .{msg},
                         );
-                        const scratch_index = processed_results.request_info.scratch_index;
-                        const screenshot = processed_results.screenshot;
-                        defer screenshot.image.deinit(allocator);
-
-                        // try printLabeledImage("analyzing screenshot", screenshot.image, .kitty, allocator);
-
-                        // Run text detection and OCR on the ammo counter
-                        const before_analyze_ts = std.time.milliTimestamp();
-                        const opt_ammo_results = try render_context.analyzeScreenCapture(screenshot, allocator);
-                        const after_analyze_ts = std.time.milliTimestamp();
-                        std.log.debug("Analysis time {}", .{
-                            std.fmt.fmtDurationSigned((after_analyze_ts - before_analyze_ts) * std.time.ns_per_ms),
-                        });
-                        if (opt_ammo_results) |ammo_results| {
-                            const confidence_level_string = try formatEachItemInSlice(
-                                f64,
-                                ammo_results.confidence_levels,
-                                "{d:.4}",
-                                allocator,
-                            );
-                            defer allocator.free(confidence_level_string);
-                            std.log.debug("ammo_results {d} (confidence {s})", .{
-                                ammo_results.ammo_value,
-                                confidence_level_string,
-                            });
-
-                            const ammo_ui_strip_bounding_box = futureAmmoHeuristicBoundingClientRect(ammo_results.ammo_counter_bounding_box);
-
-                            // Keep track of where we last found the ammo counter so we can
-                            // capture a lot less of the screen next time.
-                            state.ammo_counter_bounding_box = ammo_ui_strip_bounding_box;
-                            state.ammo_counter_screenshot_region = .ammo_ui_strip;
-                            std.log.debug("New state.ammo_counter_bounding_box {d}x{d} ({d}, {d})", .{
-                                state.ammo_counter_bounding_box.width,
-                                state.ammo_counter_bounding_box.height,
-                                state.ammo_counter_bounding_box.x,
-                                state.ammo_counter_bounding_box.y,
-                            });
-
-                            const prev_ammo_value = state.ammo_value;
-                            const current_ammo_value = ammo_results.ammo_value;
-
-                            // Keep track of the ammo count
-                            state.ammo_value = current_ammo_value;
-
-                            // If the ammo went down by 1 (meaning a bullet was shot), copy
-                            // the screenshot from the scratchpad to our list of screenshots
-                            // of interest.
-                            if (current_ammo_value < prev_ammo_value and (prev_ammo_value - current_ammo_value) == 1) {
-                                try render_context.copyScreenshotFromScratchpad(scratch_index);
-                                // Re-render the UI to show the new screenshot
-                                try render_context.render();
-                            }
-
-                            // Draw debug gizmos again
-                            try render_context.render();
-                        }
-
-                        // Capture frames for 200ms (the max input delay we expect) after a
-                        // left-click. We only want to request another screenshot after the
-                        // last request finished processing so we do this check in this
-                        // image reply function.
-                        const current_ts = std.time.milliTimestamp();
-                        if (current_ts - state.last_left_click_ts < INPUT_DELAY_MAX_MS) {
-                            try captureScreenshots(&render_context, state);
-                        }
+                        return error.UnexpectedXReplyReceivedOnEventConnection;
                     },
                     .generic_extension_event => |msg| {
                         if (msg.ext_opcode == extensions.input.opcode) {

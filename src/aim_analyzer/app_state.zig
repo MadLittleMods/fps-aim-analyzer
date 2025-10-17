@@ -1,5 +1,6 @@
 const std = @import("std");
 const MakeStruct = @import("../utils/make_struct.zig").MakeStruct;
+const RwLocked = @import("../utils/rwlocked.zig").RwLocked;
 const render_utils = @import("../utils/render_utils.zig");
 const halo_text_vision = @import("../vision/halo_text_vision.zig");
 const ScreenshotRegion = halo_text_vision.ScreenshotRegion;
@@ -21,7 +22,7 @@ pub const AppState = struct {
     ammo_value: u32 = 0,
 
     /// The ms timestamp of the last time the left mouse button was clicked.
-    last_left_click_ts: i64 = 0,
+    last_left_click_ts: RwLocked(i64).init(0),
 
     /// The max number of screenshots that will be stored and displayed.
     max_screenshots_shown: u8,
