@@ -374,15 +374,15 @@ pub const RenderContext = struct {
         }
 
         // Render some text in the middle of the square cut-out
-        const text_length = 11;
-        const text_width = font_dims.width * text_length;
         try render_utils.renderString(
             x_connection,
             window_id,
             ids.fg_gc,
-            @divFloor(window_dimensions.width - text_width, 2) + font_dims.font_left,
-            @divFloor(window_dimensions.height - font_dims.height, 2) + font_dims.font_ascent,
-            "Hello X! {}",
+            font_dims,
+            @divFloor(window_dimensions.width, 2),
+            @divFloor(window_dimensions.height, 2),
+            render_utils.PositionOrigin.init(.{ .keyword = .center }, .{ .keyword = .center }),
+            "Hello X! {d:<5}",
             .{
                 mouse_x,
             },
