@@ -374,9 +374,6 @@ pub const RenderContext = struct {
         }
 
         // Render some text in the middle of the square cut-out
-        const text_length = 11;
-        const text_width = font_dims.width * text_length;
-        _ = text_width;
         try render_utils.renderString(
             x_connection,
             window_id,
