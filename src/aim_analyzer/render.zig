@@ -385,7 +385,7 @@ pub const RenderContext = struct {
             @divFloor(window_dimensions.width, 2),
             @divFloor(window_dimensions.height, 2),
             render_utils.PositionOrigin.init(.{ .keyword = .center }, .{ .keyword = .center }),
-            "Hello X! {}",
+            "Hello X! {d:<5}",
             .{
                 mouse_x,
             },
