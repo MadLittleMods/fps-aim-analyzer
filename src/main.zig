@@ -1,12 +1,68 @@
 const std = @import("std");
 const x = @import("x");
+const zigimg = @import("zigimg");
 const common = @import("x11/x11_common.zig");
 const x11_extension_utils = @import("x11/x11_extension_utils.zig");
 const x_render_extension = @import("x11/x_render_extension.zig");
 const x_input_extension = @import("x11/x_input_extension.zig");
-const render_utils = @import("utils/render_utils.zig");
+const x_shape_extension = @import("x11/x_shape_extension.zig");
 const render = @import("aim_analyzer/render.zig");
+const GetImageRequestInfo = render.GetImageRequestInfo;
 const AppState = @import("aim_analyzer/app_state.zig").AppState;
+const render_utils = @import("utils/render_utils.zig");
+const Dimensions = render_utils.Dimensions;
+const BoundingClientRect = render_utils.BoundingClientRect;
+const image_conversion = @import("vision/image_conversion.zig");
+const RGBImage = image_conversion.RGBImage;
+const math_utils = @import("utils/math_utils.zig");
+const absoluteDifference = math_utils.absoluteDifference;
+const halo_text_vision = @import("vision/halo_text_vision.zig");
+const ScreenshotRegion = halo_text_vision.ScreenshotRegion;
+const Screenshot = halo_text_vision.Screenshot;
+const futureAmmoHeuristicBoundingClientRect = halo_text_vision.futureAmmoHeuristicBoundingClientRect;
+const CharacterRecognition = @import("vision/ocr/character_recognition.zig").CharacterRecognition;
+const save_load_utils = @import("vision/ocr/save_load_utils.zig");
+const print_utils = @import("./utils/print_utils.zig");
+const formatEachItemInSlice = print_utils.formatEachItemInSlice;
+const printLabeledImage = print_utils.printLabeledImage;
+const child_process_utils = @import("utils/child_process_utils.zig");
+const ChildProcessRunner = child_process_utils.ChildProcessRunner;
+
+// We only expect the time between a left-click and the time it would take to see the
+// ammo counter go down by 1 to be at max 200ms.
+const INPUT_DELAY_MAX_MS = 200;
+
+fn projectSrcPath() []const u8 {
+    const file_source_path = std.fs.path.dirname(@src().file) orelse ".";
+
+    return file_source_path;
+}
+
+/// Capture a screenshot of the ammo counter tp analyze and the reticle at the same time.
+fn captureScreenshots(render_context: *render.RenderContext, state: *AppState) !void {
+    const scratch_ring_buffer_size = state.scratch_ring_buffer_size;
+    const current_scratch_index = state.next_scratch_index;
+
+    // Request a screenshot of the ammo counter
+    try render_context.enqueueGetImageRequest(
+        current_scratch_index,
+        state.ammo_counter_bounding_box,
+        state.ammo_counter_screenshot_region,
+        @intCast(state.root_screen_dimensions.width),
+        @intCast(state.root_screen_dimensions.height),
+        // We assume the game is being rendered 1:1 (100%), so the game
+        // resolution is the same as the image resolution
+        @intCast(state.root_screen_dimensions.width),
+        @intCast(state.root_screen_dimensions.height),
+    );
+    // Also capture a screenshot of the reticle at the same time
+    // so if we determine the ammo counter went down, we have
+    // the corresponding view of what you were shooting at.
+    try render_context.captureScreenshotToPixmap(current_scratch_index);
+
+    // Advance the scratch index
+    state.next_scratch_index = @rem(current_scratch_index + 1, scratch_ring_buffer_size);
+}
 
 const MainProgram = struct {
     state: ?*AppState = null,
@@ -72,10 +128,25 @@ const MainProgram = struct {
         }
 
         const screen = common.getFirstScreenFromConnectionSetup(x_event_connect_result.setup);
+        std.log.info("root window ID {0} 0x{0x}", .{screen.root});
         inline for (@typeInfo(@TypeOf(screen.*)).Struct.fields) |field| {
             std.log.debug("SCREEN 0| {s}: {any}", .{ field.name, @field(screen, field.name) });
         }
-        std.log.info("root window ID {0} 0x{0x}", .{screen.root});
+
+        const pixmap_formats = try render.getPixmapFormatsFromConnectionSetup(x_event_connect_result.setup);
+        const root_window_pixmap_format = try render.findMatchingPixmapFormatForDepth(
+            pixmap_formats,
+            screen.root_depth,
+        );
+
+        const image_byte_order: std.builtin.Endian = switch (conn_setup_fixed_fields.image_byte_order) {
+            .lsb_first => .Little,
+            .msb_first => .Big,
+            else => |order| {
+                std.log.err("unknown image-byte-order {}", .{order});
+                return error.UnknownImageByteOrder;
+            },
+        };
 
         // We use the X Render extension for capturing screenshots and splatting them onto
         // our window. Useful because their "composite" request works with mismatched depths
@@ -94,6 +165,14 @@ const MainProgram = struct {
             "XInputExtension",
         );
         const input_extension = optional_input_extension orelse @panic("XInputExtension extension not found");
+
+        // We use the X Shape extension to make the debug window click-through-able. If
+        // you're familiar with CSS, we use this to apply `pointer-events: none;`.
+        const optional_shape_extension = try x11_extension_utils.getExtensionInfo(
+            x_request_connection,
+            "SHAPE",
+        );
+        const shape_extension = optional_shape_extension orelse @panic("SHAPE extension not found");
 
         // We must run the query_version request of each extension on every connection that
         // interacts with the extension. Most extensions have this behavior in the spec that
@@ -136,12 +215,25 @@ const MainProgram = struct {
                     .minor_version = 3,
                 },
             );
+
+            try x_shape_extension.ensureCompatibleVersionOfXShapeExtension(
+                x_connection,
+                &shape_extension,
+                .{
+                    // We arbitrarily require version 1.1 of the X Shape extension
+                    // because that's the latest version and is sufficiently old
+                    // and ubiquitous.
+                    .major_version = 1,
+                    .minor_version = 1,
+                },
+            );
         }
 
         // Assemble a map of X extension info
-        const extensions = x11_extension_utils.Extensions(&.{ .render, .input }){
+        const extensions = x11_extension_utils.Extensions(&.{ .render, .input, .shape }){
             .render = render_extension,
             .input = input_extension,
+            .shape = shape_extension,
         };
 
         // Since each connection has a `base_resource_id`, let's create most resources with
@@ -166,21 +258,32 @@ const MainProgram = struct {
         // We're using 32-bit depth so we can use ARGB colors that include alpha/transparency
         const depth = 32;
 
-        const root_screen_dimensions = render_utils.Dimensions{
+        const root_screen_dimensions = Dimensions{
             .width = @intCast(screen.pixel_width),
             .height = @intCast(screen.pixel_height),
         };
 
         const screenshot_capture_scale = 20;
-        const screenshot_capture_dimensions = render_utils.Dimensions{
+        const screenshot_capture_dimensions = Dimensions{
             .width = @intCast(@divTrunc(screen.pixel_width, screenshot_capture_scale)),
             .height = @intCast(@divTrunc(screen.pixel_height, screenshot_capture_scale)),
+        };
+
+        // Start out with the bottom-right corner of the screen
+        const ammo_counter_screenshot_region = ScreenshotRegion.bottom_right_quadrant;
+        const ammo_counter_bounding_box_width = screen.pixel_width / 2;
+        const ammo_counter_bounding_box_height = screen.pixel_height / 2;
+        const ammo_counter_bounding_box = BoundingClientRect(usize){
+            .x = screen.pixel_width - ammo_counter_bounding_box_width,
+            .y = screen.pixel_height - ammo_counter_bounding_box_height,
+            .width = ammo_counter_bounding_box_width,
+            .height = ammo_counter_bounding_box_height,
         };
 
         const max_screenshots_shown = 6;
         const margin = 20;
         const padding = 10;
-        const window_dimensions = render_utils.Dimensions{
+        const window_dimensions = Dimensions{
             .width = screenshot_capture_dimensions.width + (2 * padding),
             .height = (max_screenshots_shown * (screenshot_capture_dimensions.height + padding)) + padding,
         };
@@ -196,6 +299,9 @@ const MainProgram = struct {
             .root_screen_dimensions = root_screen_dimensions,
             .window_dimensions = window_dimensions,
             .screenshot_capture_dimensions = screenshot_capture_dimensions,
+            .ammo_counter_bounding_box = ammo_counter_bounding_box,
+            // We start out capturing the bottom-right corner of the screen
+            .ammo_counter_screenshot_region = ammo_counter_screenshot_region,
             .max_screenshots_shown = max_screenshots_shown,
             .margin = margin,
             .padding = padding,
@@ -208,6 +314,7 @@ const MainProgram = struct {
             &extensions,
             depth,
             state,
+            allocator,
         );
 
         // Set the `_NET_WM_PID` atom so we can later find the window ID by the PID
@@ -272,6 +379,15 @@ const MainProgram = struct {
             // `.event_mask` in the event loop
             try x_event_connection.send(message_buffer[0..len]);
         }
+        {
+            var message_buffer: [x.change_window_attributes.max_len]u8 = undefined;
+            const len = x.change_window_attributes.serialize(&message_buffer, ids.debug_window, .{
+                .event_mask = x.event.key_press | x.event.key_release | x.event.button_press | x.event.button_release | x.event.enter_window | x.event.leave_window | x.event.pointer_motion | x.event.keymap_state | x.event.exposure,
+            });
+            // XXX: Use the event connection so we get the events we subscribed to in the
+            // `.event_mask` in the event loop
+            try x_event_connection.send(message_buffer[0..len]);
+        }
 
         // Register for events from the X Input extension for when the mouse is clicked
         {
@@ -287,19 +403,45 @@ const MainProgram = struct {
             try x_event_connection.send(message_buffer[0..len]);
         }
 
-        // Show the window. In the X11 protocol is called mapping a window, and hiding a
-        // window is called unmapping. When windows are initially created, they are unmapped
-        // (or hidden).
+        // Show the window. In the X11 protocol, this is called mapping a window, and
+        // hiding a window is called unmapping. When windows are initially created, they
+        // are unmapped (or hidden).
         {
             var msg: [x.map_window.len]u8 = undefined;
             x.map_window.serialize(&msg, ids.window);
             try x_request_connection.send(&msg);
         }
+        // Show the debug overlay window
+        {
+            var msg: [x.map_window.len]u8 = undefined;
+            x.map_window.serialize(&msg, ids.debug_window);
+            try x_request_connection.send(&msg);
+        }
 
         // Try to make this window always on top (above `screen_play` in the tests). The
-        // real magic is the `override_redirect: false` (which would put this on top of
+        // real magic is the `override_redirect: true` (which would put this on top of
         // everything with a proper window manager) but this is also the proper hint to
         // send in any case.
+        //
+        // Just trying to make the debug overlay window always on top (above
+        // `screen_play` in the tests)
+        {
+            var msg: [x.configure_window.max_len]u8 = undefined;
+            const len = x.configure_window.serialize(&msg, .{
+                .window_id = ids.debug_window,
+            }, .{
+                .stack_mode = .above,
+            });
+            try x_request_connection.send(msg[0..len]);
+        }
+        // Make our actual application window above everything else. This works out
+        // better in cases where a compositing manager isn't running as the debug window
+        // covers the entire screen and will just be a big black screen covering
+        // everything including our application window as well. We expect you to be
+        // using a compositing manager of some sort (and we even have this setup in
+        // tests) but you may run into this by simply running `DISPLAY=:99 zig build
+        // run-main` against a Xephyr display without the compositing manager for quick
+        // one-off tests).
         {
             var msg: [x.configure_window.max_len]u8 = undefined;
             const len = x.configure_window.serialize(&msg, .{
@@ -308,6 +450,27 @@ const MainProgram = struct {
                 .stack_mode = .above,
             });
             try x_request_connection.send(msg[0..len]);
+        }
+
+        // Since the debug window covers the whole screen, we want to make it so that
+        // mouse events aren't affected by it all. Make it completely
+        // click-through-able. If you're familiar with CSS, we use this to apply
+        // `pointer-events: none;`.
+        {
+            const rectangle_list = [_]x.Rectangle{
+                .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+            };
+            var msg: [x.shape.rectangles.getLen(rectangle_list.len)]u8 = undefined;
+            x.shape.rectangles.serialize(&msg, shape_extension.opcode, .{
+                .destination_window_id = ids.debug_window,
+                .destination_kind = .input,
+                .operation = .set,
+                .x_offset = 0,
+                .y_offset = 0,
+                .ordering = .unsorted,
+                .rectangles = &rectangle_list,
+            });
+            try x_request_connection.send(&msg);
         }
 
         // Get some font information
@@ -338,19 +501,42 @@ const MainProgram = struct {
             }
         };
 
+        // Assemble a file path to the neural network model file
+        const neural_network_file_path = try std.fmt.allocPrint(
+            allocator,
+            "{s}/{s}",
+            .{
+                // Prepend the project directory path
+                projectSrcPath(),
+                // And the latest file name
+                "neural_network_checkpoint_epoch_440.json",
+            },
+        );
+        defer allocator.free(neural_network_file_path);
+        // Load the neural network and get ready to recognize characters
+        var character_recognition = try CharacterRecognition.init(
+            neural_network_file_path,
+            allocator,
+        );
+
         var render_context = render.RenderContext{
             .x_connection = x_request_connection,
             .ids = &ids,
+            .root_screen_depth = screen.root_depth,
             .extensions = &extensions,
             .font_dims = &font_dims,
+            .image_byte_order = image_byte_order,
+            .root_window_pixmap_format = root_window_pixmap_format,
             .state = state,
+            .character_recognition = &character_recognition,
+            .get_image_request_queue = std.fifo.LinearFifo(GetImageRequestInfo, .{ .Static = 256 }).init(),
         };
 
         while (true) {
             {
                 const receive_buffer = x_event_connection.buffer.nextReadBuffer();
                 if (receive_buffer.len == 0) {
-                    std.log.err("buffer size {} not big enough!", .{x_event_connection.buffer.half_len});
+                    std.log.err("buffer size {} not big enough to fit the bytes we received!", .{x_event_connection.buffer.half_len});
                     return error.BufferSizeNotBigEnough;
                 }
                 const len = try x.readSock(x_event_connection.socket, receive_buffer, 0);
@@ -377,20 +563,108 @@ const MainProgram = struct {
                         return error.ReceivedXError;
                     },
                     .reply => |msg| {
-                        std.log.info("todo: handle a reply message {}", .{msg});
-                        return error.TodoHandleReplyMessage;
+                        // Note: We assume any reply here will be to the `get_image` request
+                        // but normally you would want some state machine sequencer to match
+                        // up requests with replies.
+                        const get_image_reply: *x.get_image.Reply = @ptrCast(msg);
+
+                        // Convert the X image format to an `RGBImage` we can use in our vision code
+                        const processed_results = try render_context.processNextGetImageRequest(
+                            get_image_reply,
+                            allocator,
+                        );
+                        const scratch_index = processed_results.request_info.scratch_index;
+                        const screenshot = processed_results.screenshot;
+                        defer screenshot.image.deinit(allocator);
+
+                        // try printLabeledImage("analyzing screenshot", screenshot.image, .kitty, allocator);
+
+                        // Run text detection and OCR on the ammo counter
+                        const before_analyze_ts = std.time.milliTimestamp();
+                        const opt_ammo_results = try render_context.analyzeScreenCapture(screenshot, allocator);
+                        const after_analyze_ts = std.time.milliTimestamp();
+                        std.log.debug("Analysis time {}", .{
+                            std.fmt.fmtDurationSigned((after_analyze_ts - before_analyze_ts) * std.time.ns_per_ms),
+                        });
+                        if (opt_ammo_results) |ammo_results| {
+                            const confidence_level_string = try formatEachItemInSlice(
+                                f64,
+                                ammo_results.confidence_levels,
+                                "{d:.4}",
+                                allocator,
+                            );
+                            defer allocator.free(confidence_level_string);
+                            std.log.debug("ammo_results {d} (confidence {s})", .{
+                                ammo_results.ammo_value,
+                                confidence_level_string,
+                            });
+
+                            const ammo_ui_strip_bounding_box = futureAmmoHeuristicBoundingClientRect(ammo_results.ammo_counter_bounding_box);
+
+                            // Keep track of where we last found the ammo counter so we can
+                            // capture a lot less of the screen next time.
+                            state.ammo_counter_bounding_box = ammo_ui_strip_bounding_box;
+                            state.ammo_counter_screenshot_region = .ammo_ui_strip;
+                            std.log.debug("New state.ammo_counter_bounding_box {d}x{d} ({d}, {d})", .{
+                                state.ammo_counter_bounding_box.width,
+                                state.ammo_counter_bounding_box.height,
+                                state.ammo_counter_bounding_box.x,
+                                state.ammo_counter_bounding_box.y,
+                            });
+
+                            const prev_ammo_value = state.ammo_value;
+                            const current_ammo_value = ammo_results.ammo_value;
+
+                            // Keep track of the ammo count
+                            state.ammo_value = current_ammo_value;
+
+                            // If the ammo went down by 1 (meaning a bullet was shot), copy
+                            // the screenshot from the scratchpad to our list of screenshots
+                            // of interest.
+                            if (current_ammo_value < prev_ammo_value and (prev_ammo_value - current_ammo_value) == 1) {
+                                try render_context.copyScreenshotFromScratchpad(scratch_index);
+                                // Re-render the UI to show the new screenshot
+                                try render_context.render();
+                            }
+
+                            // Draw debug gizmos again
+                            try render_context.render();
+                        }
+
+                        // Capture frames for 200ms (the max input delay we expect) after a
+                        // left-click. We only want to request another screenshot after the
+                        // last request finished processing so we do this check in this
+                        // image reply function.
+                        const current_ts = std.time.milliTimestamp();
+                        if (current_ts - state.last_left_click_ts < INPUT_DELAY_MAX_MS) {
+                            try captureScreenshots(&render_context, state);
+                        }
                     },
                     .generic_extension_event => |msg| {
                         if (msg.ext_opcode == extensions.input.opcode) {
                             switch (x.inputext.genericExtensionEventTaggedUnion(@alignCast(data.ptr))) {
                                 .raw_button_press => |extension_message| {
-                                    std.log.info("raw_button_press {}", .{extension_message});
-                                    if (extension_message.detail == 1) {
-                                        try render_context.captureScreenshotToPixmap();
-                                        try render_context.render();
+                                    // std.log.info("raw_button_press {}", .{extension_message});
+                                    const is_left_click = extension_message.detail == 1;
+                                    if (is_left_click) {
+                                        // Keep track of the left-click time. We should
+                                        // expect the ammo counter to go down in an upcoming
+                                        // capture (or at least to see the counter). If not,
+                                        // we should reset the capture area and scan the
+                                        // whole bottom-right quadrant again for the ammo
+                                        // counter as it may have moved.
+                                        state.last_left_click_ts = std.time.milliTimestamp();
+
+                                        // If there is not already a request in the queue, get the loop
+                                        // started by requesting a screenshot of the ammo counter
+                                        if (render_context.get_image_request_queue.readableLength() == 0) {
+                                            try captureScreenshots(&render_context, state);
+                                        }
                                     }
                                 },
-                                else => unreachable, // We did not register for these events so we should not see them
+                                // We did not register for these events so we should not see them
+                                else => @panic("Received unexpected generic extension " ++
+                                    "event that we did not register for"),
                             }
                         } else {
                             std.log.info("TODO: handle a GE generic event {}", .{msg});
@@ -433,7 +707,7 @@ const MainProgram = struct {
                     },
                     .no_exposure => |msg| std.debug.panic("unexpected no_exposure {}", .{msg}),
                     .unhandled => |msg| {
-                        std.log.info("todo: server msg {}", .{msg});
+                        std.log.info("todo: unhandled server msg {}", .{msg});
                         return error.UnhandledServerMsg;
                     },
                     .create_notify,
@@ -444,19 +718,26 @@ const MainProgram = struct {
                     .configure_notify,
                     .gravity_notify,
                     .circulate_notify,
-                    => unreachable, // did not register for these
+                    // We did not register for these
+                    => @panic("Received unexpected event event that we did not register for"),
                 }
             }
         }
 
         // Clean-up
-        try render.cleanupResources(x_request_connection, ids);
+        try render.cleanupResources(x_request_connection, &ids);
     }
 };
 
 pub fn main() !void {
     var main_program = MainProgram{};
     try main_program.run_main();
+}
+
+test {
+    _ = @import("utils/render_utils.zig");
+    _ = @import("utils/print_utils.zig");
+    _ = @import("vision/vision.zig");
 }
 
 // This test is meant to run on a 1920x1080p display. Create a virtual display (via Xvfb
@@ -471,40 +752,50 @@ pub fn main() !void {
 test "end-to-end: click to capture screenshot" {
     const allocator = std.testing.allocator;
 
-    // FIXME: Without a "compositing manager", the window will not show up as
-    // transparent. We could make a basic one from scratch using the X `COMPOSITE`
-    // extension. See https://magcius.github.io/xplain/article/composite.html for a
-    // breakdown on how compositing works. Normally, you'd get this same functionality
-    // for free via your desktop environment's window manager which probably includes a
-    // "compositing manager".
-
     // Ideally, we'd be able to build and run in the same command like `zig build
-    // run-main` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+    // run-screen_play` but https://github.com/ziglang/zig/issues/20853 prevents us from being
     // able to kill the process cleanly. So we have to build and run in separate
     // commands.
-    const build_argv = [_][]const u8{ "zig", "build", "screen_play" };
-    var build_process = std.ChildProcess.init(&build_argv, allocator);
-    // Prevent writing to `stdout` so the test runner doesn't hang,
-    // see https://github.com/ziglang/zig/issues/15091
-    build_process.stdin_behavior = .Ignore;
-    build_process.stdout_behavior = .Ignore;
-    build_process.stderr_behavior = .Ignore;
+    var x_compositing_manager_build_process_runner = try ChildProcessRunner.init(
+        "screen_play build",
+        &[_][]const u8{ "zig", "build", "x-compositing-manager" },
+        allocator,
+    );
+    defer x_compositing_manager_build_process_runner.deinit();
+    try x_compositing_manager_build_process_runner.waitForProcessToExitSuccessfully();
 
-    try build_process.spawn();
-    const build_term = try build_process.wait();
-    try std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, build_term);
+    // Start the X compositing manager process. This is needed for transparent window
+    // support; useful for our debug overlay window which is transparent. Normally,
+    // you'd get this same functionality for free via your desktop environment's window
+    // manager which probably includes a "compositing manager" but virtual display
+    // environments like Xvfb and Xephyr do not include a window manager.
+    var x_compositing_manager_process_runner = try ChildProcessRunner.init(
+        "x-compositing-manager",
+        &[_][]const u8{"./zig-out/bin/x-compositing-manager"},
+        allocator,
+    );
+    defer x_compositing_manager_process_runner.deinit();
 
-    const screen_play_argv = [_][]const u8{"./zig-out/bin/screen_play"};
-    var screen_play_process = std.ChildProcess.init(&screen_play_argv, allocator);
-    // Prevent writing to `stdout` so the test runner doesn't hang,
-    // see https://github.com/ziglang/zig/issues/15091
-    screen_play_process.stdin_behavior = .Ignore;
-    screen_play_process.stdout_behavior = .Ignore;
-    screen_play_process.stderr_behavior = .Ignore;
+    // Ideally, we'd be able to build and run in the same command like `zig build
+    // run-screen_play` but https://github.com/ziglang/zig/issues/20853 prevents us from being
+    // able to kill the process cleanly. So we have to build and run in separate
+    // commands.
+    var screen_play_build_process_runner = try ChildProcessRunner.init(
+        "screen_play build",
+        &[_][]const u8{ "zig", "build", "screen_play" },
+        allocator,
+    );
+    defer screen_play_build_process_runner.deinit();
+    try screen_play_build_process_runner.waitForProcessToExitSuccessfully();
 
     // Start the screen_play process. screen_play will start running through a series of
     // keyframes
-    try screen_play_process.spawn();
+    var screen_play_process_runner = try ChildProcessRunner.init(
+        "screen_play",
+        &[_][]const u8{"./zig-out/bin/screen_play"},
+        allocator,
+    );
+    defer screen_play_process_runner.deinit();
 
     // Run the main aim_analyzer process in a background thread. We use a thread instead
     // of a child process so we can inspect the internal app state.
@@ -518,12 +809,10 @@ test "end-to-end: click to capture screenshot" {
 
     // The screen_play process only ends after this call returns. screen_play will exit
     // after showing all keyframes.
-    const screen_play_term = try screen_play_process.wait();
-    // Term can be .Exited, .Signal, .Stopped, .Unknown
-    try std.testing.expectEqual(std.ChildProcess.Term{ .Exited = 0 }, screen_play_term);
+    try screen_play_process_runner.waitForProcessToExitSuccessfully();
 
     // Analyze the state of the main process after we've simulated some game play.
     try std.testing.expect(main_program.state != null);
     try std.testing.expectEqual(main_program.state.?.max_screenshots_shown, 6);
-    try std.testing.expectEqual(main_program.state.?.next_screenshot_index, 4);
+    try std.testing.expectEqual(main_program.state.?.next_interesting_screenshot_index, 4);
 }

@@ -9,9 +9,17 @@
             .url = "https://github.com/MadLittleMods/zigx/archive/2aebd37c4ee8feee9bd7244f1171f9f06b6fc263.tar.gz",
             .hash = "1220fb5afcbd8cd203fa29a9349a113eaadccdacffb7b505b36b02da64462cf82834",
         },
+        .@"zig-x-compositing-manager" = .{
+            .url = "https://github.com/MadLittleMods/zig-x-compositing-manager/archive/0d87174008a00978dbd470a61b5236b801d42879.tar.gz",
+            .hash = "1220dbab8833a2ff483abfdcca06232ddb2215da6fc2dc60e1201ff777f96c286a22",
+        },
         .zigimg = .{
             .url = "https://github.com/MadLittleMods/zigimg/archive/ccf9197ccf96dd43d1d31c98a86f21e74187d0c4.tar.gz",
             .hash = "1220b5d63472f189226b4bd753d41401797a9d58e2e11a8b7aa84fce3971b90eca76",
+        },
+        .@"zig-neural-networks" = .{
+            .url = "https://github.com/madlittlemods/zig-neural-networks/archive/9495c13c945b1c5954ef85b3a911e52c2a747d73.tar.gz",
+            .hash = "122063af43b7289509d7108a927f7e535f0e2f00b5d902ca4b10fbf2f43bf797c5d2",
         },
     },
 }

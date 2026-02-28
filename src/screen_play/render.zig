@@ -272,7 +272,7 @@ pub fn createResources(
             // Normally if we set this to `true`, this would be a dead-simple way to get
             // a border-less window without decorations. But we set this to `false` so
             // that it doesn't try to fight with us in our test environment to be on
-            // top. We instead be set window properties to hint that it's fullscreen to
+            // top. We instead be setting window properties to hint that it's fullscreen to
             // the window manager and stack it below the `aim_analyzer window if it
             // exists. And when there is no window manager we don't need to worry about
             // setting the properties anyway.

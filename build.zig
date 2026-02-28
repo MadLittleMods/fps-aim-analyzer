@@ -19,6 +19,10 @@ pub fn build(b: *std.Build) !void {
     // https://github.com/marler8997/image-viewer/blob/f189f2547890d61a1770327e105b01fc704f98c4/build.zig#L43-L44
     const zigx_dep = b.dependency("zigx", .{});
     const zigimg_dep = b.dependency("zigimg", .{});
+    const neural_networks_dep = b.dependency("zig-neural-networks", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     // Building executables
     // ============================================
@@ -34,6 +38,8 @@ pub fn build(b: *std.Build) !void {
         .{ .name = "main", .src = "src/main.zig", .build_by_default = true },
         // zig build run-screen_play
         .{ .name = "screen_play", .src = "src/main_screen_play.zig", .build_by_default = false },
+        // zig build run-train_ocr
+        .{ .name = "train_ocr", .src = "src/main_train_ocr_neural_network.zig", .build_by_default = false },
     }) |exe_cfg| {
         const exe_name = exe_cfg.name;
         const exe_src = exe_cfg.src;
@@ -63,6 +69,8 @@ pub fn build(b: *std.Build) !void {
         exe.addModule("x", zigx_dep.module("zigx"));
         // Make the `zigimg` module available to be imported via `@import("zigimg")`
         exe.addModule("zigimg", zigimg_dep.module("zigimg"));
+        // Make the `zig-neural-networks` module available to be imported via `@import("zig-neural-networks")`
+        exe.addModule("zig-neural-networks", neural_networks_dep.module("zig-neural-networks"));
 
         // The `install_artifact` marks the intent for the executable to be installed
         // into the standard location when the user invokes the "install" step.
@@ -103,6 +111,34 @@ pub fn build(b: *std.Build) !void {
         run_step.dependOn(&run_artifact.step);
     }
 
+    // Building the x-compositing-manager executable from our dependency
+    {
+        const x_compositing_manager_dep = b.dependency("zig-x-compositing-manager", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        const x_compositing_manager_dep_exe = x_compositing_manager_dep.artifact("main");
+        const install_artifact = b.addInstallArtifact(x_compositing_manager_dep_exe, .{
+            // Rename the binary artifact
+            .dest_sub_path = "x-compositing-manager",
+        });
+
+        const build_step = b.step("x-compositing-manager", "Build x-compositing-manager");
+        build_step.dependOn(&install_artifact.step);
+        all_step.dependOn(&install_artifact.step);
+
+        const run_artifact = b.addRunArtifact(x_compositing_manager_dep_exe);
+        run_artifact.step.dependOn(&install_artifact.step);
+        // This allows the user to pass arguments to the application in the build
+        // command itself, like this: `zig build run -- arg1 arg2 etc`
+        if (b.args) |args| {
+            run_artifact.addArgs(args);
+        }
+
+        const run_step = b.step("run-x-compositing-manager", "Run x-compositing-manager");
+        run_step.dependOn(&run_artifact.step);
+    }
+
     // Testing
     // ============================================
     {
@@ -122,6 +158,7 @@ pub fn build(b: *std.Build) !void {
         });
         unit_tests.addModule("x", zigx_dep.module("zigx"));
         unit_tests.addModule("zigimg", zigimg_dep.module("zigimg"));
+        unit_tests.addModule("zig-neural-networks", neural_networks_dep.module("zig-neural-networks"));
 
         const run_unit_tests_cmd = b.addRunArtifact(unit_tests);
         // This forces tests to always be re-run instead of returning the cached result.

@@ -19,6 +19,7 @@ pub const ExtensionInfo = struct {
 const AvailableExtensions = enum {
     render,
     input,
+    shape,
 };
 
 /// A map of X server extension names to their info.
@@ -42,9 +43,10 @@ pub fn getExtensionInfo(
         x.query_extension.serialize(&message_buffer, ext_name);
         try common.send(x_connection.socket, &message_buffer);
     }
+
     const message_length = try x.readOneMsg(x_connection.reader(), @alignCast(x_connection.buffer.nextReadBuffer()));
     try common.checkMessageLengthFitsInBuffer(message_length, x_connection.buffer.half_len);
-    const optional_render_extension = blk: {
+    const optional_extension = blk: {
         switch (x.serverMsgTaggedUnion(@alignCast(x_connection.buffer.double_buffer_ptr))) {
             .reply => |msg_reply| {
                 const msg: *x.ServerMsg.QueryExtension = @ptrCast(msg_reply);
@@ -74,5 +76,5 @@ pub fn getExtensionInfo(
         }
     };
 
-    return optional_render_extension;
+    return optional_extension;
 }

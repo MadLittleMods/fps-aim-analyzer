@@ -2,6 +2,13 @@ const std = @import("std");
 const x = @import("x");
 const common = @import("../x11/x11_common.zig");
 
+pub fn Coordinate(comptime NumberType: type) type {
+    return struct {
+        x: NumberType,
+        y: NumberType,
+    };
+}
+
 pub const Dimensions = struct {
     width: i16,
     height: i16,
